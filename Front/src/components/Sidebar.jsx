@@ -1,6 +1,7 @@
 import {
     IconAdjustments,
     IconBriefcase2,
+    IconDatabase,
     IconMessages,
     IconMoon,
     IconRobot,
@@ -13,6 +14,7 @@ const items = [
     { id: 'agents', label: 'Agents', icon: IconRobot },
     { id: 'jobs', label: 'Jobs', icon: IconBriefcase2 },
     { id: 'tools', label: 'MCP Tools', icon: IconTool },
+    { id: 'memory', label: 'Memory', icon: IconDatabase },
     { id: 'settings', label: 'Settings', icon: IconAdjustments },
 ];
 

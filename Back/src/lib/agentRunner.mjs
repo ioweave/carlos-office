@@ -2,6 +2,7 @@ import AgentConfig from '../models/AgentConfig.mjs';
 import { agentDefinitions, defaultAgentConfig } from '../agents/agents.config.mjs';
 import { callAI, providerSupportsTools } from './ai.mjs';
 import { executeTool, getOpenAITools } from './toolRegistry.mjs';
+import { buildMemoryContext } from './memory.mjs';
 
 export const ensureAgentConfig = async agentId => {
     const definition = agentDefinitions[agentId];
@@ -39,8 +40,13 @@ export const runAgent = async (agentId, history = []) => {
     if (!config.enabled) throw Object.assign(new Error(`${config.name} is disabled.`), { statusCode: 409 });
 
     const definition = agentDefinitions[agentId];
+    let memory = { content: '', notes: [] };
+    try { memory = await buildMemoryContext(agentId, history); }
+    catch (error) { console.error('[memory] Retrieval failed:', error.message); }
+
     const messages = [
         { role: 'system', content: definition.system },
+        ...(memory.content ? [{ role: 'system', content: memory.content }] : []),
         ...history.filter(item => ['user', 'assistant'].includes(item.role)).map(item => ({
             role: item.role,
             content: item.content || '',
@@ -86,6 +92,7 @@ export const runAgent = async (agentId, history = []) => {
     return {
         content: response?.content || 'The model returned no text response.',
         toolEvents,
+        memoryRefs: memory.notes,
         model: { provider: config.provider, model: config.model },
     };
 };

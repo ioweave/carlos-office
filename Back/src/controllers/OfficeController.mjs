@@ -6,6 +6,14 @@ import Job from '../models/Job.mjs';
 import { agentDefinitions, defaultAgentConfig } from '../agents/agents.config.mjs';
 import { ensureAgentConfig, runAgent } from '../lib/agentRunner.mjs';
 import { executeTool, listTools } from '../lib/toolRegistry.mjs';
+import {
+    appendConversationJournal,
+    getMemoryStatus,
+    listMemory as listMemoryNotes,
+    readMemory as readMemoryNote,
+    searchMemory as searchMemoryNotes,
+    writeMemory as writeMemoryNote,
+} from '../lib/memory.mjs';
 
 const allowedConfigFields = [
     'provider', 'model', 'baseUrl', 'temperature', 'maxToolRounds', 'enabled', 'fallback',
@@ -20,12 +28,17 @@ export default class OfficeController {
             ollama = { online: true, models: response.data?.models?.length || 0 };
         } catch {}
 
+        let memory = { online: false, path: '', notes: 0 };
+        try { memory = await getMemoryStatus(); }
+        catch (error) { memory.error = error.message; }
+
         return {
             statusCode: 200,
             body: {
                 status: 'online',
                 localOnly: true,
                 ollama,
+                memory,
                 timestamp: new Date().toISOString(),
             },
         };
@@ -70,6 +83,33 @@ export default class OfficeController {
         return { statusCode: 200, body: result };
     }
 
+    static async listMemory({ query }) {
+        const limit = Math.max(1, Math.min(Number(query.limit) || 100, 500));
+        const notes = query.query
+            ? await searchMemoryNotes({ query: query.query, agentId: query.agentId || 'nora', limit })
+            : await listMemoryNotes({ folder: query.folder || '', limit });
+        return { statusCode: 200, body: notes };
+    }
+
+    static async readMemory({ query }) {
+        if (!query.path) return { statusCode: 400, body: { error: 'Memory path is required' } };
+        return { statusCode: 200, body: await readMemoryNote({ path: query.path }) };
+    }
+
+    static async writeMemory({ body }) {
+        const note = await writeMemoryNote({
+            agentId: body.agentId || 'nora',
+            title: body.title,
+            content: body.content,
+            scope: body.scope,
+            tags: body.tags,
+            source: body.source,
+            path: body.path,
+            mode: body.mode,
+        });
+        return { statusCode: 200, body: note };
+    }
+
     static async listConversations() {
         const conversations = await Conversation.find({}).select('-messages').sort({ updatedAt: -1 }).limit(50).lean();
         return { statusCode: 200, body: conversations };
@@ -104,10 +144,17 @@ export default class OfficeController {
             role: 'assistant',
             content: result.content,
             toolEvents: result.toolEvents,
+            memoryRefs: result.memoryRefs,
             model: result.model,
             createdAt: new Date(),
         });
         await conversation.save();
+        appendConversationJournal({
+            conversationId,
+            agentId,
+            userMessage: message,
+            assistantMessage: result.content,
+        });
 
         return {
             statusCode: 200,

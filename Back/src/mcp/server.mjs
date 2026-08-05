@@ -6,14 +6,50 @@ import { executeTool } from '../lib/toolRegistry.mjs';
 
 const server = new McpServer({
     name: 'carlos-office-tools',
-    version: '0.1.0',
+    version: '0.2.0',
 }, {
-    instructions: 'Shared local tools for Nora, Marco, Luma, and Dex. Public web fetching blocks private network addresses. External side effects are not exposed.',
+    instructions: 'Shared local tools for Nora, Marco, Luma, and Dex. Includes permanent Obsidian Markdown memory. Public web fetching blocks private network addresses. External side effects are not exposed.',
 });
 
 const asResult = value => ({
     content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
 });
+
+server.registerTool('memory_search', {
+    description: 'Search permanent Markdown memory in the Carlos Office Obsidian vault.',
+    inputSchema: z.object({
+        query: z.string().min(1),
+        limit: z.number().int().min(1).max(20).default(8),
+    }),
+}, async args => asResult(await executeTool('nora', 'memory_search', args)));
+
+server.registerTool('memory_read', {
+    description: 'Read one permanent Markdown memory note by vault-relative path.',
+    inputSchema: z.object({
+        path: z.string().min(1),
+    }),
+}, async args => asResult(await executeTool('nora', 'memory_read', args)));
+
+server.registerTool('memory_list', {
+    description: 'List recent notes in permanent Obsidian memory.',
+    inputSchema: z.object({
+        folder: z.string().default(''),
+        limit: z.number().int().min(1).max(100).default(50),
+    }),
+}, async args => asResult(await executeTool('nora', 'memory_list', args)));
+
+server.registerTool('memory_write', {
+    description: 'Create, append, or replace a durable Markdown note in permanent Obsidian memory.',
+    inputSchema: z.object({
+        title: z.string().min(1),
+        content: z.string().min(1),
+        scope: z.enum(['shared', 'agent', 'inbox']).default('shared'),
+        tags: z.array(z.string()).default([]),
+        source: z.string().default(''),
+        path: z.string().default(''),
+        mode: z.enum(['create', 'append', 'replace']).default('create'),
+    }),
+}, async args => asResult(await executeTool('nora', 'memory_write', args)));
 
 server.registerTool('web_search', {
     description: 'Search the public web and return normalized results.',

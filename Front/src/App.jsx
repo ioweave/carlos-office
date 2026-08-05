@@ -6,6 +6,7 @@ import ChatPage from './pages/ChatPage';
 import AgentsPage from './pages/AgentsPage';
 import JobsPage from './pages/JobsPage';
 import ToolsPage from './pages/ToolsPage';
+import MemoryPage from './pages/MemoryPage';
 import SettingsPage from './pages/SettingsPage';
 
 export default function App() {
@@ -53,6 +54,7 @@ export default function App() {
         agents: <AgentsPage agents={agents} setAgents={setAgents} />,
         jobs: <JobsPage />,
         tools: <ToolsPage tools={tools} />,
+        memory: <MemoryPage health={health} />,
         settings: <SettingsPage health={health} />,
     }[active];
 

@@ -15,6 +15,10 @@ export default function ToolsPage({ tools }) {
         setSelected(name);
         setResult('');
         const defaults = {
+            memory_search: { query: 'Mer1dian operating decisions', limit: 8 },
+            memory_read: { path: '90-System/Carlos Office Memory.md' },
+            memory_list: { folder: '10-Shared', limit: 20 },
+            memory_write: { title: 'Example durable memory', content: 'Replace this with a verified fact, decision, preference, procedure, or lesson.', scope: 'shared', tags: ['example'], mode: 'create' },
             web_search: { query: 'Mer1dian market research', maxResults: 5 },
             fetch_url: { url: 'https://example.com', maxChars: 6000 },
             current_time: { timeZone: 'America/Guayaquil' },

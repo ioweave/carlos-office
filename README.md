@@ -27,6 +27,9 @@ The implementation intentionally mirrors the practical conventions in `carlos-pl
 - durable queued job records for delegated work
 - shared tool registry used by agents and the MCP server
 - public web search and safe URL fetching
+- permanent Obsidian-compatible Markdown memory
+- automatic relevant-memory retrieval before every agent run
+- automatic daily Markdown conversation journals
 - stdio MCP server for external MCP-compatible local clients
 
 ## Local architecture
@@ -36,8 +39,9 @@ Browser (127.0.0.1:5173)
     -> Carlos Office API (127.0.0.1:3002)
         -> MongoDB
         -> Ollama (127.0.0.1:11434)
+        -> Obsidian Markdown vault
         -> optional cloud AI providers
-        -> shared web/MCP tool registry
+        -> shared web/memory/MCP tool registry
 ```
 
 The API binds to `127.0.0.1` by default. Authentication is intentionally absent because this is a local-only application. Do not bind it to a public interface without adding authentication and authorization.
@@ -79,6 +83,47 @@ npm run dev
 
 UI: `http://127.0.0.1:5173`
 
+## Permanent Obsidian memory
+
+Carlos Office uses a normal directory of Markdown files as permanent institutional memory. The default vault is:
+
+```text
+~/CarlosOfficeVault
+```
+
+Set a different location in `Back/.env` when required:
+
+```env
+OBSIDIAN_VAULT_PATH=/absolute/path/to/your/Obsidian/Vault
+MEMORY_TIME_ZONE=America/Guayaquil
+```
+
+Open that directory directly in Obsidian. Carlos Office creates this structure automatically:
+
+```text
+00-Inbox/                 worker proposals for shared memory
+10-Shared/                curated company-wide knowledge
+20-Agents/Nora/           Nora's durable notes
+20-Agents/Marco/          Marco's durable notes
+20-Agents/Luma/           Luma's durable notes
+20-Agents/Dex/            Dex's durable notes
+30-Conversations/         automatic daily conversation journals
+90-System/                vault documentation
+```
+
+Memory behavior:
+
+- Nora and every worker can search, list, and read the full vault.
+- Each agent receives relevant memory automatically before every model invocation.
+- Every completed chat turn is appended to a daily Markdown journal.
+- Nora can create or edit shared memory.
+- Worker requests to write company-wide memory are routed to `00-Inbox` for Nora to curate.
+- All agents can maintain their own durable agent notes.
+- Vault files can be edited, linked, moved, and organized directly in Obsidian.
+- Do not store passwords, API keys, access tokens, or other secrets in the vault.
+
+Retrieval is local lexical search with a short cache. It reads Markdown directly, so Obsidian edits become available without a database migration or re-embedding process.
+
 ## Model hot-swapping
 
 Each agent stores its own runtime configuration in MongoDB:
@@ -118,6 +163,10 @@ npm run mcp
 
 Available tools:
 
+- `memory_search`
+- `memory_read`
+- `memory_list`
+- `memory_write`
 - `web_search`
 - `fetch_url`
 - `current_time`
@@ -142,7 +191,7 @@ The MCP server writes protocol data to stdout and operational messages to stderr
 
 ## Current boundary
 
-This commit provides the office interface, model runtime, persistence, web research tools, shared MCP tools, and job queue records. It does not yet include:
+This repository provides the office interface, model runtime, MongoDB operational persistence, Obsidian institutional memory, web research tools, shared MCP tools, and job queue records. It does not yet include:
 
 - background execution of queued worker jobs
 - email, ad-platform, payment, GitHub, or deployment side effects

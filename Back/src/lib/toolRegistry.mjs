@@ -2,14 +2,80 @@ import axios from 'axios';
 import { v4 as uuid } from 'uuid';
 import { searchWeb } from './search.mjs';
 import { fetchOnlineDocument } from './fetchUrl.mjs';
+import { listMemory, readMemory, searchMemory, writeMemory } from './memory.mjs';
 import Job from '../models/Job.mjs';
 import AgentConfig from '../models/AgentConfig.mjs';
 
+const allAgents = ['nora', 'marco', 'luma', 'dex'];
+
 const toolDefinitions = [
+    {
+        name: 'memory_search',
+        description: 'Search permanent Markdown memory in the shared Obsidian vault. Use this before assuming prior decisions, preferences, procedures, or project history.',
+        allowedAgents: allAgents,
+        inputSchema: {
+            type: 'object',
+            properties: {
+                query: { type: 'string', description: 'Specific memory query.' },
+                limit: { type: 'integer', minimum: 1, maximum: 20, default: 8 },
+            },
+            required: ['query'],
+            additionalProperties: false,
+        },
+        execute: (args, { agentId }) => searchMemory({ ...args, agentId }),
+    },
+    {
+        name: 'memory_read',
+        description: 'Read one Markdown note from permanent Obsidian memory by its vault-relative path.',
+        allowedAgents: allAgents,
+        inputSchema: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: 'Vault-relative Markdown path returned by memory_search or memory_list.' },
+            },
+            required: ['path'],
+            additionalProperties: false,
+        },
+        execute: readMemory,
+    },
+    {
+        name: 'memory_list',
+        description: 'List recent Markdown notes in permanent Obsidian memory, optionally within one vault folder.',
+        allowedAgents: allAgents,
+        inputSchema: {
+            type: 'object',
+            properties: {
+                folder: { type: 'string', description: 'Optional vault-relative folder such as 10-Shared or 20-Agents/Nora.' },
+                limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+            },
+            additionalProperties: false,
+        },
+        execute: listMemory,
+    },
+    {
+        name: 'memory_write',
+        description: 'Write durable knowledge to the Obsidian vault. Nora may curate shared memory; worker attempts to write shared memory are routed to the inbox.',
+        allowedAgents: allAgents,
+        inputSchema: {
+            type: 'object',
+            properties: {
+                title: { type: 'string' },
+                content: { type: 'string' },
+                scope: { type: 'string', enum: ['shared', 'agent', 'inbox'], default: 'agent' },
+                tags: { type: 'array', items: { type: 'string' }, default: [] },
+                source: { type: 'string' },
+                path: { type: 'string', description: 'Optional existing Markdown path for append or replace.' },
+                mode: { type: 'string', enum: ['create', 'append', 'replace'], default: 'create' },
+            },
+            required: ['title', 'content'],
+            additionalProperties: false,
+        },
+        execute: (args, { agentId }) => writeMemory({ ...args, agentId }),
+    },
     {
         name: 'web_search',
         description: 'Search the public web and return normalized result titles, URLs, and snippets.',
-        allowedAgents: ['nora', 'marco', 'luma', 'dex'],
+        allowedAgents: allAgents,
         inputSchema: {
             type: 'object',
             properties: {
@@ -24,7 +90,7 @@ const toolDefinitions = [
     {
         name: 'fetch_url',
         description: 'Fetch a public HTTP or HTTPS page and extract readable text. Local and private network addresses are blocked.',
-        allowedAgents: ['nora', 'marco', 'luma', 'dex'],
+        allowedAgents: allAgents,
         inputSchema: {
             type: 'object',
             properties: {
@@ -39,7 +105,7 @@ const toolDefinitions = [
     {
         name: 'current_time',
         description: 'Return the current date and time in an IANA time zone.',
-        allowedAgents: ['nora', 'marco', 'luma', 'dex'],
+        allowedAgents: allAgents,
         inputSchema: {
             type: 'object',
             properties: {
@@ -128,5 +194,5 @@ export const executeTool = async (agentId, name, args = {}) => {
     const tool = toolDefinitions.find(item => item.name === name);
     if (!tool) throw Object.assign(new Error(`Unknown tool: ${name}`), { statusCode: 404 });
     if (!tool.allowedAgents.includes(agentId)) throw Object.assign(new Error(`${agentId} is not allowed to use ${name}.`), { statusCode: 403 });
-    return tool.execute(args);
+    return tool.execute(args, { agentId });
 };
