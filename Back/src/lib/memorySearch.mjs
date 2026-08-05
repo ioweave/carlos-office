@@ -22,7 +22,7 @@ const makeExcerpt = (body, tokens) => {
 };
 
 export const searchMemory = async ({ query = '', agentId = 'nora', limit = 8 } = {}) => {
-    const notes = await getIndex();
+    const notes = (await getIndex()).filter(note => !note.path.startsWith('90-System/Runtime/'));
     const agentName = AGENT_NAMES[normalizeAgent(agentId)];
     const phrase = String(query || '').trim().toLowerCase();
     const tokens = tokenize(query);

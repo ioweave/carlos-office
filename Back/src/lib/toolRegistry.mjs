@@ -1,10 +1,9 @@
 import axios from 'axios';
-import { v4 as uuid } from 'uuid';
 import { searchWeb } from './search.mjs';
 import { fetchOnlineDocument } from './fetchUrl.mjs';
 import { listMemory, readMemory, searchMemory, writeMemory } from './memory.mjs';
-import Job from '../models/Job.mjs';
-import AgentConfig from '../models/AgentConfig.mjs';
+import { agentDefinitions, defaultAgentConfig } from '../agents/agents.config.mjs';
+import { createJob, listAgentConfigs } from './officeStore.mjs';
 
 const allAgents = ['nora', 'marco', 'luma', 'dex'];
 
@@ -145,11 +144,11 @@ const toolDefinitions = [
         description: 'List configured Carlos Office agents and their current provider/model assignment.',
         allowedAgents: ['nora'],
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-        execute: async () => AgentConfig.find({}).select('-__v').lean(),
+        execute: async () => listAgentConfigs(agentDefinitions, defaultAgentConfig),
     },
     {
         name: 'create_agent_job',
-        description: 'Queue a scoped job for Marco, Luma, or Dex. This creates a durable record but does not publish or execute external actions.',
+        description: 'Queue a scoped job for Marco, Luma, or Dex as a durable Markdown note in the Obsidian vault.',
         allowedAgents: ['nora'],
         inputSchema: {
             type: 'object',
@@ -162,18 +161,9 @@ const toolDefinitions = [
             required: ['assignedAgent', 'title', 'instructions'],
             additionalProperties: false,
         },
-        execute: async ({ assignedAgent, title, instructions, priority = 'normal' }) => {
-            const job = await Job.create({
-                jobId: uuid(),
-                createdBy: 'nora',
-                assignedAgent,
-                title,
-                instructions,
-                priority,
-                status: 'queued',
-            });
-            return job.toObject();
-        },
+        execute: async ({ assignedAgent, title, instructions, priority = 'normal' }) => createJob({
+            createdBy: 'nora', assignedAgent, title, instructions, priority, status: 'queued',
+        }),
     },
 ];
 

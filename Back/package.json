@@ -1,6 +1,6 @@
 {
   "name": "carlos-office-back",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "main": "server.mjs",
@@ -16,8 +16,6 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "axios": "^1.13.6",
     "cheerio": "^1.2.0",
-    "mongoose": "^9.3.0",
-    "uuid": "^13.0.0",
     "zod": "^4.0.0"
   }
 }

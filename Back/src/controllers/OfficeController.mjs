@@ -1,8 +1,5 @@
 import axios from 'axios';
-import { v4 as uuid } from 'uuid';
-import AgentConfig from '../models/AgentConfig.mjs';
-import Conversation from '../models/Conversation.mjs';
-import Job from '../models/Job.mjs';
+import { randomUUID } from 'node:crypto';
 import { agentDefinitions, defaultAgentConfig } from '../agents/agents.config.mjs';
 import { ensureAgentConfig, runAgent } from '../lib/agentRunner.mjs';
 import { executeTool, listTools } from '../lib/toolRegistry.mjs';
@@ -14,6 +11,14 @@ import {
     searchMemory as searchMemoryNotes,
     writeMemory as writeMemoryNote,
 } from '../lib/memory.mjs';
+import {
+    getConversation as getStoredConversation,
+    listAgentConfigs,
+    listConversations as listStoredConversations,
+    listJobs as listStoredJobs,
+    saveAgentConfig,
+    saveConversation,
+} from '../lib/officeStore.mjs';
 
 const allowedConfigFields = [
     'provider', 'model', 'baseUrl', 'temperature', 'maxToolRounds', 'enabled', 'fallback',
@@ -37,6 +42,7 @@ export default class OfficeController {
             body: {
                 status: 'online',
                 localOnly: true,
+                storage: 'obsidian',
                 ollama,
                 memory,
                 timestamp: new Date().toISOString(),
@@ -45,9 +51,10 @@ export default class OfficeController {
     }
 
     static async listAgents() {
-        const agents = [];
-        for (const agentId of Object.keys(agentDefinitions)) agents.push(await ensureAgentConfig(agentId));
-        return { statusCode: 200, body: agents };
+        return {
+            statusCode: 200,
+            body: await listAgentConfigs(agentDefinitions, defaultAgentConfig),
+        };
     }
 
     static async updateAgent({ params, body }) {
@@ -57,12 +64,10 @@ export default class OfficeController {
         allowedConfigFields.forEach(field => {
             if (body[field] !== undefined) update[field] = body[field];
         });
-        const agent = await AgentConfig.findOneAndUpdate(
-            { agentId },
-            { $set: update, $setOnInsert: defaultAgentConfig(agentId) },
-            { new: true, upsert: true, setDefaultsOnInsert: true },
-        ).lean();
-        return { statusCode: 200, body: agent };
+        return {
+            statusCode: 200,
+            body: await saveAgentConfig(agentId, update, defaultAgentConfig(agentId)),
+        };
     }
 
     static async listModels({ query }) {
@@ -111,12 +116,11 @@ export default class OfficeController {
     }
 
     static async listConversations() {
-        const conversations = await Conversation.find({}).select('-messages').sort({ updatedAt: -1 }).limit(50).lean();
-        return { statusCode: 200, body: conversations };
+        return { statusCode: 200, body: await listStoredConversations({ limit: 50 }) };
     }
 
     static async getConversation({ params }) {
-        const conversation = await Conversation.findOne({ conversationId: params.conversationId }).lean();
+        const conversation = await getStoredConversation(params.conversationId);
         if (!conversation) return { statusCode: 404, body: { error: 'Conversation not found' } };
         return { statusCode: 200, body: conversation };
     }
@@ -127,29 +131,30 @@ export default class OfficeController {
         if (!message) return { statusCode: 400, body: { error: 'Message is required' } };
         if (!agentDefinitions[agentId]) return { statusCode: 404, body: { error: 'Unknown agent' } };
 
-        const conversationId = body.conversationId || uuid();
-        let conversation = await Conversation.findOne({ conversationId });
-        if (!conversation) {
-            conversation = new Conversation({
-                conversationId,
-                agentId,
-                title: message.slice(0, 72),
-                messages: [],
-            });
-        }
+        const conversationId = body.conversationId || randomUUID();
+        const now = new Date().toISOString();
+        const conversation = await getStoredConversation(conversationId) || {
+            conversationId,
+            agentId,
+            title: message.slice(0, 72),
+            messages: [],
+            createdAt: now,
+            updatedAt: now,
+        };
 
-        conversation.messages.push({ role: 'user', content: message, createdAt: new Date() });
+        conversation.messages.push({ role: 'user', content: message, createdAt: now });
         const result = await runAgent(agentId, conversation.messages);
-        conversation.messages.push({
+        const assistantMessage = {
             role: 'assistant',
             content: result.content,
             toolEvents: result.toolEvents,
             memoryRefs: result.memoryRefs,
             model: result.model,
-            createdAt: new Date(),
-        });
-        await conversation.save();
-        appendConversationJournal({
+            createdAt: new Date().toISOString(),
+        };
+        conversation.messages.push(assistantMessage);
+        await saveConversation(conversation);
+        await appendConversationJournal({
             conversationId,
             agentId,
             userMessage: message,
@@ -160,14 +165,13 @@ export default class OfficeController {
             statusCode: 200,
             body: {
                 conversationId,
-                message: conversation.messages.at(-1),
+                message: assistantMessage,
                 model: result.model,
             },
         };
     }
 
     static async listJobs() {
-        const jobs = await Job.find({}).sort({ createdAt: -1 }).limit(100).lean();
-        return { statusCode: 200, body: jobs };
+        return { statusCode: 200, body: await listStoredJobs({ limit: 100 }) };
     }
 }

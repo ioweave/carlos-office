@@ -1,16 +1,13 @@
-import AgentConfig from '../models/AgentConfig.mjs';
 import { agentDefinitions, defaultAgentConfig } from '../agents/agents.config.mjs';
 import { callAI, providerSupportsTools } from './ai.mjs';
 import { executeTool, getOpenAITools } from './toolRegistry.mjs';
 import { buildMemoryContext } from './memory.mjs';
+import { getAgentConfig } from './officeStore.mjs';
 
 export const ensureAgentConfig = async agentId => {
     const definition = agentDefinitions[agentId];
     if (!definition) throw Object.assign(new Error(`Unknown agent: ${agentId}`), { statusCode: 404 });
-
-    let config = await AgentConfig.findOne({ agentId }).lean();
-    if (!config) config = (await AgentConfig.create(defaultAgentConfig(agentId))).toObject();
-    return config;
+    return getAgentConfig(agentId, defaultAgentConfig(agentId));
 };
 
 const parseArguments = value => {
