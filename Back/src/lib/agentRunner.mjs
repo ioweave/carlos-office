@@ -67,6 +67,19 @@ const mayUseFallback = (config, error) => {
     return isConnectivityFailure(error);
 };
 
+const textOnlyContent = value => {
+    if (!Array.isArray(value)) return value || '';
+    const text = value.filter(part => part?.type === 'text').map(part => part.text || '').join('\n');
+    const imageCount = value.filter(part => part?.type === 'image_url').length;
+    return [text, imageCount ? `[${imageCount} image attachment${imageCount === 1 ? '' : 's'} omitted because the offline fallback is text-only.]` : '']
+        .filter(Boolean).join('\n\n');
+};
+
+const textOnlyMessages = messages => messages.map(item => ({
+    ...item,
+    content: textOnlyContent(item.content),
+}));
+
 const runAgentUnlocked = async (agentId, history = []) => {
     const config = await ensureAgentConfig(agentId);
     if (!config.enabled) throw Object.assign(new Error(`${config.name} is disabled.`), { statusCode: 409 });
@@ -76,12 +89,12 @@ const runAgentUnlocked = async (agentId, history = []) => {
     try { memory = await buildMemoryContext(agentId, history); }
     catch (error) { console.error('[memory] Retrieval failed:', error.message); }
 
-    const messages = [
+    let messages = [
         { role: 'system', content: definition.system },
         ...(memory.content ? [{ role: 'system', content: memory.content }] : []),
         ...history.filter(item => ['user', 'assistant'].includes(item.role)).map(item => ({
             role: item.role,
-            content: item.content || '',
+            content: item.modelContent || item.content || '',
         })),
     ];
     const toolEvents = [];
@@ -99,6 +112,7 @@ const runAgentUnlocked = async (agentId, history = []) => {
             runtimeConfig = fallbackConfig(config);
             fallbackUsed = true;
             fallbackReason = connectivityErrorText(error).slice(0, 500);
+            messages = textOnlyMessages(messages);
             const fallbackTools = providerSupportsTools(runtimeConfig.provider) ? getOpenAITools(agentId) : [];
             response = await callAI(runtimeConfig, messages, fallbackTools);
         }

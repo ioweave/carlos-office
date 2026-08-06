@@ -1,9 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { runAgent } from './agentRunner.mjs';
 import { getJob, listJobs, updateJob } from './officeStore.mjs';
 
 const workerAgents = new Set(['marco', 'luma', 'dex']);
 const scheduled = new Set();
-const active = new Set();
+const active = new Map();
 let queueTail = Promise.resolve();
 
 const clip = (value, limit = 60_000) => {
@@ -102,6 +103,16 @@ const parseReview = content => {
     };
 };
 
+const makeMessage = ({ from, to, type, content, iteration = 0 }) => ({
+    messageId: randomUUID(),
+    from,
+    to,
+    type,
+    content: String(content || ''),
+    iteration,
+    createdAt: new Date().toISOString(),
+});
+
 export const runJobLoop = async jobId => {
     let job = await getJob(jobId);
     if (!job) throw Object.assign(new Error('Job not found.'), { statusCode: 404 });
@@ -117,6 +128,7 @@ export const runJobLoop = async jobId => {
         const nextIteration = job.attempts.length + 1;
         for (let iteration = nextIteration; iteration <= job.maxIterations; iteration++) {
             const previous = job.attempts.at(-1) || null;
+            active.set(jobId, { jobId, agentId: job.assignedAgent, stage: 'working', iteration, title: job.title });
             job = await updateJob(jobId, {
                 status: 'running',
                 currentIteration: iteration,
@@ -129,9 +141,18 @@ export const runJobLoop = async jobId => {
                 createdAt: new Date().toISOString(),
             }]);
 
+            const workerMessage = makeMessage({
+                from: job.assignedAgent,
+                to: 'vera',
+                type: 'deliverable',
+                content: worker.content,
+                iteration,
+            });
+            active.set(jobId, { jobId, agentId: 'vera', stage: 'reviewing', iteration, title: job.title });
             job = await updateJob(jobId, {
                 status: 'qc_review',
                 result: worker.content,
+                messages: [...job.messages, workerMessage],
             });
 
             const qc = await runAgent('vera', [{
@@ -153,11 +174,25 @@ export const runJobLoop = async jobId => {
                 createdAt: new Date().toISOString(),
             };
             const attempts = [...job.attempts, attempt];
+            const qcMessage = makeMessage({
+                from: 'vera',
+                to: review.verdict === 'pass' ? 'nora' : job.assignedAgent,
+                type: review.verdict === 'pass' ? 'acceptance' : 'revision_request',
+                content: [
+                    review.summary,
+                    review.feedback,
+                    review.missing.length ? `Missing: ${review.missing.join('; ')}` : '',
+                ].filter(Boolean).join('\n\n'),
+                iteration,
+            });
+            const messages = [...job.messages, qcMessage];
 
             if (review.verdict === 'pass') {
+                active.set(jobId, { jobId, agentId: 'nora', stage: 'accepted', iteration, title: job.title });
                 return updateJob(jobId, {
                     status: 'completed',
                     attempts,
+                    messages,
                     result: worker.content,
                     qcVerdict: 'pass',
                     qcScore: review.score,
@@ -170,6 +205,7 @@ export const runJobLoop = async jobId => {
             job = await updateJob(jobId, {
                 status: iteration >= job.maxIterations ? 'awaiting_approval' : 'running',
                 attempts,
+                messages,
                 result: worker.content,
                 qcVerdict: 'revise',
                 qcScore: review.score,
@@ -186,6 +222,8 @@ export const runJobLoop = async jobId => {
             status: 'failed',
             lastError: error.message || 'Job execution failed.',
         });
+    } finally {
+        active.delete(jobId);
     }
 };
 
@@ -199,7 +237,6 @@ export const enqueueJob = async jobId => {
     scheduled.add(id);
     const task = queueTail.then(async () => {
         scheduled.delete(id);
-        active.add(id);
         try { return await runJobLoop(id); }
         finally { active.delete(id); }
     });
@@ -217,6 +254,13 @@ export const retryJob = async jobId => {
         status: 'queued',
         maxIterations: extendedLimit,
         lastError: '',
+        messages: [...job.messages, makeMessage({
+            from: 'nora',
+            to: job.assignedAgent,
+            type: 'continuation',
+            content: `Continue the job for up to ${extendedLimit} total iterations using Vera's latest feedback.`,
+            iteration: job.currentIteration,
+        })],
     });
     return enqueueJob(jobId);
 };
@@ -230,5 +274,5 @@ export const resumePendingJobs = async () => {
 
 export const jobRunnerStatus = () => ({
     queued: scheduled.size,
-    active: [...active],
+    active: [...active.values()],
 });

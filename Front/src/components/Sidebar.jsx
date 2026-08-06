@@ -1,6 +1,7 @@
 import {
     IconAdjustments,
     IconBriefcase2,
+    IconBrain,
     IconDatabase,
     IconMessages,
     IconMoon,
@@ -10,28 +11,30 @@ import {
 } from '@tabler/icons-react';
 
 const items = [
-    { id: 'chat', label: 'Nora', icon: IconMessages },
+    { id: 'chat', label: 'Chat', icon: IconMessages },
+    { id: 'map', label: 'Office map', icon: IconBrain },
     { id: 'agents', label: 'Agents', icon: IconRobot },
     { id: 'jobs', label: 'Jobs', icon: IconBriefcase2 },
-    { id: 'tools', label: 'MCP Tools', icon: IconTool },
     { id: 'memory', label: 'Memory', icon: IconDatabase },
+    { id: 'tools', label: 'Tools', icon: IconTool },
     { id: 'settings', label: 'Settings', icon: IconAdjustments },
 ];
 
 export default function Sidebar({ active, setActive, health, theme, setTheme }) {
     const nextTheme = theme === 'dark' ? 'light' : 'dark';
+    const working = health?.jobs?.active?.length || 0;
 
     return (
         <aside className="sidebar">
-            <div className="brand">
+            <button className="brand" onClick={() => setActive('chat')} aria-label="Open Carlos Office chat">
                 <div className="brand-mark">C</div>
                 <div>
                     <strong>Carlos Office</strong>
                     <span>Mer1dian control room</span>
                 </div>
-            </div>
+            </button>
 
-            <nav className="nav-list">
+            <nav className="nav-list" aria-label="Office navigation">
                 {items.map(item => {
                     const Icon = item.icon;
                     return (
@@ -42,6 +45,7 @@ export default function Sidebar({ active, setActive, health, theme, setTheme }) 
                         >
                             <Icon size={19} stroke={1.7} />
                             <span>{item.label}</span>
+                            {item.id === 'map' && working > 0 && <small className="nav-count">{working}</small>}
                         </button>
                     );
                 })}
@@ -51,13 +55,13 @@ export default function Sidebar({ active, setActive, health, theme, setTheme }) 
                 <div className="system-card">
                     <span className={`live-dot ${health?.status === 'online' ? 'online' : ''}`} />
                     <div>
-                        <strong>{health?.status === 'online' ? 'Office online' : 'Office unavailable'}</strong>
-                        <span>{health?.ollama?.online ? `${health.ollama.models} Ollama models` : 'Ollama offline'}</span>
+                        <strong>{working ? `${working} agent${working === 1 ? '' : 's'} working` : (health?.status === 'online' ? 'Office ready' : 'Office unavailable')}</strong>
+                        <span>{health?.ollama?.online ? 'Ollama connected' : 'Ollama offline'}</span>
                     </div>
                 </div>
                 <button className="theme-button" onClick={() => setTheme(nextTheme)}>
                     {theme === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}
-                    {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+                    <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
                 </button>
             </div>
         </aside>

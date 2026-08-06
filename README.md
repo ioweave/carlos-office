@@ -8,7 +8,7 @@ Local-first operating interface for Mer1dian's agent team: Nora, Marco, Luma, De
 - Node.js ESM
 - React + Vite
 - Ollama for local and Ollama Cloud inference
-- Obsidian-compatible Markdown for all persistent data
+- Obsidian-compatible Markdown for all persistent state
 - no login and no database service
 
 ## Agent roles
@@ -21,15 +21,13 @@ Local-first operating interface for Mer1dian's agent team: Nora, Marco, Luma, De
 
 ## Model routing
 
-The default runtime is:
-
 ```text
 Primary:  minimax-m3:cloud
 Fallback: qwen3:8b
 Policy:   fallback only for internet/cloud-connectivity failures
 ```
 
-Authentication, quota, invalid-model, and configuration errors are not hidden by the fallback. They are returned to the UI so they can be corrected.
+Authentication, quota, invalid-model, and configuration errors remain visible instead of being hidden by fallback behavior.
 
 Prepare Ollama:
 
@@ -38,6 +36,61 @@ ollama signin
 ollama pull minimax-m3:cloud
 ollama pull qwen3:8b
 ```
+
+## Conversation workspace
+
+The primary interface uses a three-column workspace:
+
+- searchable conversation history
+- focused conversation thread and composer
+- agent, model, voice, and Markdown-file inspector
+
+Every saved conversation has one authoritative Markdown file:
+
+```text
+30-Conversations/Threads/<conversationId>.md
+```
+
+The interface can:
+
+- create and reopen conversations
+- rename a conversation while preserving its identifier and Markdown file
+- delete a conversation and its attachment directory
+- append new messages to the same Markdown thread
+- attach images, text, code, JSON, CSV, and other local files
+- use browser speech recognition and speech synthesis
+
+Attachments are stored outside the Markdown payload so binary data does not make the vault unreadable:
+
+```text
+30-Conversations/Attachments/<conversationId>/<attachment-file>
+```
+
+The thread Markdown retains attachment metadata and relative links. Text-compatible attachments are included as model context. Image attachments are supplied to vision-capable Ollama models. The local `qwen3:8b` connectivity fallback remains text-only, so image content is omitted during an offline fallback and that limitation is stated in context.
+
+Default limits:
+
+```env
+MAX_CHAT_BODY_BYTES=30000000
+MAX_ATTACHMENT_BYTES=8388608
+MAX_ATTACHMENTS_TOTAL_BYTES=20971520
+MAX_TEXT_ATTACHMENT_CHARS=200000
+```
+
+## Office Map
+
+The **Office Map** is an interactive canvas-based, three-dimensional-style view of the operating system:
+
+- each agent is a labeled primary node
+- each conversation is a floating node beside its assigned agent
+- each job is connected to Nora, its worker, and Vera
+- active job edges display movement between agents
+- hover reveals a title and status
+- selecting a conversation opens its transcript details
+- selecting a job opens its expected result, criteria, QC state, iterations, and inter-agent message timeline
+- selecting an agent shows model configuration and current work
+
+The map is a projection of existing Markdown-backed records, not a second data store. It refreshes from `/api/office-map` and includes an accessible list representation beside the canvas.
 
 ## Vera QC loop
 
@@ -49,8 +102,6 @@ Nora's delegated jobs require:
 - objective acceptance criteria
 - a bounded iteration limit from 1 to 8
 
-The local workflow is:
-
 ```text
 Nora creates job
     -> worker produces result
@@ -60,9 +111,7 @@ Nora creates job
         -> limit reached: job becomes awaiting_approval
 ```
 
-Jobs execute through a single local queue to avoid competing model runs. Pending jobs resume after a backend restart. Each output, Vera verdict, score, missing criterion, feedback item, model assignment, and iteration is stored in the same Markdown job note under `40-Jobs`.
-
-The Jobs page refreshes active work automatically and can continue a failed or unaccepted job with up to two additional iterations, never exceeding eight.
+Jobs execute through a single local queue to avoid competing model runs. Pending jobs resume after a backend restart. Each worker delivery, Vera verdict, revision request, score, model, and iteration is stored in the same Markdown job note under `40-Jobs`.
 
 ## Obsidian-only storage
 
@@ -77,14 +126,22 @@ CarlosOfficeVault/
 │   ├── Dex/
 │   └── Vera/
 ├── 30-Conversations/
-│   ├── Threads/
-│   └── YYYY-MM-DD.md
-├── 40-Jobs/
+│   ├── Threads/                 One Markdown file per conversation
+│   └── Attachments/             Binary/text attachments by conversation
+├── 40-Jobs/                     Jobs, iterations and agent messages
 └── 90-System/
-    └── Runtime/Agents/
+    └── Runtime/Agents/          Provider/model settings
 ```
 
-Conversation history is available from the chat sidebar and can reopen any saved Markdown thread.
+## Read-only project inspection
+
+Nora, Dex, and Vera can inspect this repository with narrow read-only tools:
+
+- `project_list_files`
+- `project_read_file`
+- `project_search_files`
+
+The tools exclude `.git`, dependency/build folders, coverage output, and `.env` files. Set `PROJECT_ROOT` only when the repository is not the parent of the `Back` directory.
 
 ## Voice input and output
 
@@ -95,7 +152,7 @@ The chat interface supports:
 - optional automatic reading of new responses
 - English and Spanish language selection
 
-Voice is independent of the selected LLM. No microphone audio is sent to the Carlos Office backend.
+No microphone audio is sent to the Carlos Office backend.
 
 ## Start locally
 
@@ -123,21 +180,13 @@ npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`.
+Open the URL printed by Vite. Any loopback frontend port is accepted while the backend remains bound to loopback.
 
 The vault defaults to `~/CarlosOfficeVault`. To use another location:
 
 ```env
 OBSIDIAN_VAULT_PATH=C:\absolute\path\to\CarlosOfficeVault
 MEMORY_TIME_ZONE=America/Guayaquil
-```
-
-## Backend environment
-
-```env
-OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=minimax-m3:cloud
-OLLAMA_FALLBACK_MODEL=qwen3:8b
 ```
 
 ## MCP server
@@ -147,7 +196,11 @@ cd Back
 npm run mcp
 ```
 
-Shared tools include permanent memory, web research, current time, Ollama model inspection, agent listing, bounded QC job creation, job inspection, and job continuation.
+Shared tools include permanent memory, web research, current time, Ollama model inspection, agent listing, bounded QC job creation, job inspection, job continuation, and read-only project inspection.
+
+## Design review
+
+Use [`NORA_UI_AUDIT_PROMPT.md`](./NORA_UI_AUDIT_PROMPT.md) to have Nora inspect the implementation, research current Impeccable and Taste guidance, and create a Vera-gated implementation plan for Dex without modifying code during the audit.
 
 ## Validation
 

@@ -21,6 +21,12 @@ const makeExcerpt = (body, tokens) => {
     return `${start > 0 ? '…' : ''}${excerpt}${start + 720 < source.length ? '…' : ''}`;
 };
 
+const textContent = value => {
+    if (typeof value === 'string') return value;
+    if (!Array.isArray(value)) return String(value || '');
+    return value.filter(part => part?.type === 'text').map(part => part.text || '').join('\n');
+};
+
 export const searchMemory = async ({ query = '', agentId = 'nora', limit = 8 } = {}) => {
     const notes = (await getIndex()).filter(note => !note.path.startsWith('90-System/Runtime/'));
     const agentName = AGENT_NAMES[normalizeAgent(agentId)];
@@ -54,7 +60,7 @@ export const searchMemory = async ({ query = '', agentId = 'nora', limit = 8 } =
 
 export const buildMemoryContext = async (agentId, history = []) => {
     const query = history.filter(item => item.role === 'user').slice(-3)
-        .map(item => item.content || '').join('\n').slice(-4000).trim();
+        .map(item => textContent(item.content)).join('\n').slice(-4000).trim();
     if (!query) return { content: '', notes: [] };
     const notes = await searchMemory({ query, agentId, limit: 6 });
     if (!notes.length) return { content: '', notes: [] };

@@ -7,6 +7,7 @@ import { resumePendingJobs } from './src/lib/jobRunner.mjs';
 const router = new Router(routes);
 const host = process.env.LOCAL_HOST || '127.0.0.1';
 const port = Number(process.env.LOCAL_PORT || 3002);
+const maxBodyBytes = Math.max(1_000_000, Number(process.env.MAX_CHAT_BODY_BYTES || 30_000_000));
 const allowedOrigins = new Set(
     String(process.env.ALLOWED_ORIGINS || 'http://127.0.0.1:5173,http://localhost:5173')
         .split(',').map(item => item.trim()).filter(Boolean),
@@ -30,8 +31,8 @@ const readBody = req => new Promise((resolve, reject) => {
     let size = 0;
     req.on('data', chunk => {
         size += chunk.length;
-        if (size > 1_000_000) {
-            reject(Object.assign(new Error('Request body is too large.'), { statusCode: 413 }));
+        if (size > maxBodyBytes) {
+            reject(Object.assign(new Error(`Request body exceeds the ${maxBodyBytes}-byte local limit.`), { statusCode: 413 }));
             req.destroy();
             return;
         }
@@ -48,12 +49,10 @@ const readBody = req => new Promise((resolve, reject) => {
 
 const server = http.createServer(async (req, res) => {
     const origin = req.headers.origin;
-    const corsAllowed = !origin
-        || allowedOrigins.has(origin)
-        || (allowLoopbackOrigins && isLoopbackOrigin(origin));
+    const corsAllowed = !origin || allowedOrigins.has(origin) || (allowLoopbackOrigins && isLoopbackOrigin(origin));
     const corsHeaders = origin && corsAllowed ? {
         'Access-Control-Allow-Origin': origin,
-        'Access-Control-Allow-Methods': 'GET,POST,PUT,OPTIONS',
+        'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type',
         Vary: 'Origin',
     } : {};

@@ -3,6 +3,7 @@ import { Toaster, toast } from 'sonner';
 import api from './api';
 import Sidebar from './components/Sidebar';
 import ChatPage from './pages/ChatPage';
+import OfficeMapPage from './pages/OfficeMapPage';
 import AgentsPage from './pages/AgentsPage';
 import JobsPage from './pages/JobsPage';
 import ToolsPage from './pages/ToolsPage';
@@ -10,12 +11,18 @@ import MemoryPage from './pages/MemoryPage';
 import SettingsPage from './pages/SettingsPage';
 
 export default function App() {
-    const [active, setActive] = useState('chat');
+    const [active, setActiveState] = useState(localStorage.getItem('office-active-page') || 'chat');
     const [theme, setThemeState] = useState(localStorage.getItem('office-theme') || 'dark');
     const [health, setHealth] = useState(null);
     const [agents, setAgents] = useState([]);
     const [tools, setTools] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [chatRequest, setChatRequest] = useState(null);
+
+    const setActive = value => {
+        setActiveState(value);
+        localStorage.setItem('office-active-page', value);
+    };
 
     const setTheme = value => {
         setThemeState(value);
@@ -49,8 +56,14 @@ export default function App() {
         return () => clearInterval(timer);
     }, [load, theme]);
 
+    const openConversationFromMap = conversationId => {
+        setChatRequest({ conversationId, token: Date.now() });
+        setActive('chat');
+    };
+
     const page = {
-        chat: <ChatPage agents={agents} health={health} />,
+        chat: <ChatPage agents={agents} health={health} openRequest={chatRequest} />,
+        map: <OfficeMapPage agents={agents} onOpenConversation={openConversationFromMap} />,
         agents: <AgentsPage agents={agents} setAgents={setAgents} />,
         jobs: <JobsPage />,
         tools: <ToolsPage tools={tools} />,

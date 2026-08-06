@@ -4,7 +4,6 @@ import { agentDefinitions, defaultAgentConfig } from '../agents/agents.config.mj
 import { runAgent } from '../lib/agentRunner.mjs';
 import { executeTool, listTools } from '../lib/toolRegistry.mjs';
 import {
-    appendConversationJournal,
     getMemoryStatus,
     listMemory as listMemoryNotes,
     readMemory as readMemoryNote,
@@ -12,13 +11,18 @@ import {
     writeMemory as writeMemoryNote,
 } from '../lib/memory.mjs';
 import {
+    deleteConversation as deleteStoredConversation,
     getConversation as getStoredConversation,
     getJob as getStoredJob,
+    hydrateConversationMessages,
     listAgentConfigs,
     listConversations as listStoredConversations,
     listJobs as listStoredJobs,
+    readConversationAttachment,
     saveAgentConfig,
     saveConversation,
+    saveConversationAttachments,
+    updateConversation as updateStoredConversation,
 } from '../lib/officeStore.mjs';
 import { enqueueJob, jobRunnerStatus, retryJob } from '../lib/jobRunner.mjs';
 
@@ -118,8 +122,11 @@ export default class OfficeController {
         return { statusCode: 200, body: note };
     }
 
-    static async listConversations() {
-        return { statusCode: 200, body: await listStoredConversations({ limit: 50 }) };
+    static async listConversations({ query }) {
+        return {
+            statusCode: 200,
+            body: await listStoredConversations({ limit: Math.min(Number(query.limit) || 100, 500) }),
+        };
     }
 
     static async getConversation({ params }) {
@@ -128,10 +135,35 @@ export default class OfficeController {
         return { statusCode: 200, body: conversation };
     }
 
+    static async updateConversation({ params, body }) {
+        const title = String(body.title || '').trim();
+        if (!title) return { statusCode: 400, body: { error: 'Conversation title is required' } };
+        return {
+            statusCode: 200,
+            body: await updateStoredConversation(params.conversationId, { title }),
+        };
+    }
+
+    static async deleteConversation({ params }) {
+        return {
+            statusCode: 200,
+            body: await deleteStoredConversation(params.conversationId),
+        };
+    }
+
+    static async getConversationAttachment({ params }) {
+        return {
+            statusCode: 200,
+            body: await readConversationAttachment(params.conversationId, params.attachmentId),
+        };
+    }
+
     static async chat({ body }) {
-        const message = String(body.message || '').trim();
+        const suppliedMessage = String(body.message || '').trim();
+        const attachmentInputs = Array.isArray(body.attachments) ? body.attachments.slice(0, 8) : [];
+        const message = suppliedMessage || (attachmentInputs.length ? 'Review the attached files.' : '');
         const agentId = body.agentId || 'nora';
-        if (!message) return { statusCode: 400, body: { error: 'Message is required' } };
+        if (!message) return { statusCode: 400, body: { error: 'Message or attachment is required' } };
         if (!agentDefinitions[agentId]) return { statusCode: 404, body: { error: 'Unknown agent' } };
 
         const conversationId = body.conversationId || randomUUID();
@@ -139,43 +171,90 @@ export default class OfficeController {
         const conversation = await getStoredConversation(conversationId) || {
             conversationId,
             agentId,
-            title: message.slice(0, 72),
+            title: (suppliedMessage || attachmentInputs[0]?.name || 'New conversation').slice(0, 72),
             messages: [],
             createdAt: now,
             updatedAt: now,
         };
+        if (conversation.agentId !== agentId && conversation.messages.length) {
+            return { statusCode: 409, body: { error: 'A saved conversation cannot change agents. Start a new chat instead.' } };
+        }
 
-        conversation.messages.push({ role: 'user', content: message, createdAt: now });
-        const result = await runAgent(agentId, conversation.messages);
+        const attachments = attachmentInputs.length
+            ? await saveConversationAttachments(conversationId, attachmentInputs)
+            : [];
+        conversation.messages.push({
+            role: 'user',
+            content: message,
+            attachments,
+            createdAt: now,
+        });
+        await saveConversation(conversation);
+
+        let result;
+        try {
+            const modelHistory = await hydrateConversationMessages(conversation.messages);
+            result = await runAgent(agentId, modelHistory);
+        } catch (error) {
+            const assistantFailure = {
+                role: 'assistant',
+                content: `I could not complete that request: ${error.message || 'Model execution failed.'}`,
+                toolEvents: [],
+                memoryRefs: [],
+                model: null,
+                attachments: [],
+                error: true,
+                createdAt: new Date().toISOString(),
+            };
+            conversation.messages.push(assistantFailure);
+            const failed = await saveConversation(conversation);
+            return {
+                statusCode: error.statusCode || 500,
+                body: {
+                    error: error.message || 'Model execution failed.',
+                    conversationId,
+                    conversation: {
+                        title: failed.title,
+                        updatedAt: failed.updatedAt,
+                        messageCount: failed.messages.length,
+                    },
+                    message: assistantFailure,
+                },
+            };
+        }
+
         const assistantMessage = {
             role: 'assistant',
             content: result.content,
             toolEvents: result.toolEvents,
             memoryRefs: result.memoryRefs,
             model: result.model,
+            attachments: [],
             createdAt: new Date().toISOString(),
         };
         conversation.messages.push(assistantMessage);
-        await saveConversation(conversation);
-        await appendConversationJournal({
-            conversationId,
-            agentId,
-            userMessage: message,
-            assistantMessage: result.content,
-        });
+        const saved = await saveConversation(conversation);
 
         return {
             statusCode: 200,
             body: {
                 conversationId,
+                conversation: {
+                    title: saved.title,
+                    updatedAt: saved.updatedAt,
+                    messageCount: saved.messages.length,
+                },
                 message: assistantMessage,
                 model: result.model,
             },
         };
     }
 
-    static async listJobs() {
-        return { statusCode: 200, body: await listStoredJobs({ limit: 100 }) };
+    static async listJobs({ query }) {
+        return {
+            statusCode: 200,
+            body: await listStoredJobs({ limit: Math.min(Number(query.limit) || 100, 500) }),
+        };
     }
 
     static async getJob({ params }) {
@@ -191,5 +270,23 @@ export default class OfficeController {
             ? await retryJob(job.jobId)
             : await enqueueJob(job.jobId);
         return { statusCode: 202, body: execution };
+    }
+
+    static async officeMap() {
+        const [agents, conversations, jobs] = await Promise.all([
+            listAgentConfigs(agentDefinitions, defaultAgentConfig),
+            listStoredConversations({ limit: 300 }),
+            listStoredJobs({ limit: 300 }),
+        ]);
+        return {
+            statusCode: 200,
+            body: {
+                agents,
+                conversations,
+                jobs,
+                runner: jobRunnerStatus(),
+                generatedAt: new Date().toISOString(),
+            },
+        };
     }
 }

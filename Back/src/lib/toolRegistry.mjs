@@ -4,6 +4,7 @@ import { fetchOnlineDocument } from './fetchUrl.mjs';
 import { listMemory, readMemory, searchMemory, writeMemory } from './memory.mjs';
 import { agentDefinitions, defaultAgentConfig } from '../agents/agents.config.mjs';
 import { createJob, getJob, listAgentConfigs, listJobs } from './officeStore.mjs';
+import { listProjectFiles, readProjectFile, searchProjectFiles } from './projectFiles.mjs';
 
 const allAgents = ['nora', 'marco', 'luma', 'dex', 'vera'];
 
@@ -102,6 +103,51 @@ const toolDefinitions = [
         execute: fetchOnlineDocument,
     },
     {
+        name: 'project_list_files',
+        description: 'List readable source and documentation files inside the local Carlos Office repository. Secrets, dependencies, build output, and hidden environment files are blocked.',
+        allowedAgents: ['nora', 'dex', 'vera'],
+        inputSchema: {
+            type: 'object',
+            properties: {
+                folder: { type: 'string', default: 'Front/src', description: 'Repository-relative folder.' },
+                limit: { type: 'integer', minimum: 1, maximum: 1000, default: 200 },
+            },
+            additionalProperties: false,
+        },
+        execute: listProjectFiles,
+    },
+    {
+        name: 'project_read_file',
+        description: 'Read one safe text source file from the local Carlos Office repository. This tool is read-only and blocks secrets and dependency folders.',
+        allowedAgents: ['nora', 'dex', 'vera'],
+        inputSchema: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: 'Repository-relative text file path.' },
+                maxChars: { type: 'integer', minimum: 1000, maximum: 100000, default: 30000 },
+            },
+            required: ['path'],
+            additionalProperties: false,
+        },
+        execute: readProjectFile,
+    },
+    {
+        name: 'project_search_files',
+        description: 'Search readable local repository files for an exact text fragment and return contextual excerpts.',
+        allowedAgents: ['nora', 'dex', 'vera'],
+        inputSchema: {
+            type: 'object',
+            properties: {
+                query: { type: 'string' },
+                folder: { type: 'string', default: 'Front/src' },
+                limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+            },
+            required: ['query'],
+            additionalProperties: false,
+        },
+        execute: searchProjectFiles,
+    },
+    {
         name: 'current_time',
         description: 'Return the current date and time in an IANA time zone.',
         allowedAgents: allAgents,
@@ -196,7 +242,7 @@ const toolDefinitions = [
     },
     {
         name: 'get_agent_job',
-        description: 'Read one delegated job, including its current Vera verdict and iteration history.',
+        description: 'Read one delegated job, including its current Vera verdict, inter-agent communication, and iteration history.',
         allowedAgents: ['nora'],
         inputSchema: {
             type: 'object',

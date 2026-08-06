@@ -12,8 +12,12 @@ export default [
     { method: 'POST', path: '/api/memory', handler: OfficeController.writeMemory },
     { method: 'GET', path: '/api/conversations', handler: OfficeController.listConversations },
     { method: 'GET', path: '/api/conversations/{conversationId}', handler: OfficeController.getConversation },
+    { method: 'PUT', path: '/api/conversations/{conversationId}', handler: OfficeController.updateConversation },
+    { method: 'DELETE', path: '/api/conversations/{conversationId}', handler: OfficeController.deleteConversation },
+    { method: 'GET', path: '/api/conversations/{conversationId}/attachments/{attachmentId}', handler: OfficeController.getConversationAttachment },
     { method: 'POST', path: '/api/chat', handler: OfficeController.chat },
     { method: 'GET', path: '/api/jobs', handler: OfficeController.listJobs },
     { method: 'GET', path: '/api/jobs/{jobId}', handler: OfficeController.getJob },
     { method: 'POST', path: '/api/jobs/{jobId}/run', handler: OfficeController.runJob },
+    { method: 'GET', path: '/api/office-map', handler: OfficeController.officeMap },
 ];

@@ -6,9 +6,9 @@ import { ensureOfficeStore } from '../lib/officeStore.mjs';
 
 const server = new McpServer({
     name: 'carlos-office-tools',
-    version: '0.4.0',
+    version: '0.5.0',
 }, {
-    instructions: 'Shared local tools for Nora, Marco, Luma, Dex, and Vera. Delegated jobs use a bounded worker-to-Vera QC loop. All state and permanent memory live in the Obsidian Markdown vault. Public web fetching blocks private network addresses. External side effects are not exposed.',
+    instructions: 'Shared local tools for Nora, Marco, Luma, Dex, and Vera. Delegated jobs use a bounded worker-to-Vera QC loop. All state and permanent memory live in the Obsidian Markdown vault. Project inspection is read-only. Public web fetching blocks private network addresses. External side effects are not exposed.',
 });
 
 const asResult = value => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
@@ -61,6 +61,21 @@ server.registerTool('list_agents', {
     description: 'List Carlos Office agents and their provider/model configuration.', inputSchema: z.object({}),
 }, async () => asResult(await executeTool('nora', 'list_agents', {})));
 
+server.registerTool('project_list_files', {
+    description: 'List repository files through the read-only Carlos Office project inspector.',
+    inputSchema: z.object({ folder: z.string().default('Front/src'), limit: z.number().int().min(1).max(1000).default(200) }),
+}, async args => asResult(await executeTool('nora', 'project_list_files', args)));
+
+server.registerTool('project_read_file', {
+    description: 'Read one UTF-8 repository file through the read-only project inspector.',
+    inputSchema: z.object({ path: z.string().min(1), maxChars: z.number().int().min(1000).max(100000).default(30000) }),
+}, async args => asResult(await executeTool('nora', 'project_read_file', args)));
+
+server.registerTool('project_search_files', {
+    description: 'Search text across repository files through the read-only project inspector.',
+    inputSchema: z.object({ query: z.string().min(1), folder: z.string().default('Front/src'), limit: z.number().int().min(1).max(100).default(20) }),
+}, async args => asResult(await executeTool('nora', 'project_search_files', args)));
+
 server.registerTool('create_agent_job', {
     description: 'Create and automatically run a bounded worker-to-Vera QC loop.',
     inputSchema: z.object({
@@ -76,7 +91,7 @@ server.registerTool('create_agent_job', {
 }, async args => asResult(await executeTool('nora', 'create_agent_job', args)));
 
 server.registerTool('get_agent_job', {
-    description: 'Read one delegated job and its Vera QC iteration history.',
+    description: 'Read one delegated job, its inter-agent messages, and Vera QC iteration history.',
     inputSchema: z.object({ jobId: z.string().min(1) }),
 }, async args => asResult(await executeTool('nora', 'get_agent_job', args)));
 
@@ -93,4 +108,4 @@ server.registerTool('retry_agent_job', {
 await ensureOfficeStore();
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error('Carlos Office MCP tools running on stdio with Vera QC and Obsidian-only storage');
+console.error('Carlos Office MCP tools running on stdio with read-only project inspection, Vera QC, and Obsidian-only storage');

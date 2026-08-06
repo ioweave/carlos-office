@@ -1,11 +1,20 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { AGENT_NAMES, ensureVault, getVaultPath, invalidateIndex, parseFrontmatter, slugify, toUnixPath } from './memoryCore.mjs';
+import {
+    AGENT_NAMES,
+    ensureVault,
+    getVaultPath,
+    invalidateIndex,
+    parseFrontmatter,
+    slugify,
+    toUnixPath,
+} from './memoryCore.mjs';
 
 const DIR = {
     agents: '90-System/Runtime/Agents',
     conversations: '30-Conversations/Threads',
+    attachments: '30-Conversations/Attachments',
     jobs: '40-Jobs',
 };
 const locks = new Map();
@@ -13,6 +22,9 @@ const full = relative => path.join(getVaultPath(), relative);
 const iso = value => new Date(value || Date.now()).toISOString();
 const clean = value => String(value ?? '').replace(/<!--\s*\/?carlos-office-[\s\S]*?-->/gi, '').trim();
 const yaml = data => ['---', ...Object.entries(data).map(([key, value]) => `${key}: ${JSON.stringify(value ?? '')}`), '---', ''].join('\n');
+const MAX_ATTACHMENT_BYTES = Math.max(1_000_000, Number(process.env.MAX_ATTACHMENT_BYTES || 8_388_608));
+const MAX_ATTACHMENTS_TOTAL_BYTES = Math.max(MAX_ATTACHMENT_BYTES, Number(process.env.MAX_ATTACHMENTS_TOTAL_BYTES || 20_971_520));
+const MAX_TEXT_ATTACHMENT_CHARS = Math.max(4_000, Number(process.env.MAX_TEXT_ATTACHMENT_CHARS || 200_000));
 
 const locked = async (key, action) => {
     const previous = locks.get(key) || Promise.resolve();
@@ -28,28 +40,61 @@ const locked = async (key, action) => {
     }
 };
 
+const safeId = value => {
+    const id = String(value || '').trim();
+    if (!/^[A-Za-z0-9_-]{1,120}$/.test(id)) {
+        throw Object.assign(new Error('Invalid local record identifier.'), { statusCode: 400 });
+    }
+    return id;
+};
+
+const safeFilename = value => {
+    const raw = path.basename(String(value || 'attachment'));
+    const sanitized = raw.normalize('NFKC').replace(/[^A-Za-z0-9._ -]+/g, '_').replace(/\s+/g, ' ').trim();
+    return (sanitized || 'attachment').slice(0, 140);
+};
+
+const assertVaultPath = relative => {
+    const root = path.resolve(getVaultPath());
+    const absolute = path.resolve(root, String(relative || ''));
+    if (absolute !== root && !absolute.startsWith(`${root}${path.sep}`)) {
+        throw Object.assign(new Error('Stored path escapes the Obsidian vault.'), { statusCode: 400 });
+    }
+    return absolute;
+};
+
 const write = async (relative, content) => {
-    const target = full(relative);
+    const target = assertVaultPath(relative);
     await fs.mkdir(path.dirname(target), { recursive: true });
     const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
     await fs.writeFile(temporary, content, 'utf8');
     await fs.rename(temporary, target);
     invalidateIndex();
 };
+
+const writeBinary = async (relative, content) => {
+    const target = assertVaultPath(relative);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
+    await fs.writeFile(temporary, content);
+    await fs.rename(temporary, target);
+};
+
 const read = async relative => {
-    try { return await fs.readFile(full(relative), 'utf8'); }
+    try { return await fs.readFile(assertVaultPath(relative), 'utf8'); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 };
+
 const files = async folder => {
     await ensureOfficeStore();
-    return (await fs.readdir(full(folder), { withFileTypes: true }))
+    return (await fs.readdir(assertVaultPath(folder), { withFileTypes: true }))
         .filter(item => item.isFile() && item.name.toLowerCase().endsWith('.md'))
         .map(item => `${folder}/${item.name}`);
 };
 
 export const ensureOfficeStore = async () => {
     await ensureVault();
-    await Promise.all(Object.values(DIR).map(folder => fs.mkdir(full(folder), { recursive: true })));
+    await Promise.all(Object.values(DIR).map(folder => fs.mkdir(assertVaultPath(folder), { recursive: true })));
     return getVaultPath();
 };
 
@@ -59,6 +104,7 @@ const fallback = (value = {}, defaults = {}) => ({
     model: String(value.model ?? defaults.model ?? ''),
     baseUrl: String(value.baseUrl ?? defaults.baseUrl ?? 'https://api.openai.com/v1'),
 });
+
 const agentConfig = (agentId, value = {}, defaults = {}) => ({
     agentId,
     name: String(value.name ?? defaults.name ?? AGENT_NAMES[agentId] ?? agentId),
@@ -93,6 +139,7 @@ export const getAgentConfig = async (agentId, defaults) => {
     await write(agentFile(agentId), agentMarkdown(config));
     return config;
 };
+
 export const saveAgentConfig = (agentId, update, defaults) => locked(agentFile(agentId), async () => {
     const current = await getAgentConfig(agentId, defaults);
     const config = agentConfig(agentId, {
@@ -105,6 +152,7 @@ export const saveAgentConfig = (agentId, update, defaults) => locked(agentFile(a
     await write(agentFile(agentId), agentMarkdown(config));
     return config;
 });
+
 export const listAgentConfigs = async (definitions, defaultConfig) => {
     const result = [];
     for (const id of Object.keys(definitions)) result.push(await getAgentConfig(id, defaultConfig(id)));
@@ -118,27 +166,62 @@ const unblock = (raw, name) => {
     try { return JSON.parse(Buffer.from(found[1].replace(/\s+/g, ''), 'base64').toString()); }
     catch { return null; }
 };
+
+const attachment = value => ({
+    attachmentId: safeId(value?.attachmentId || randomUUID()),
+    name: safeFilename(value?.name || 'attachment'),
+    mimeType: String(value?.mimeType || 'application/octet-stream').slice(0, 160),
+    size: Math.max(0, Number(value?.size || 0)),
+    path: toUnixPath(String(value?.path || '')),
+    createdAt: iso(value?.createdAt),
+});
+
+const message = value => ({
+    role: ['user', 'assistant', 'tool'].includes(value?.role) ? value.role : 'user',
+    content: String(value?.content || ''),
+    attachments: Array.isArray(value?.attachments) ? value.attachments.map(attachment) : [],
+    toolEvents: Array.isArray(value?.toolEvents) ? value.toolEvents : [],
+    memoryRefs: Array.isArray(value?.memoryRefs) ? value.memoryRefs : [],
+    model: value?.model || null,
+    error: Boolean(value?.error),
+    createdAt: iso(value?.createdAt),
+});
+
 const conversation = value => ({
-    conversationId: String(value.conversationId),
+    conversationId: safeId(value.conversationId),
     agentId: String(value.agentId || 'nora'),
-    title: String(value.title || 'New conversation'),
-    messages: Array.isArray(value.messages) ? value.messages : [],
+    title: String(value.title || 'New conversation').trim().slice(0, 120) || 'New conversation',
+    messages: Array.isArray(value.messages) ? value.messages.map(message) : [],
     createdAt: iso(value.createdAt),
     updatedAt: iso(value.updatedAt),
 });
-const conversationFile = id => `${DIR.conversations}/${id}.md`;
-const messageMarkdown = message => {
-    const name = message.role === 'assistant' ? 'Assistant' : message.role === 'tool' ? 'Tool' : 'Carlos';
-    const tools = message.toolEvents?.length ? `\n\n<details><summary>Tool activity</summary>\n\n\`\`\`json\n${JSON.stringify(message.toolEvents, null, 2)}\n\`\`\`\n\n</details>` : '';
-    return `## ${name} · ${iso(message.createdAt)}\n\n${clean(message.content)}${tools}`;
+const conversationFile = id => `${DIR.conversations}/${safeId(id)}.md`;
+const conversationAttachmentFolder = id => `${DIR.attachments}/${safeId(id)}`;
+const attachmentCount = value => value.messages.reduce((sum, item) => sum + item.attachments.length, 0);
+
+const messageMarkdown = item => {
+    const name = item.role === 'assistant' ? 'Assistant' : item.role === 'tool' ? 'Tool' : 'Carlos';
+    const tools = item.toolEvents?.length ? `\n\n<details><summary>Tool activity</summary>\n\n\`\`\`json\n${JSON.stringify(item.toolEvents, null, 2)}\n\`\`\`\n\n</details>` : '';
+    const attachments = item.attachments?.length
+        ? `\n\n**Attachments**\n${item.attachments.map(file => `- [${file.name}](../../${file.path}) — ${file.mimeType}, ${file.size} bytes`).join('\n')}`
+        : '';
+    return `## ${name} · ${iso(item.createdAt)}\n\n${clean(item.content)}${attachments}${tools}`;
 };
+
 const conversationMarkdown = value => `${yaml({
-    type: 'conversation', conversationId: value.conversationId, agentId: value.agentId,
-    title: value.title, messageCount: value.messages.length, createdAt: value.createdAt, updatedAt: value.updatedAt,
+    type: 'conversation',
+    conversationId: value.conversationId,
+    agentId: value.agentId,
+    title: value.title,
+    messageCount: value.messages.length,
+    attachmentCount: attachmentCount(value),
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
 })}# ${value.title}
 
 > Agent: **${AGENT_NAMES[value.agentId] || value.agentId}**  
-> Updated: ${value.updatedAt}
+> Updated: ${value.updatedAt}  
+> Source of truth: this individual Markdown file
 
 ${block('conversation', value)}
 
@@ -153,6 +236,7 @@ export const getConversation = async id => {
     if (!raw) return null;
     return conversation(unblock(raw, 'conversation') || { ...parseFrontmatter(raw).data, messages: [] });
 };
+
 export const saveConversation = value => {
     const item = conversation({ ...value, updatedAt: new Date().toISOString() });
     return locked(conversationFile(item.conversationId), async () => {
@@ -160,25 +244,138 @@ export const saveConversation = value => {
         return item;
     });
 };
+
+export const updateConversation = async (id, update = {}) => {
+    const current = await getConversation(id);
+    if (!current) throw Object.assign(new Error('Conversation not found.'), { statusCode: 404 });
+    return saveConversation({
+        ...current,
+        title: update.title === undefined ? current.title : String(update.title || '').trim().slice(0, 120),
+        agentId: update.agentId === undefined ? current.agentId : String(update.agentId || current.agentId),
+        createdAt: current.createdAt,
+    });
+};
+
+export const deleteConversation = id => locked(`conversation:${safeId(id)}`, async () => {
+    const current = await getConversation(id);
+    if (!current) throw Object.assign(new Error('Conversation not found.'), { statusCode: 404 });
+    await fs.rm(assertVaultPath(conversationFile(id)), { force: true });
+    await fs.rm(assertVaultPath(conversationAttachmentFolder(id)), { recursive: true, force: true });
+    invalidateIndex();
+    return { conversationId: current.conversationId, deleted: true };
+});
+
 export const listConversations = async ({ limit = 50 } = {}) => {
     const result = [];
     for (const relative of await files(DIR.conversations)) {
         try {
             const data = parseFrontmatter(await read(relative)).data;
             result.push({
-                conversationId: data.conversationId || path.basename(relative, '.md'), agentId: data.agentId || 'nora',
-                title: data.title || path.basename(relative, '.md'), messageCount: Number(data.messageCount || 0),
-                createdAt: iso(data.createdAt), updatedAt: iso(data.updatedAt), path: toUnixPath(relative),
+                conversationId: data.conversationId || path.basename(relative, '.md'),
+                agentId: data.agentId || 'nora',
+                title: data.title || path.basename(relative, '.md'),
+                messageCount: Number(data.messageCount || 0),
+                attachmentCount: Number(data.attachmentCount || 0),
+                createdAt: iso(data.createdAt),
+                updatedAt: iso(data.updatedAt),
+                path: toUnixPath(relative),
             });
         } catch (error) { console.error('[store] Could not read conversation:', error.message); }
     }
-    return result.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)).slice(0, Math.min(Number(limit) || 50, 500));
+    return result.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+        .slice(0, Math.min(Number(limit) || 50, 500));
 };
+
+const decodeAttachment = input => {
+    const source = String(input?.data || '');
+    const base64 = source.includes(',') ? source.slice(source.indexOf(',') + 1) : source;
+    const buffer = Buffer.from(base64, 'base64');
+    if (!buffer.length) throw Object.assign(new Error(`Attachment ${input?.name || ''} is empty.`), { statusCode: 400 });
+    if (buffer.length > MAX_ATTACHMENT_BYTES) {
+        throw Object.assign(new Error(`${input?.name || 'Attachment'} exceeds the ${MAX_ATTACHMENT_BYTES}-byte local limit.`), { statusCode: 413 });
+    }
+    return buffer;
+};
+
+export const saveConversationAttachments = async (conversationId, values = []) => {
+    await ensureOfficeStore();
+    const id = safeId(conversationId);
+    const inputs = Array.isArray(values) ? values.slice(0, 8) : [];
+    const saved = [];
+    let totalBytes = 0;
+    for (const input of inputs) {
+        const buffer = decodeAttachment(input);
+        totalBytes += buffer.length;
+        if (totalBytes > MAX_ATTACHMENTS_TOTAL_BYTES) {
+            throw Object.assign(new Error(`Attachments exceed the ${MAX_ATTACHMENTS_TOTAL_BYTES}-byte total message limit.`), { statusCode: 413 });
+        }
+        const item = attachment({
+            attachmentId: randomUUID(),
+            name: input.name,
+            mimeType: input.mimeType,
+            size: buffer.length,
+            path: `${conversationAttachmentFolder(id)}/${randomUUID()}-${safeFilename(input.name)}`,
+            createdAt: new Date().toISOString(),
+        });
+        await writeBinary(item.path, buffer);
+        saved.push(item);
+    }
+    return saved;
+};
+
+export const readConversationAttachment = async (conversationId, attachmentId) => {
+    const conversationRecord = await getConversation(conversationId);
+    if (!conversationRecord) throw Object.assign(new Error('Conversation not found.'), { statusCode: 404 });
+    const targetId = safeId(attachmentId);
+    const item = conversationRecord.messages.flatMap(entry => entry.attachments)
+        .find(entry => entry.attachmentId === targetId);
+    if (!item) throw Object.assign(new Error('Attachment not found.'), { statusCode: 404 });
+    const data = await fs.readFile(assertVaultPath(item.path));
+    return { ...item, data: data.toString('base64') };
+};
+
+const isTextAttachment = mimeType => /^(text\/|application\/(json|xml|javascript|x-javascript|yaml|x-yaml|csv))/.test(String(mimeType || '').toLowerCase());
+const isImageAttachment = mimeType => String(mimeType || '').toLowerCase().startsWith('image/');
+
+export const hydrateConversationMessages = async messages => Promise.all((messages || []).map(async item => {
+    const normalized = message(item);
+    if (normalized.role !== 'user' || !normalized.attachments.length) return normalized;
+    const parts = [{ type: 'text', text: normalized.content || 'Review the attached files.' }];
+    for (const file of normalized.attachments) {
+        try {
+            const data = await fs.readFile(assertVaultPath(file.path));
+            if (isImageAttachment(file.mimeType)) {
+                parts.push({
+                    type: 'text',
+                    text: `Image attachment: ${file.name} (${file.mimeType}, ${file.size} bytes).`,
+                });
+                parts.push({
+                    type: 'image_url',
+                    image_url: { url: `data:${file.mimeType};base64,${data.toString('base64')}` },
+                });
+            } else if (isTextAttachment(file.mimeType)) {
+                parts.push({
+                    type: 'text',
+                    text: `\n\n--- Attachment: ${file.name} ---\n${data.toString('utf8').slice(0, MAX_TEXT_ATTACHMENT_CHARS)}`,
+                });
+            } else {
+                parts.push({
+                    type: 'text',
+                    text: `\n\nAttachment stored locally but not injected as model text: ${file.name} (${file.mimeType}, ${file.size} bytes).`,
+                });
+            }
+        } catch (error) {
+            parts.push({ type: 'text', text: `\n\nAttachment could not be read: ${file.name}. ${error.message}` });
+        }
+    }
+    return { ...normalized, modelContent: parts };
+}));
 
 const criteria = value => {
     const source = Array.isArray(value) ? value : String(value || '').split(/\r?\n/);
     return source.map(item => String(item).replace(/^\s*[-*]\s*/, '').trim()).filter(Boolean).slice(0, 30);
 };
+
 const attempt = value => ({
     iteration: Math.max(1, Number(value?.iteration || 1)),
     workerOutput: String(value?.workerOutput || ''),
@@ -191,8 +388,19 @@ const attempt = value => ({
     qcModel: value?.qcModel || null,
     createdAt: iso(value?.createdAt),
 });
+
+const jobMessage = value => ({
+    messageId: safeId(value?.messageId || randomUUID()),
+    from: String(value?.from || 'nora'),
+    to: String(value?.to || ''),
+    type: String(value?.type || 'message'),
+    content: String(value?.content || ''),
+    iteration: Math.max(0, Number(value?.iteration || 0)),
+    createdAt: iso(value?.createdAt),
+});
+
 const job = value => ({
-    jobId: String(value.jobId || randomUUID()),
+    jobId: safeId(value.jobId || randomUUID()),
     createdBy: String(value.createdBy || 'nora'),
     assignedAgent: String(value.assignedAgent || 'marco'),
     qcAgent: 'vera',
@@ -205,6 +413,7 @@ const job = value => ({
     maxIterations: Math.max(1, Math.min(Number(value.maxIterations || 4), 8)),
     currentIteration: Math.max(0, Number(value.currentIteration || 0)),
     attempts: Array.isArray(value.attempts) ? value.attempts.map(attempt) : [],
+    messages: Array.isArray(value.messages) ? value.messages.map(jobMessage) : [],
     result: String(value.result || ''),
     qcVerdict: String(value.qcVerdict || ''),
     qcScore: Math.max(0, Math.min(Number(value.qcScore || 0), 100)),
@@ -214,71 +423,37 @@ const job = value => ({
     updatedAt: iso(value.updatedAt),
     path: String(value.path || ''),
 });
+
 const jobMarkdown = value => {
     const criteriaList = value.acceptanceCriteria.length
         ? value.acceptanceCriteria.map(item => `- ${item}`).join('\n')
         : '_No explicit criteria supplied._';
     const attempts = value.attempts.length
-        ? value.attempts.map(item => `### Iteration ${item.iteration}
-
-- **Worker model:** ${item.workerModel?.provider || 'unknown'} · ${item.workerModel?.model || 'unknown'}
-- **Vera verdict:** ${item.qcVerdict}
-- **QC score:** ${item.qcScore}/100
-- **QC model:** ${item.qcModel?.provider || 'unknown'} · ${item.qcModel?.model || 'unknown'}
-
-#### Worker output
-
-${clean(item.workerOutput)}
-
-#### Vera assessment
-
-${clean(item.qcSummary)}
-
-${item.missing.length ? `**Missing:** ${item.missing.join('; ')}` : ''}
-
-${clean(item.qcFeedback)}`).join('\n\n---\n\n')
+        ? value.attempts.map(item => `### Iteration ${item.iteration}\n\n- **Worker model:** ${item.workerModel?.provider || 'unknown'} · ${item.workerModel?.model || 'unknown'}\n- **Vera verdict:** ${item.qcVerdict}\n- **QC score:** ${item.qcScore}/100\n- **QC model:** ${item.qcModel?.provider || 'unknown'} · ${item.qcModel?.model || 'unknown'}\n\n#### Worker output\n\n${clean(item.workerOutput)}\n\n#### Vera assessment\n\n${clean(item.qcSummary)}\n\n${item.missing.length ? `**Missing:** ${item.missing.join('; ')}` : ''}\n\n${clean(item.qcFeedback)}`).join('\n\n---\n\n')
         : '_No iterations have run yet._';
+    const messages = value.messages.length
+        ? value.messages.map(item => `### ${AGENT_NAMES[item.from] || item.from} → ${AGENT_NAMES[item.to] || item.to || 'Office'}\n\n- **Type:** ${item.type}\n- **Iteration:** ${item.iteration || '—'}\n- **Time:** ${item.createdAt}\n\n${clean(item.content)}`).join('\n\n---\n\n')
+        : '_No inter-agent messages yet._';
 
     return `${yaml({
-        type: 'agent-job', jobId: value.jobId, createdBy: value.createdBy, assignedAgent: value.assignedAgent,
-        qcAgent: value.qcAgent, title: value.title, priority: value.priority, status: value.status,
-        currentIteration: value.currentIteration, maxIterations: value.maxIterations,
-        qcVerdict: value.qcVerdict, qcScore: value.qcScore,
-        createdAt: value.createdAt, updatedAt: value.updatedAt,
-    })}# ${value.title}
-
-## Instructions
-
-${clean(value.instructions)}
-
-## Expected result
-
-${clean(value.expectedResult) || '_Not specified._'}
-
-## Acceptance criteria
-
-${criteriaList}
-
-## Current result
-
-${clean(value.result) || '_Not completed yet._'}
-
-## QC status
-
-- **Vera verdict:** ${value.qcVerdict || 'pending'}
-- **QC score:** ${value.qcScore || 0}/100
-- **Iteration:** ${value.currentIteration}/${value.maxIterations}
-
-${clean(value.qcFeedback)}
-${value.lastError ? `\n\n**Last error:** ${clean(value.lastError)}` : ''}
-
-## Iteration history
-
-${attempts}
-
-${block('job', value)}
-`;
+        type: 'agent-job',
+        jobId: value.jobId,
+        createdBy: value.createdBy,
+        assignedAgent: value.assignedAgent,
+        qcAgent: value.qcAgent,
+        title: value.title,
+        priority: value.priority,
+        status: value.status,
+        currentIteration: value.currentIteration,
+        maxIterations: value.maxIterations,
+        qcVerdict: value.qcVerdict,
+        qcScore: value.qcScore,
+        messageCount: value.messages.length,
+        createdAt: value.createdAt,
+        updatedAt: value.updatedAt,
+    })}# ${value.title}\n\n## Instructions\n\n${clean(value.instructions)}\n\n## Expected result\n\n${clean(value.expectedResult) || '_Not specified._'}\n\n## Acceptance criteria\n\n${criteriaList}\n\n## Current result\n\n${clean(value.result) || '_Not completed yet._'}\n\n## QC status\n\n- **Vera verdict:** ${value.qcVerdict || 'pending'}\n- **QC score:** ${value.qcScore || 0}/100\n- **Iteration:** ${value.currentIteration}/${value.maxIterations}\n\n${clean(value.qcFeedback)}\n${value.lastError ? `\n\n**Last error:** ${clean(value.lastError)}` : ''}\n\n## Agent communication\n\n${messages}\n\n## Iteration history\n\n${attempts}\n\n${block('job', value)}\n`;
 };
+
 const findJobRecord = async jobId => {
     for (const relative of await files(DIR.jobs)) {
         const raw = await read(relative);
@@ -292,16 +467,31 @@ const findJobRecord = async jobId => {
 export const createJob = async value => {
     await ensureOfficeStore();
     const item = job(value);
+    if (!item.messages.length) {
+        item.messages.push(jobMessage({
+            from: item.createdBy,
+            to: item.assignedAgent,
+            type: 'assignment',
+            content: [
+                item.instructions,
+                `Expected result: ${item.expectedResult || 'Not specified.'}`,
+                `Acceptance criteria: ${item.acceptanceCriteria.join('; ') || 'Not specified.'}`,
+            ].join('\n\n'),
+            iteration: 0,
+        }));
+    }
     const relative = `${DIR.jobs}/${item.createdAt.slice(0, 10)}-${slugify(item.title)}-${item.jobId.slice(0, 8)}.md`;
     item.path = relative;
     await write(relative, jobMarkdown(item));
     return item;
 };
+
 export const getJob = async jobId => {
     await ensureOfficeStore();
     const record = await findJobRecord(jobId);
     return record ? job({ ...record.stored, path: record.relative }) : null;
 };
+
 export const saveJob = async value => {
     const item = job({ ...value, updatedAt: new Date().toISOString() });
     return locked(`job:${item.jobId}`, async () => {
@@ -313,6 +503,7 @@ export const saveJob = async value => {
         return item;
     });
 };
+
 export const updateJob = async (jobId, update = {}) => locked(`job:${jobId}`, async () => {
     const current = await getJob(jobId);
     if (!current) throw Object.assign(new Error('Job not found.'), { statusCode: 404 });
@@ -320,6 +511,7 @@ export const updateJob = async (jobId, update = {}) => locked(`job:${jobId}`, as
         ...current,
         ...update,
         attempts: update.attempts === undefined ? current.attempts : update.attempts,
+        messages: update.messages === undefined ? current.messages : update.messages,
         acceptanceCriteria: update.acceptanceCriteria === undefined ? current.acceptanceCriteria : update.acceptanceCriteria,
         createdAt: current.createdAt,
         updatedAt: new Date().toISOString(),
@@ -328,6 +520,7 @@ export const updateJob = async (jobId, update = {}) => locked(`job:${jobId}`, as
     await write(item.path, jobMarkdown(item));
     return item;
 });
+
 export const listJobs = async ({ limit = 100 } = {}) => {
     const result = [];
     for (const relative of await files(DIR.jobs)) {
@@ -338,5 +531,6 @@ export const listJobs = async ({ limit = 100 } = {}) => {
             result.push(job({ ...(unblock(raw, 'job') || { ...parsed.data, instructions }), path: toUnixPath(relative) }));
         } catch (error) { console.error('[store] Could not read job:', error.message); }
     }
-    return result.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, Math.min(Number(limit) || 100, 500));
+    return result.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .slice(0, Math.min(Number(limit) || 100, 500));
 };
