@@ -161,7 +161,7 @@ export default function AgentsPage({ agents, setAgents }) {
     return (
         <div className="standard-page">
             <div className="page-header">
-                <div><div className="eyebrow">Runtime configuration</div><h1>Agents</h1><p>Use Ollama cloud models as primary runtimes with local models reserved for connectivity failures.</p></div>
+                <div><div className="eyebrow">Runtime configuration</div><h1>Agents</h1><p>Configure Nora, the worker agents, and Vera's independent QC runtime. Ollama cloud models remain primary with local models reserved for connectivity failures.</p></div>
                 <button className="secondary-button" onClick={loadModels} disabled={loadingModels}><IconRefresh size={17} /> Refresh Ollama</button>
             </div>
             <div className="summary-strip">
