@@ -3,6 +3,7 @@ import Router from './src/Router.mjs';
 import routes from './src/modules.config.mjs';
 import { ensureOfficeStore } from './src/lib/officeStore.mjs';
 import { resumePendingJobs } from './src/lib/jobRunner.mjs';
+import { getRuntimeDiagnostics } from './src/lib/runtimeContext.mjs';
 
 const router = new Router(routes);
 const host = process.env.LOCAL_HOST || '127.0.0.1';
@@ -90,6 +91,14 @@ server.listen(port, host, async () => {
     console.log(`Carlos Office backend: http://${host}:${port}`);
     console.log('Local-only mode: authentication is disabled.');
     console.log('All state is stored in the Obsidian vault.');
+    try {
+        const runtime = await getRuntimeDiagnostics('nora');
+        console.log(`Project root: ${runtime.projectRoot}`);
+        console.log(`Detected layout: ${runtime.projectLayout}`);
+        console.log(`Nora tools (${runtime.tools.length}): ${runtime.tools.join(', ')}`);
+    } catch (error) {
+        console.error('[runtime] Could not print capability manifest:', error.message);
+    }
     try {
         const resumed = await resumePendingJobs();
         if (resumed) console.log(`Resumed ${resumed} pending Vera QC job${resumed === 1 ? '' : 's'}.`);
