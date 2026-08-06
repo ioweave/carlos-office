@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { randomUUID } from 'node:crypto';
 import { agentDefinitions, defaultAgentConfig } from '../agents/agents.config.mjs';
-import { ensureAgentConfig, runAgent } from '../lib/agentRunner.mjs';
+import { runAgent } from '../lib/agentRunner.mjs';
 import { executeTool, listTools } from '../lib/toolRegistry.mjs';
 import {
     appendConversationJournal,
@@ -13,12 +13,14 @@ import {
 } from '../lib/memory.mjs';
 import {
     getConversation as getStoredConversation,
+    getJob as getStoredJob,
     listAgentConfigs,
     listConversations as listStoredConversations,
     listJobs as listStoredJobs,
     saveAgentConfig,
     saveConversation,
 } from '../lib/officeStore.mjs';
+import { enqueueJob, jobRunnerStatus, retryJob } from '../lib/jobRunner.mjs';
 
 const allowedConfigFields = [
     'provider', 'model', 'baseUrl', 'temperature', 'maxToolRounds', 'enabled', 'fallback',
@@ -45,6 +47,7 @@ export default class OfficeController {
                 storage: 'obsidian',
                 ollama,
                 memory,
+                jobs: jobRunnerStatus(),
                 timestamp: new Date().toISOString(),
             },
         };
@@ -173,5 +176,20 @@ export default class OfficeController {
 
     static async listJobs() {
         return { statusCode: 200, body: await listStoredJobs({ limit: 100 }) };
+    }
+
+    static async getJob({ params }) {
+        const job = await getStoredJob(params.jobId);
+        if (!job) return { statusCode: 404, body: { error: 'Job not found' } };
+        return { statusCode: 200, body: job };
+    }
+
+    static async runJob({ params }) {
+        const job = await getStoredJob(params.jobId);
+        if (!job) return { statusCode: 404, body: { error: 'Job not found' } };
+        const execution = ['failed', 'awaiting_approval'].includes(job.status)
+            ? await retryJob(job.jobId)
+            : await enqueueJob(job.jobId);
+        return { statusCode: 202, body: execution };
     }
 }
