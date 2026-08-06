@@ -3,9 +3,9 @@ import { searchWeb } from './search.mjs';
 import { fetchOnlineDocument } from './fetchUrl.mjs';
 import { listMemory, readMemory, searchMemory, writeMemory } from './memory.mjs';
 import { agentDefinitions, defaultAgentConfig } from '../agents/agents.config.mjs';
-import { createJob, listAgentConfigs } from './officeStore.mjs';
+import { createJob, getJob, listAgentConfigs, listJobs } from './officeStore.mjs';
 
-const allAgents = ['nora', 'marco', 'luma', 'dex'];
+const allAgents = ['nora', 'marco', 'luma', 'dex', 'vera'];
 
 const toolDefinitions = [
     {
@@ -44,7 +44,7 @@ const toolDefinitions = [
         inputSchema: {
             type: 'object',
             properties: {
-                folder: { type: 'string', description: 'Optional vault-relative folder such as 10-Shared or 20-Agents/Nora.' },
+                folder: { type: 'string', description: 'Optional vault-relative folder such as 10-Shared or 20-Agents/Vera.' },
                 limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
             },
             additionalProperties: false,
@@ -148,7 +148,7 @@ const toolDefinitions = [
     },
     {
         name: 'create_agent_job',
-        description: 'Queue a scoped job for Marco, Luma, or Dex as a durable Markdown note in the Obsidian vault.',
+        description: 'Create and automatically run a bounded worker-to-Vera QC loop for Marco, Luma, or Dex. The job repeats until Vera passes it or the iteration limit is reached.',
         allowedAgents: ['nora'],
         inputSchema: {
             type: 'object',
@@ -156,14 +156,85 @@ const toolDefinitions = [
                 assignedAgent: { type: 'string', enum: ['marco', 'luma', 'dex'] },
                 title: { type: 'string' },
                 instructions: { type: 'string' },
+                expectedResult: { type: 'string', description: 'Concrete final deliverable or outcome Vera must verify.' },
+                acceptanceCriteria: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    minItems: 1,
+                    maxItems: 20,
+                    description: 'Objective pass/fail conditions for Vera.',
+                },
                 priority: { type: 'string', enum: ['low', 'normal', 'high'], default: 'normal' },
+                maxIterations: { type: 'integer', minimum: 1, maximum: 8, default: 4 },
+                autoRun: { type: 'boolean', default: true },
             },
-            required: ['assignedAgent', 'title', 'instructions'],
+            required: ['assignedAgent', 'title', 'instructions', 'expectedResult', 'acceptanceCriteria'],
             additionalProperties: false,
         },
-        execute: async ({ assignedAgent, title, instructions, priority = 'normal' }) => createJob({
-            createdBy: 'nora', assignedAgent, title, instructions, priority, status: 'queued',
-        }),
+        execute: async ({
+            assignedAgent, title, instructions, expectedResult, acceptanceCriteria,
+            priority = 'normal', maxIterations = 4, autoRun = true,
+        }) => {
+            const job = await createJob({
+                createdBy: 'nora',
+                assignedAgent,
+                title,
+                instructions,
+                expectedResult,
+                acceptanceCriteria,
+                priority,
+                maxIterations,
+                status: 'queued',
+            });
+            let execution = { queued: false };
+            if (autoRun) {
+                const { enqueueJob } = await import('./jobRunner.mjs');
+                execution = await enqueueJob(job.jobId);
+            }
+            return { ...job, execution };
+        },
+    },
+    {
+        name: 'get_agent_job',
+        description: 'Read one delegated job, including its current Vera verdict and iteration history.',
+        allowedAgents: ['nora'],
+        inputSchema: {
+            type: 'object',
+            properties: { jobId: { type: 'string' } },
+            required: ['jobId'],
+            additionalProperties: false,
+        },
+        execute: async ({ jobId }) => {
+            const job = await getJob(jobId);
+            if (!job) throw Object.assign(new Error('Job not found.'), { statusCode: 404 });
+            return job;
+        },
+    },
+    {
+        name: 'list_agent_jobs',
+        description: 'List recent delegated jobs and their Vera QC status.',
+        allowedAgents: ['nora'],
+        inputSchema: {
+            type: 'object',
+            properties: { limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+            additionalProperties: false,
+        },
+        execute: async ({ limit = 20 }) => listJobs({ limit }),
+    },
+    {
+        name: 'retry_agent_job',
+        description: 'Continue a job that failed or reached its Vera iteration limit. Adds up to two bounded iterations.',
+        allowedAgents: ['nora'],
+        inputSchema: {
+            type: 'object',
+            properties: { jobId: { type: 'string' } },
+            required: ['jobId'],
+            additionalProperties: false,
+        },
+        execute: async ({ jobId }) => {
+            const { retryJob } = await import('./jobRunner.mjs');
+            return retryJob(jobId);
+        },
     },
 ];
 
