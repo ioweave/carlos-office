@@ -2,6 +2,7 @@ import http from 'node:http';
 import Router from './src/Router.mjs';
 import routes from './src/modules.config.mjs';
 import { ensureOfficeStore } from './src/lib/officeStore.mjs';
+import { resumePendingJobs } from './src/lib/jobRunner.mjs';
 
 const router = new Router(routes);
 const host = process.env.LOCAL_HOST || '127.0.0.1';
@@ -71,10 +72,16 @@ const server = http.createServer(async (req, res) => {
 });
 
 await ensureOfficeStore();
-server.listen(port, host, () => {
+server.listen(port, host, async () => {
     console.log(`Carlos Office backend: http://${host}:${port}`);
     console.log('Local-only mode: authentication is disabled.');
     console.log('All state is stored in the Obsidian vault.');
+    try {
+        const resumed = await resumePendingJobs();
+        if (resumed) console.log(`Resumed ${resumed} pending Vera QC job${resumed === 1 ? '' : 's'}.`);
+    } catch (error) {
+        console.error('[jobs] Could not resume pending jobs:', error.message);
+    }
 });
 
 const shutdown = () => server.close(() => process.exit(0));
