@@ -8,6 +8,8 @@ import { getVaultPath } from './memoryCore.mjs';
 import { getAgentConfig, saveAgentConfig } from './officeStore.mjs';
 import { connectivityErrorText, isConnectivityFailure } from './connectivity.mjs';
 
+let agentQueue = Promise.resolve();
+
 export const ensureAgentConfig = async agentId => {
     const definition = agentDefinitions[agentId];
     if (!definition) throw Object.assign(new Error(`Unknown agent: ${agentId}`), { statusCode: 404 });
@@ -65,7 +67,7 @@ const mayUseFallback = (config, error) => {
     return isConnectivityFailure(error);
 };
 
-export const runAgent = async (agentId, history = []) => {
+const runAgentUnlocked = async (agentId, history = []) => {
     const config = await ensureAgentConfig(agentId);
     if (!config.enabled) throw Object.assign(new Error(`${config.name} is disabled.`), { statusCode: 409 });
 
@@ -144,4 +146,12 @@ export const runAgent = async (agentId, history = []) => {
             fallbackReason,
         },
     };
+};
+
+export const runAgent = (agentId, history = []) => {
+    const task = agentQueue.then(() => runAgentUnlocked(agentId, history));
+    agentQueue = task.catch(error => {
+        console.error(`[agent:${agentId}]`, error.message);
+    });
+    return task;
 };
