@@ -11,6 +11,19 @@ const allowedOrigins = new Set(
     String(process.env.ALLOWED_ORIGINS || 'http://127.0.0.1:5173,http://localhost:5173')
         .split(',').map(item => item.trim()).filter(Boolean),
 );
+const loopbackHosts = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+const boundToLoopback = loopbackHosts.has(host);
+const allowLoopbackOrigins = boundToLoopback
+    && String(process.env.ALLOW_LOOPBACK_ORIGINS || 'true').toLowerCase() !== 'false';
+
+const isLoopbackOrigin = value => {
+    try {
+        const url = new URL(value);
+        return ['http:', 'https:'].includes(url.protocol) && loopbackHosts.has(url.hostname);
+    } catch {
+        return false;
+    }
+};
 
 const readBody = req => new Promise((resolve, reject) => {
     const chunks = [];
@@ -35,7 +48,9 @@ const readBody = req => new Promise((resolve, reject) => {
 
 const server = http.createServer(async (req, res) => {
     const origin = req.headers.origin;
-    const corsAllowed = !origin || allowedOrigins.has(origin);
+    const corsAllowed = !origin
+        || allowedOrigins.has(origin)
+        || (allowLoopbackOrigins && isLoopbackOrigin(origin));
     const corsHeaders = origin && corsAllowed ? {
         'Access-Control-Allow-Origin': origin,
         'Access-Control-Allow-Methods': 'GET,POST,PUT,OPTIONS',
