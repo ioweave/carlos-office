@@ -7,6 +7,7 @@ import { buildMemoryContext } from './memory.mjs';
 import { getVaultPath } from './memoryCore.mjs';
 import { getAgentConfig, saveAgentConfig } from './officeStore.mjs';
 import { connectivityErrorText, isConnectivityFailure } from './connectivity.mjs';
+import { buildAutomaticProjectContext, buildRuntimeManifest } from './runtimeContext.mjs';
 
 let agentQueue = Promise.resolve();
 
@@ -85,19 +86,31 @@ const runAgentUnlocked = async (agentId, history = []) => {
     if (!config.enabled) throw Object.assign(new Error(`${config.name} is disabled.`), { statusCode: 409 });
 
     const definition = agentDefinitions[agentId];
+    const [runtimeManifest, automaticProjectContext] = await Promise.all([
+        buildRuntimeManifest(agentId),
+        buildAutomaticProjectContext(agentId, history),
+    ]);
+
     let memory = { content: '', notes: [] };
     try { memory = await buildMemoryContext(agentId, history); }
     catch (error) { console.error('[memory] Retrieval failed:', error.message); }
 
     let messages = [
         { role: 'system', content: definition.system },
+        { role: 'system', content: runtimeManifest },
         ...(memory.content ? [{ role: 'system', content: memory.content }] : []),
+        ...(automaticProjectContext.content ? [{ role: 'system', content: automaticProjectContext.content }] : []),
         ...history.filter(item => ['user', 'assistant'].includes(item.role)).map(item => ({
             role: item.role,
             content: item.modelContent || item.content || '',
         })),
     ];
-    const toolEvents = [];
+    const toolEvents = automaticProjectContext.files.length ? [{
+        name: 'automatic_project_grounding',
+        args: { files: automaticProjectContext.files },
+        result: { files: automaticProjectContext.files },
+        failed: false,
+    }] : [];
     let runtimeConfig = config;
     let fallbackUsed = false;
     let fallbackReason = '';
