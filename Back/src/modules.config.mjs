@@ -14,4 +14,6 @@ export default [
     { method: 'GET', path: '/api/conversations/{conversationId}', handler: OfficeController.getConversation },
     { method: 'POST', path: '/api/chat', handler: OfficeController.chat },
     { method: 'GET', path: '/api/jobs', handler: OfficeController.listJobs },
+    { method: 'GET', path: '/api/jobs/{jobId}', handler: OfficeController.getJob },
+    { method: 'POST', path: '/api/jobs/{jobId}/run', handler: OfficeController.runJob },
 ];
