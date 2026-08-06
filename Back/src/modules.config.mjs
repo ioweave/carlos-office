@@ -17,7 +17,11 @@ export default [
     { method: 'GET', path: '/api/conversations/{conversationId}/attachments/{attachmentId}', handler: OfficeController.getConversationAttachment },
     { method: 'POST', path: '/api/chat', handler: OfficeController.chat },
     { method: 'GET', path: '/api/jobs', handler: OfficeController.listJobs },
+    { method: 'DELETE', path: '/api/jobs', handler: OfficeController.clearJobs },
+    { method: 'POST', path: '/api/jobs/stop-all', handler: OfficeController.stopAllJobs },
     { method: 'GET', path: '/api/jobs/{jobId}', handler: OfficeController.getJob },
+    { method: 'DELETE', path: '/api/jobs/{jobId}', handler: OfficeController.deleteJob },
     { method: 'POST', path: '/api/jobs/{jobId}/run', handler: OfficeController.runJob },
+    { method: 'POST', path: '/api/jobs/{jobId}/stop', handler: OfficeController.stopJob },
     { method: 'GET', path: '/api/office-map', handler: OfficeController.officeMap },
 ];

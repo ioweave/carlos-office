@@ -1,6 +1,6 @@
 {
   "name": "carlos-office-back",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "main": "server.mjs",
@@ -10,13 +10,15 @@
   "scripts": {
     "start": "node --env-file=.env server.mjs",
     "dev": "nodemon --watch server.mjs --watch src --watch package.json --watch .env --ext mjs,json,env --delay 250ms --signal SIGTERM --exec \"node --env-file=.env server.mjs\"",
-    "mcp": "node --env-file=.env src/mcp/server.mjs"
+    "mcp": "node --env-file=.env src/mcp/server.mjs",
+    "playwright:install": "playwright install chromium"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "axios": "^1.13.6",
     "cheerio": "^1.2.0",
     "nodemon": "^3.1.14",
+    "playwright": "^1.62.0",
     "zod": "^4.0.0"
   }
 }

@@ -5,8 +5,27 @@ import { listMemory, readMemory, searchMemory, writeMemory } from './memory.mjs'
 import { agentDefinitions, defaultAgentConfig } from '../agents/agents.config.mjs';
 import { createJob, getJob, listAgentConfigs, listJobs } from './officeStore.mjs';
 import { listProjectFiles, readProjectFile, searchProjectFiles } from './projectFiles.mjs';
+import { checkPage, inspectPage, interactWithPage } from './browserTools.mjs';
 
-const allAgents = ['nora', 'marco', 'luma', 'dex', 'vera'];
+const allAgents = ['nora', 'marco', 'luma', 'dex', 'iris', 'vera'];
+const sourceAgents = ['nora', 'dex', 'iris', 'vera'];
+const browserInspectors = ['nora', 'dex', 'iris', 'vera'];
+
+const browserProperties = {
+    url: { type: 'string', description: 'Allowed HTTP/HTTPS URL. Localhost is allowed by default.' },
+    viewport: {
+        type: 'object',
+        properties: {
+            width: { type: 'integer', minimum: 320, maximum: 2560, default: 1440 },
+            height: { type: 'integer', minimum: 320, maximum: 1600, default: 900 },
+        },
+        additionalProperties: false,
+    },
+    waitMs: { type: 'integer', minimum: 0, maximum: 10000, default: 500 },
+    maxChars: { type: 'integer', minimum: 1000, maximum: 100000, default: 24000 },
+    screenshot: { type: 'boolean', default: true },
+    label: { type: 'string', description: 'Short label used for the saved screenshot filename.' },
+};
 
 const toolDefinitions = [
     {
@@ -45,7 +64,7 @@ const toolDefinitions = [
         inputSchema: {
             type: 'object',
             properties: {
-                folder: { type: 'string', description: 'Optional vault-relative folder such as 10-Shared or 20-Agents/Vera.' },
+                folder: { type: 'string', description: 'Optional vault-relative folder such as 10-Shared or 20-Agents/Iris.' },
                 limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
             },
             additionalProperties: false,
@@ -105,7 +124,7 @@ const toolDefinitions = [
     {
         name: 'project_list_files',
         description: 'List readable source and documentation files inside the local Carlos Office repository. Secrets, dependencies, build output, and hidden environment files are blocked.',
-        allowedAgents: ['nora', 'dex', 'vera'],
+        allowedAgents: sourceAgents,
         inputSchema: {
             type: 'object',
             properties: {
@@ -119,7 +138,7 @@ const toolDefinitions = [
     {
         name: 'project_read_file',
         description: 'Read one safe text source file from the local Carlos Office repository. This tool is read-only and blocks secrets and dependency folders.',
-        allowedAgents: ['nora', 'dex', 'vera'],
+        allowedAgents: sourceAgents,
         inputSchema: {
             type: 'object',
             properties: {
@@ -134,7 +153,7 @@ const toolDefinitions = [
     {
         name: 'project_search_files',
         description: 'Search readable local repository files for an exact text fragment and return contextual excerpts.',
-        allowedAgents: ['nora', 'dex', 'vera'],
+        allowedAgents: sourceAgents,
         inputSchema: {
             type: 'object',
             properties: {
@@ -146,6 +165,66 @@ const toolDefinitions = [
             additionalProperties: false,
         },
         execute: searchProjectFiles,
+    },
+    {
+        name: 'playwright_inspect_page',
+        description: 'Open an allowed page in headless Chromium and return a structured DOM snapshot, visible controls, overflow state, browser errors, and an optional screenshot saved in the Obsidian vault.',
+        allowedAgents: browserInspectors,
+        inputSchema: {
+            type: 'object',
+            properties: browserProperties,
+            required: ['url'],
+            additionalProperties: false,
+        },
+        execute: inspectPage,
+    },
+    {
+        name: 'playwright_check_page',
+        description: 'Run bounded UI checks in headless Chromium for overflow, unlabeled controls, console errors, page errors, and failed requests. Saves an optional screenshot in the Obsidian vault.',
+        allowedAgents: browserInspectors,
+        inputSchema: {
+            type: 'object',
+            properties: browserProperties,
+            required: ['url'],
+            additionalProperties: false,
+        },
+        execute: checkPage,
+    },
+    {
+        name: 'playwright_interact',
+        description: 'Execute a bounded sequence of interactions against an allowed local web page, then return the resulting DOM snapshot, diagnostics, and screenshot. Intended for UI verification, not unsupervised external actions.',
+        allowedAgents: ['nora', 'dex', 'vera'],
+        inputSchema: {
+            type: 'object',
+            properties: {
+                ...browserProperties,
+                steps: {
+                    type: 'array',
+                    minItems: 1,
+                    maxItems: 12,
+                    items: {
+                        type: 'object',
+                        properties: {
+                            action: { type: 'string', enum: ['click', 'fill', 'press', 'select', 'check', 'uncheck', 'wait'] },
+                            selector: { type: 'string' },
+                            text: { type: 'string' },
+                            exact: { type: 'boolean', default: false },
+                            value: { type: 'string' },
+                            key: { type: 'string' },
+                            ms: { type: 'integer', minimum: 0, maximum: 10000 },
+                            timeoutMs: { type: 'integer', minimum: 1000, maximum: 30000 },
+                            continueOnError: { type: 'boolean', default: false },
+                        },
+                        required: ['action'],
+                        additionalProperties: false,
+                    },
+                },
+                waitAfterMs: { type: 'integer', minimum: 0, maximum: 10000, default: 300 },
+            },
+            required: ['url', 'steps'],
+            additionalProperties: false,
+        },
+        execute: interactWithPage,
     },
     {
         name: 'current_time',
@@ -194,12 +273,12 @@ const toolDefinitions = [
     },
     {
         name: 'create_agent_job',
-        description: 'Create and automatically run a bounded worker-to-Vera QC loop for Marco, Luma, or Dex. The job repeats until Vera passes it or the iteration limit is reached.',
+        description: 'Create and automatically run a bounded worker-to-Vera QC loop for Marco, Luma, Dex, or Iris. The job repeats until Vera passes it or the iteration limit is reached.',
         allowedAgents: ['nora'],
         inputSchema: {
             type: 'object',
             properties: {
-                assignedAgent: { type: 'string', enum: ['marco', 'luma', 'dex'] },
+                assignedAgent: { type: 'string', enum: ['marco', 'luma', 'dex', 'iris'] },
                 title: { type: 'string' },
                 instructions: { type: 'string' },
                 expectedResult: { type: 'string', description: 'Concrete final deliverable or outcome Vera must verify.' },
@@ -211,7 +290,7 @@ const toolDefinitions = [
                     description: 'Objective pass/fail conditions for Vera.',
                 },
                 priority: { type: 'string', enum: ['low', 'normal', 'high'], default: 'normal' },
-                maxIterations: { type: 'integer', minimum: 1, maximum: 8, default: 4 },
+                maxIterations: { type: 'integer', minimum: 1, maximum: 8, default: 2 },
                 autoRun: { type: 'boolean', default: true },
             },
             required: ['assignedAgent', 'title', 'instructions', 'expectedResult', 'acceptanceCriteria'],
@@ -219,7 +298,7 @@ const toolDefinitions = [
         },
         execute: async ({
             assignedAgent, title, instructions, expectedResult, acceptanceCriteria,
-            priority = 'normal', maxIterations = 4, autoRun = true,
+            priority = 'normal', maxIterations = Number(process.env.JOB_DEFAULT_ITERATIONS || 2), autoRun = true,
         }) => {
             const job = await createJob({
                 createdBy: 'nora',
@@ -269,7 +348,7 @@ const toolDefinitions = [
     },
     {
         name: 'retry_agent_job',
-        description: 'Continue a job that failed or reached its Vera iteration limit. Adds up to two bounded iterations.',
+        description: 'Continue a failed, cancelled, or unaccepted job with up to two additional bounded iterations.',
         allowedAgents: ['nora'],
         inputSchema: {
             type: 'object',
@@ -280,6 +359,47 @@ const toolDefinitions = [
         execute: async ({ jobId }) => {
             const { retryJob } = await import('./jobRunner.mjs');
             return retryJob(jobId);
+        },
+    },
+    {
+        name: 'cancel_agent_job',
+        description: 'Stop a queued or running job, abort its in-flight model request, and persist the cancelled status in its Markdown record.',
+        allowedAgents: ['nora'],
+        inputSchema: {
+            type: 'object',
+            properties: { jobId: { type: 'string' } },
+            required: ['jobId'],
+            additionalProperties: false,
+        },
+        execute: async ({ jobId }) => {
+            const { cancelJob } = await import('./jobRunner.mjs');
+            return cancelJob(jobId);
+        },
+    },
+    {
+        name: 'stop_all_agent_jobs',
+        description: 'Stop all queued and running jobs without deleting their Markdown records.',
+        allowedAgents: ['nora'],
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+        execute: async () => {
+            const { stopAllJobs } = await import('./jobRunner.mjs');
+            return stopAllJobs();
+        },
+    },
+    {
+        name: 'clear_agent_jobs',
+        description: 'Delete job Markdown records by scope after active work has been stopped. Scope terminal removes completed, failed, and cancelled jobs; all removes every job.',
+        allowedAgents: ['nora'],
+        inputSchema: {
+            type: 'object',
+            properties: {
+                scope: { type: 'string', enum: ['terminal', 'completed', 'cancelled', 'all'], default: 'terminal' },
+            },
+            additionalProperties: false,
+        },
+        execute: async ({ scope = 'terminal' }) => {
+            const { clearJobs } = await import('./jobRunner.mjs');
+            return clearJobs({ scope });
         },
     },
 ];
@@ -300,6 +420,8 @@ export const getOpenAITools = agentId => listTools(agentId).map(tool => ({
 export const executeTool = async (agentId, name, args = {}) => {
     const tool = toolDefinitions.find(item => item.name === name);
     if (!tool) throw Object.assign(new Error(`Unknown tool: ${name}`), { statusCode: 404 });
-    if (!tool.allowedAgents.includes(agentId)) throw Object.assign(new Error(`${agentId} is not allowed to use ${name}.`), { statusCode: 403 });
+    if (!tool.allowedAgents.includes(agentId)) {
+        throw Object.assign(new Error(`${agentId} is not allowed to use ${name}.`), { statusCode: 403 });
+    }
     return tool.execute(args, { agentId });
 };

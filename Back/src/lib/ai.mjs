@@ -8,15 +8,21 @@ const envKeyForProvider = provider => ({
 }[provider]);
 
 const cleanBaseUrl = value => String(value || '').replace(/\/$/, '');
+const defaultTimeout = () => Math.max(15_000, Number(process.env.AI_REQUEST_TIMEOUT_MS || 120_000));
 
-const callOpenAICompatible = async (config, messages, tools) => {
+const callOpenAICompatible = async (config, messages, tools, options = {}) => {
     const isOllama = config.provider === 'ollama';
     const baseUrl = cleanBaseUrl(config.baseUrl || (isOllama
         ? `${process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434'}/v1`
         : 'https://api.openai.com/v1'));
     const normalizedBaseUrl = isOllama && !baseUrl.endsWith('/v1') ? `${baseUrl}/v1` : baseUrl;
     const apiKey = isOllama ? 'ollama' : (envKeyForProvider(config.provider) || '');
-    if (!isOllama && !apiKey) throw Object.assign(new Error(`${config.provider === 'openai-compatible' ? 'OPENAI_COMPATIBLE_API_KEY' : 'OPENAI_API_KEY'} is not configured.`), { statusCode: 503 });
+    if (!isOllama && !apiKey) {
+        throw Object.assign(
+            new Error(`${config.provider === 'openai-compatible' ? 'OPENAI_COMPATIBLE_API_KEY' : 'OPENAI_API_KEY'} is not configured.`),
+            { statusCode: 503 },
+        );
+    }
 
     const payload = {
         model: config.model,
@@ -27,7 +33,8 @@ const callOpenAICompatible = async (config, messages, tools) => {
     if (tools?.length) payload.tools = tools;
 
     const response = await axios.post(`${normalizedBaseUrl}/chat/completions`, payload, {
-        timeout: 300000,
+        timeout: Math.max(15_000, Number(options.timeoutMs || config.timeoutMs || defaultTimeout())),
+        signal: options.signal,
         headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${apiKey}`,
@@ -43,7 +50,7 @@ const callOpenAICompatible = async (config, messages, tools) => {
     };
 };
 
-const callClaude = async (config, messages) => {
+const callClaude = async (config, messages, tools, options = {}) => {
     const apiKey = envKeyForProvider('claude');
     if (!apiKey) throw Object.assign(new Error('ANTHROPIC_API_KEY is not configured.'), { statusCode: 503 });
     const system = messages.filter(item => item.role === 'system').map(item => item.content).join('\n\n');
@@ -59,7 +66,8 @@ const callClaude = async (config, messages) => {
         system,
         messages: conversation,
     }, {
-        timeout: 300000,
+        timeout: Math.max(15_000, Number(options.timeoutMs || config.timeoutMs || defaultTimeout())),
+        signal: options.signal,
         headers: {
             'x-api-key': apiKey,
             'anthropic-version': '2023-06-01',
@@ -74,14 +82,18 @@ const callClaude = async (config, messages) => {
     };
 };
 
-const callGemini = async (config, messages) => {
+const callGemini = async (config, messages, tools, options = {}) => {
     const apiKey = envKeyForProvider('gemini');
     if (!apiKey) throw Object.assign(new Error('GOOGLE_GENERATIVE_AI_API_KEY is not configured.'), { statusCode: 503 });
     const prompt = messages.map(item => `${item.role.toUpperCase()}: ${item.content || ''}`).join('\n\n');
     const response = await axios.post(
         `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(config.model)}:generateContent`,
         { contents: [{ parts: [{ text: prompt }] }] },
-        { timeout: 300000, headers: { 'x-goog-api-key': apiKey } },
+        {
+            timeout: Math.max(15_000, Number(options.timeoutMs || config.timeoutMs || defaultTimeout())),
+            signal: options.signal,
+            headers: { 'x-goog-api-key': apiKey },
+        },
     );
 
     return {
@@ -93,7 +105,7 @@ const callGemini = async (config, messages) => {
 
 export const providerSupportsTools = provider => ['ollama', 'openai', 'openai-compatible'].includes(provider);
 
-export const callAI = async (config, messages, tools = []) => {
+export const callAI = async (config, messages, tools = [], options = {}) => {
     const handlers = {
         ollama: callOpenAICompatible,
         openai: callOpenAICompatible,
@@ -104,5 +116,5 @@ export const callAI = async (config, messages, tools = []) => {
 
     const handler = handlers[config.provider];
     if (!handler) throw Object.assign(new Error(`Unknown AI provider: ${config.provider}`), { statusCode: 400 });
-    return handler(config, messages, providerSupportsTools(config.provider) ? tools : []);
+    return handler(config, messages, providerSupportsTools(config.provider) ? tools : [], options);
 };

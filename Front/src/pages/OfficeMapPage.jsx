@@ -18,6 +18,7 @@ const AGENT_COLORS = {
     marco: '#f59e0b',
     luma: '#e879f9',
     dex: '#60a5fa',
+    iris: '#a78bfa',
     vera: '#34d399',
 };
 
@@ -28,6 +29,7 @@ const STATUS_COLORS = {
     awaiting_approval: '#fb7185',
     completed: '#4ade80',
     failed: '#f87171',
+    cancelled: '#64748b',
 };
 
 const ACTIVE_STATUSES = new Set(['queued', 'running', 'qc_review']);
@@ -53,7 +55,7 @@ const statusLabel = value => String(value || 'unknown').replaceAll('_', ' ');
 
 const toneForStatus = status => ({
     queued: 'neutral', running: 'warning', qc_review: 'warning', awaiting_approval: 'warning',
-    completed: 'success', failed: 'danger',
+    completed: 'success', failed: 'danger', cancelled: 'neutral',
 }[status] || 'neutral');
 
 const createTopology = data => {
@@ -64,6 +66,7 @@ const createTopology = data => {
         nora: { x: 0, y: 0.1, z: 0 },
         marco: { x: -2.7, y: 1.3, z: -0.4 },
         luma: { x: 2.8, y: 1.25, z: -0.2 },
+        iris: { x: 0, y: 2.7, z: 0.3 },
         dex: { x: -2.5, y: -1.7, z: 0.35 },
         vera: { x: 2.65, y: -1.7, z: 0.45 },
     };
@@ -115,7 +118,7 @@ const createTopology = data => {
             id: `job:${job.jobId}`,
             kind: 'job',
             title: job.title,
-            subtitle: `${statusLabel(job.status)} · ${job.currentIteration || 0}/${job.maxIterations || 4}`,
+            subtitle: `${statusLabel(job.status)} · ${job.currentIteration || 0}/${job.maxIterations || 2}`,
             color: STATUS_COLORS[job.status] || AGENT_COLORS[job.assignedAgent] || '#94a3b8',
             radius: active ? 0.18 : 0.145,
             active,
@@ -147,7 +150,6 @@ export default function OfficeMapPage({ agents, onOpenConversation }) {
     const hitAreasRef = useRef([]);
     const viewRef = useRef({ yaw: -0.18, pitch: 0.08, zoom: 1, dragging: false, moved: false, x: 0, y: 0 });
     const reducedMotionRef = useRef(false);
-
     const load = useCallback(async ({ quiet = false } = {}) => {
         if (!quiet) setLoading(true);
         try {
@@ -297,7 +299,6 @@ export default function OfficeMapPage({ agents, onOpenConversation }) {
                 context.strokeStyle = 'rgba(255,255,255,0.65)';
                 context.arc(point.x, point.y, drawRadius, 0, Math.PI * 2);
                 context.stroke();
-
                 if (node.kind === 'agent') {
                     context.textAlign = 'center';
                     context.fillStyle = 'rgba(245,247,250,0.95)';
@@ -399,12 +400,12 @@ export default function OfficeMapPage({ agents, onOpenConversation }) {
                 <div className="map-header-actions">
                     <div className="map-segmented" role="group" aria-label="Map filter">
                         {['all', 'active', 'conversation', 'job'].map(value => (
-                            <button key={value} className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>
+                            <button type="button" key={value} className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>
                                 {value === 'conversation' ? 'Chats' : value === 'job' ? 'Jobs' : value[0].toUpperCase() + value.slice(1)}
                             </button>
                         ))}
                     </div>
-                    <button className="compact-button" onClick={() => load()} disabled={loading}><IconRefresh size={16} /> Refresh</button>
+                    <button type="button" className="compact-button" onClick={() => load()} disabled={loading}><IconRefresh size={16} /> Refresh</button>
                 </div>
             </header>
 
@@ -421,9 +422,9 @@ export default function OfficeMapPage({ agents, onOpenConversation }) {
                         aria-label="Interactive Office Map. Use the accessible activity list beside the canvas for keyboard navigation."
                     />
                     <div className="map-toolbar" aria-label="Map controls">
-                        <button onClick={() => { viewRef.current.zoom = Math.min(2.2, viewRef.current.zoom * 1.12); }} aria-label="Zoom in"><IconZoomIn size={17} /></button>
-                        <button onClick={() => { viewRef.current.zoom = Math.max(0.55, viewRef.current.zoom / 1.12); }} aria-label="Zoom out"><IconZoomOut size={17} /></button>
-                        <button onClick={resetView} aria-label="Reset map view"><IconRotateClockwise size={17} /></button>
+                        <button type="button" onClick={() => { viewRef.current.zoom = Math.min(2.2, viewRef.current.zoom * 1.12); }} aria-label="Zoom in"><IconZoomIn size={17} /></button>
+                        <button type="button" onClick={() => { viewRef.current.zoom = Math.max(0.55, viewRef.current.zoom / 1.12); }} aria-label="Zoom out"><IconZoomOut size={17} /></button>
+                        <button type="button" onClick={resetView} aria-label="Reset map view"><IconRotateClockwise size={17} /></button>
                     </div>
                     <div className="map-help">Drag to rotate · Scroll to zoom · Select a node for details</div>
                     {hovered && (
@@ -447,7 +448,7 @@ export default function OfficeMapPage({ agents, onOpenConversation }) {
                             {(data.agents || []).map(agent => {
                                 const active = activeJobs.filter(job => job.assignedAgent === agent.agentId || (agent.agentId === 'vera' && job.status === 'qc_review'));
                                 return (
-                                    <button key={agent.agentId} onClick={() => setSelected(topology.nodes.find(node => node.id === `agent:${agent.agentId}`))}>
+                                    <button type="button" key={agent.agentId} onClick={() => setSelected(topology.nodes.find(node => node.id === `agent:${agent.agentId}`))}>
                                         <span className="agent-list-dot" style={{ '--dot': AGENT_COLORS[agent.agentId] }} />
                                         <span><strong>{agent.name}</strong><small>{active.length ? `${active.length} active job${active.length === 1 ? '' : 's'}` : 'Idle'}</small></span>
                                         <StatusBadge tone={active.length ? 'warning' : 'success'}>{active.length ? 'working' : 'ready'}</StatusBadge>
@@ -461,7 +462,7 @@ export default function OfficeMapPage({ agents, onOpenConversation }) {
                         <div className="map-record-list">
                             {!activeJobs.length && <p>No jobs are running.</p>}
                             {activeJobs.map(job => (
-                                <button key={job.jobId} onClick={() => setSelected(topology.nodes.find(node => node.id === `job:${job.jobId}`))}>
+                                <button type="button" key={job.jobId} onClick={() => setSelected(topology.nodes.find(node => node.id === `job:${job.jobId}`))}>
                                     <IconBriefcase2 size={16} />
                                     <span><strong>{job.title}</strong><small>{job.assignedAgent} · {statusLabel(job.status)}</small></span>
                                 </button>
@@ -472,7 +473,7 @@ export default function OfficeMapPage({ agents, onOpenConversation }) {
                         <div className="panel-heading"><span>Recent chats</span><small>{Math.min(data.conversations?.length || 0, 8)}</small></div>
                         <div className="map-record-list">
                             {(data.conversations || []).slice(0, 8).map(conversation => (
-                                <button key={conversation.conversationId} onClick={() => setSelected(topology.nodes.find(node => node.id === `conversation:${conversation.conversationId}`))}>
+                                <button type="button" key={conversation.conversationId} onClick={() => setSelected(topology.nodes.find(node => node.id === `conversation:${conversation.conversationId}`))}>
                                     <IconMessageCircle size={16} />
                                     <span><strong>{conversation.title}</strong><small>{conversation.agentId} · {conversation.messageCount} messages</small></span>
                                 </button>
@@ -494,7 +495,7 @@ export default function OfficeMapPage({ agents, onOpenConversation }) {
                                 </div>
                                 <div><span>{selected.kind}</span><h2 id="map-detail-title">{selected.title}</h2></div>
                             </div>
-                            <button className="modal-close" onClick={() => setSelected(null)} aria-label="Close details"><IconX size={20} /></button>
+                            <button type="button" className="modal-close" onClick={() => setSelected(null)} aria-label="Close details"><IconX size={20} /></button>
                         </header>
 
                         {selected.kind === 'conversation' && (
@@ -507,7 +508,7 @@ export default function OfficeMapPage({ agents, onOpenConversation }) {
                                     <div><dt>Markdown</dt><dd>{selected.data.path}</dd></div>
                                 </dl>
                                 <div className="modal-actions align-end">
-                                    <button className="primary-button" onClick={() => {
+                                    <button type="button" className="primary-button" onClick={() => {
                                         setSelected(null);
                                         onOpenConversation?.(selected.data.conversationId);
                                     }}><IconMessageCircle size={16} /> Open conversation</button>
@@ -530,7 +531,7 @@ export default function OfficeMapPage({ agents, onOpenConversation }) {
                                         .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt))
                                         .slice(0, 8)
                                         .map(item => (
-                                            <button key={item.jobId || item.conversationId} onClick={() => setSelected(topology.nodes.find(node => node.id === `${item._kind}:${item.jobId || item.conversationId}`))}>
+                                            <button type="button" key={item.jobId || item.conversationId} onClick={() => setSelected(topology.nodes.find(node => node.id === `${item._kind}:${item.jobId || item.conversationId}`))}>
                                                 {item._kind === 'job' ? <IconBriefcase2 size={16} /> : <IconMessageCircle size={16} />}
                                                 <span><strong>{item.title}</strong><small>{item._kind === 'job' ? statusLabel(item.status) : `${item.messageCount} messages`}</small></span>
                                             </button>
@@ -544,7 +545,7 @@ export default function OfficeMapPage({ agents, onOpenConversation }) {
                                 <div className="job-modal-summary">
                                     <div className="job-status-line">
                                         <StatusBadge tone={toneForStatus(selected.data.status)}>{statusLabel(selected.data.status)}</StatusBadge>
-                                        <span>{selected.data.currentIteration || 0}/{selected.data.maxIterations || 4} iterations</span>
+                                        <span>{selected.data.currentIteration || 0}/{selected.data.maxIterations || 2} iterations</span>
                                         <span>Vera {selected.data.qcScore || 0}/100</span>
                                     </div>
                                     <section><h3>Expected result</h3><p>{selected.data.expectedResult || 'Not specified.'}</p></section>

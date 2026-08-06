@@ -24,11 +24,27 @@ import {
     saveConversationAttachments,
     updateConversation as updateStoredConversation,
 } from '../lib/officeStore.mjs';
-import { enqueueJob, jobRunnerStatus, retryJob } from '../lib/jobRunner.mjs';
+import {
+    cancelJob,
+    clearJobs,
+    deleteJob,
+    enqueueJob,
+    jobRunnerStatus,
+    retryJob,
+    stopAllJobs,
+} from '../lib/jobRunner.mjs';
 
 const allowedConfigFields = [
     'provider', 'model', 'baseUrl', 'temperature', 'maxToolRounds', 'enabled', 'fallback',
 ];
+
+const isCancellation = error => (
+    error?.statusCode === 499
+    || error?.code === 'EXECUTION_CANCELLED'
+    || error?.code === 'ERR_CANCELED'
+    || error?.name === 'AbortError'
+    || /cancel(?:led|ed)/i.test(String(error?.message || ''))
+);
 
 export default class OfficeController {
     static async health() {
@@ -158,7 +174,7 @@ export default class OfficeController {
         };
     }
 
-    static async chat({ body }) {
+    static async chat({ body, signal }) {
         const suppliedMessage = String(body.message || '').trim();
         const attachmentInputs = Array.isArray(body.attachments) ? body.attachments.slice(0, 8) : [];
         const message = suppliedMessage || (attachmentInputs.length ? 'Review the attached files.' : '');
@@ -194,8 +210,19 @@ export default class OfficeController {
         let result;
         try {
             const modelHistory = await hydrateConversationMessages(conversation.messages);
-            result = await runAgent(agentId, modelHistory);
+            result = await runAgent(agentId, modelHistory, { signal });
         } catch (error) {
+            if (isCancellation(error)) {
+                return {
+                    statusCode: 499,
+                    body: {
+                        error: 'Response generation stopped.',
+                        cancelled: true,
+                        conversationId,
+                    },
+                };
+            }
+
             const assistantFailure = {
                 role: 'assistant',
                 content: `I could not complete that request: ${error.message || 'Model execution failed.'}`,
@@ -266,10 +293,26 @@ export default class OfficeController {
     static async runJob({ params }) {
         const job = await getStoredJob(params.jobId);
         if (!job) return { statusCode: 404, body: { error: 'Job not found' } };
-        const execution = ['failed', 'awaiting_approval'].includes(job.status)
+        const execution = ['failed', 'awaiting_approval', 'cancelled'].includes(job.status)
             ? await retryJob(job.jobId)
             : await enqueueJob(job.jobId);
         return { statusCode: 202, body: execution };
+    }
+
+    static async stopJob({ params }) {
+        return { statusCode: 202, body: await cancelJob(params.jobId) };
+    }
+
+    static async stopAllJobs() {
+        return { statusCode: 202, body: await stopAllJobs() };
+    }
+
+    static async deleteJob({ params }) {
+        return { statusCode: 200, body: await deleteJob(params.jobId) };
+    }
+
+    static async clearJobs({ query }) {
+        return { statusCode: 200, body: await clearJobs({ scope: query.scope || 'terminal' }) };
     }
 
     static async officeMap() {

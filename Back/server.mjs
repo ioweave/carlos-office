@@ -70,9 +70,20 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    const requestController = new AbortController();
+    req.once('aborted', () => requestController.abort());
+    res.once('close', () => {
+        if (!res.writableEnded) requestController.abort();
+    });
+
     try {
         const body = ['POST', 'PUT', 'PATCH'].includes(req.method) ? await readBody(req) : {};
-        const response = await router.handle(req.method, req.url, { headers: req.headers, body });
+        const response = await router.handle(req.method, req.url, {
+            headers: req.headers,
+            body,
+            signal: requestController.signal,
+        });
+        if (res.destroyed || res.writableEnded) return;
         res.writeHead(response.statusCode || 200, {
             'Content-Type': 'application/json; charset=utf-8',
             'X-Content-Type-Options': 'nosniff',
@@ -81,6 +92,7 @@ const server = http.createServer(async (req, res) => {
         });
         res.end(JSON.stringify(response.body ?? {}));
     } catch (error) {
+        if (res.destroyed || res.writableEnded) return;
         res.writeHead(error.statusCode || 500, { 'Content-Type': 'application/json; charset=utf-8', ...corsHeaders });
         res.end(JSON.stringify({ error: error.message || 'Internal server error' }));
     }
@@ -89,7 +101,7 @@ const server = http.createServer(async (req, res) => {
 await ensureOfficeStore();
 server.listen(port, host, async () => {
     console.log(`Carlos Office backend: http://${host}:${port}`);
-    console.log('Local-only mode: authentication is disabled.');
+    console.log('Private local company mode: authentication is disabled.');
     console.log('All state is stored in the Obsidian vault.');
     try {
         const runtime = await getRuntimeDiagnostics('nora');

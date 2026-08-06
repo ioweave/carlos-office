@@ -9,7 +9,24 @@ import { getAgentConfig, saveAgentConfig } from './officeStore.mjs';
 import { connectivityErrorText, isConnectivityFailure } from './connectivity.mjs';
 import { buildAutomaticProjectContext, buildRuntimeManifest } from './runtimeContext.mjs';
 
-let agentQueue = Promise.resolve();
+const agentQueues = new Map();
+
+const abortError = () => Object.assign(new Error('Execution cancelled.'), {
+    code: 'EXECUTION_CANCELLED',
+    statusCode: 499,
+});
+
+const throwIfAborted = signal => {
+    if (signal?.aborted) throw abortError();
+};
+
+const isAbortFailure = error => (
+    error?.code === 'EXECUTION_CANCELLED'
+    || error?.code === 'ERR_CANCELED'
+    || error?.name === 'AbortError'
+    || String(error?.message || '').toLowerCase().includes('canceled')
+    || String(error?.message || '').toLowerCase().includes('cancelled')
+);
 
 export const ensureAgentConfig = async agentId => {
     const definition = agentDefinitions[agentId];
@@ -64,6 +81,7 @@ const fallbackConfig = config => ({
 });
 
 const mayUseFallback = (config, error) => {
+    if (isAbortFailure(error)) return false;
     if (!config.fallback?.enabled || !config.fallback?.model) return false;
     return isConnectivityFailure(error);
 };
@@ -72,8 +90,12 @@ const textOnlyContent = value => {
     if (!Array.isArray(value)) return value || '';
     const text = value.filter(part => part?.type === 'text').map(part => part.text || '').join('\n');
     const imageCount = value.filter(part => part?.type === 'image_url').length;
-    return [text, imageCount ? `[${imageCount} image attachment${imageCount === 1 ? '' : 's'} omitted because the offline fallback is text-only.]` : '']
-        .filter(Boolean).join('\n\n');
+    return [
+        text,
+        imageCount
+            ? `[${imageCount} image attachment${imageCount === 1 ? '' : 's'} omitted because the offline fallback is text-only.]`
+            : '',
+    ].filter(Boolean).join('\n\n');
 };
 
 const textOnlyMessages = messages => messages.map(item => ({
@@ -81,19 +103,24 @@ const textOnlyMessages = messages => messages.map(item => ({
     content: textOnlyContent(item.content),
 }));
 
-const runAgentUnlocked = async (agentId, history = []) => {
+const runAgentUnlocked = async (agentId, history = [], options = {}) => {
+    throwIfAborted(options.signal);
     const config = await ensureAgentConfig(agentId);
     if (!config.enabled) throw Object.assign(new Error(`${config.name} is disabled.`), { statusCode: 409 });
 
     const definition = agentDefinitions[agentId];
     const [runtimeManifest, automaticProjectContext] = await Promise.all([
         buildRuntimeManifest(agentId),
-        buildAutomaticProjectContext(agentId, history),
+        options.includeAutomaticProjectContext === false
+            ? Promise.resolve({ content: '', files: [] })
+            : buildAutomaticProjectContext(agentId, history),
     ]);
 
     let memory = { content: '', notes: [] };
-    try { memory = await buildMemoryContext(agentId, history); }
-    catch (error) { console.error('[memory] Retrieval failed:', error.message); }
+    if (options.includeMemory !== false) {
+        try { memory = await buildMemoryContext(agentId, history); }
+        catch (error) { console.error('[memory] Retrieval failed:', error.message); }
+    }
 
     let messages = [
         { role: 'system', content: definition.system },
@@ -115,22 +142,37 @@ const runAgentUnlocked = async (agentId, history = []) => {
     let fallbackUsed = false;
     let fallbackReason = '';
     let response = null;
+    const allowTools = options.allowTools !== false;
+    const configuredRounds = Number(options.maxToolRounds ?? config.maxToolRounds ?? 4);
+    const maxToolRounds = allowTools ? Math.max(0, Math.min(configuredRounds, 12)) : 0;
 
-    for (let round = 0; round <= (config.maxToolRounds || 4); round++) {
-        const tools = providerSupportsTools(runtimeConfig.provider) ? getOpenAITools(agentId) : [];
+    for (let round = 0; round <= maxToolRounds; round++) {
+        throwIfAborted(options.signal);
+        const tools = allowTools && providerSupportsTools(runtimeConfig.provider)
+            ? getOpenAITools(agentId)
+            : [];
         try {
-            response = await callAI(runtimeConfig, messages, tools);
+            response = await callAI(runtimeConfig, messages, tools, {
+                signal: options.signal,
+                timeoutMs: options.timeoutMs,
+            });
         } catch (error) {
+            if (isAbortFailure(error)) throw abortError();
             if (fallbackUsed || !mayUseFallback(config, error)) throw error;
             runtimeConfig = fallbackConfig(config);
             fallbackUsed = true;
             fallbackReason = connectivityErrorText(error).slice(0, 500);
             messages = textOnlyMessages(messages);
-            const fallbackTools = providerSupportsTools(runtimeConfig.provider) ? getOpenAITools(agentId) : [];
-            response = await callAI(runtimeConfig, messages, fallbackTools);
+            const fallbackTools = allowTools && providerSupportsTools(runtimeConfig.provider)
+                ? getOpenAITools(agentId)
+                : [];
+            response = await callAI(runtimeConfig, messages, fallbackTools, {
+                signal: options.signal,
+                timeoutMs: options.timeoutMs,
+            });
         }
 
-        if (!response.toolCalls?.length) break;
+        if (!response.toolCalls?.length || !allowTools) break;
 
         messages.push({
             role: 'assistant',
@@ -139,6 +181,7 @@ const runAgentUnlocked = async (agentId, history = []) => {
         });
 
         for (const call of response.toolCalls) {
+            throwIfAborted(options.signal);
             const name = call.function?.name;
             const args = parseArguments(call.function?.arguments);
             let result;
@@ -161,6 +204,7 @@ const runAgentUnlocked = async (agentId, history = []) => {
         }
     }
 
+    throwIfAborted(options.signal);
     return {
         content: response?.content || 'The model returned no text response.',
         toolEvents,
@@ -175,10 +219,11 @@ const runAgentUnlocked = async (agentId, history = []) => {
     };
 };
 
-export const runAgent = (agentId, history = []) => {
-    const task = agentQueue.then(() => runAgentUnlocked(agentId, history));
-    agentQueue = task.catch(error => {
-        console.error(`[agent:${agentId}]`, error.message);
-    });
+export const runAgent = (agentId, history = [], options = {}) => {
+    const previous = agentQueues.get(agentId) || Promise.resolve();
+    const task = previous.then(() => runAgentUnlocked(agentId, history, options));
+    agentQueues.set(agentId, task.catch(error => {
+        if (!isAbortFailure(error)) console.error(`[agent:${agentId}]`, error.message);
+    }));
     return task;
 };

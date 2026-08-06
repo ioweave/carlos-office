@@ -1,11 +1,18 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { runAgent } from './agentRunner.mjs';
 import { getJob, listJobs, updateJob } from './officeStore.mjs';
+import { getVaultPath, invalidateIndex } from './memoryCore.mjs';
 
-const workerAgents = new Set(['marco', 'luma', 'dex']);
-const scheduled = new Set();
+const workerAgents = new Set(['marco', 'luma', 'dex', 'iris']);
+const pendingQueue = [];
+const queuedIds = new Set();
 const active = new Map();
-let queueTail = Promise.resolve();
+const controllers = new Map();
+const tasks = new Map();
+const cancelled = new Set();
+const concurrency = Math.max(1, Math.min(Number(process.env.JOB_CONCURRENCY || 2), 4));
 
 const clip = (value, limit = 60_000) => {
     const text = String(value || '');
@@ -89,7 +96,7 @@ const parseReview = content => {
             verdict: 'revise',
             score: 0,
             summary: 'Vera did not return valid QC JSON.',
-            feedback: 'Review the complete output again and return the required JSON verdict.',
+            feedback: 'Return the required JSON verdict and evaluate only the explicit acceptance criteria.',
             missing: ['Valid structured QC verdict'],
         };
     }
@@ -113,7 +120,45 @@ const makeMessage = ({ from, to, type, content, iteration = 0 }) => ({
     createdAt: new Date().toISOString(),
 });
 
-export const runJobLoop = async jobId => {
+const isCancelled = (jobId, signal) => cancelled.has(jobId) || signal?.aborted;
+const cancellationError = () => Object.assign(new Error('Job cancelled.'), {
+    code: 'JOB_CANCELLED',
+    statusCode: 499,
+});
+const throwIfCancelled = (jobId, signal) => {
+    if (isCancelled(jobId, signal)) throw cancellationError();
+};
+const isCancellationError = error => (
+    error?.code === 'JOB_CANCELLED'
+    || error?.code === 'EXECUTION_CANCELLED'
+    || error?.code === 'ERR_CANCELED'
+    || error?.name === 'AbortError'
+    || /cancel(?:led|ed)/i.test(String(error?.message || ''))
+);
+
+const updateActive = (jobId, data) => {
+    const current = active.get(jobId) || { jobId };
+    active.set(jobId, { ...current, ...data, updatedAt: new Date().toISOString() });
+};
+
+const markCancelled = async (jobId, job = null) => {
+    const current = job || await getJob(jobId);
+    if (!current) return { jobId, status: 'cancelled' };
+    if (current.status === 'cancelled') return current;
+    return updateJob(jobId, {
+        status: 'cancelled',
+        lastError: '',
+        messages: [...(current.messages || []), makeMessage({
+            from: 'nora',
+            to: current.assignedAgent,
+            type: 'cancellation',
+            content: 'Carlos or Nora stopped this job. Do not continue working on it.',
+            iteration: current.currentIteration,
+        })],
+    });
+};
+
+export const runJobLoop = async (jobId, { signal } = {}) => {
     let job = await getJob(jobId);
     if (!job) throw Object.assign(new Error('Job not found.'), { statusCode: 404 });
     if (!workerAgents.has(job.assignedAgent)) {
@@ -125,10 +170,18 @@ export const runJobLoop = async jobId => {
     if (job.status === 'completed' && job.qcVerdict === 'pass') return job;
 
     try {
+        throwIfCancelled(jobId, signal);
         const nextIteration = job.attempts.length + 1;
         for (let iteration = nextIteration; iteration <= job.maxIterations; iteration++) {
+            throwIfCancelled(jobId, signal);
             const previous = job.attempts.at(-1) || null;
-            active.set(jobId, { jobId, agentId: job.assignedAgent, stage: 'working', iteration, title: job.title });
+            updateActive(jobId, {
+                agentId: job.assignedAgent,
+                stage: 'working',
+                iteration,
+                title: job.title,
+                startedAt: active.get(jobId)?.startedAt || new Date().toISOString(),
+            });
             job = await updateJob(jobId, {
                 status: 'running',
                 currentIteration: iteration,
@@ -139,8 +192,13 @@ export const runJobLoop = async jobId => {
                 role: 'user',
                 content: workerPrompt(job, iteration, previous),
                 createdAt: new Date().toISOString(),
-            }]);
+            }], {
+                signal,
+                maxToolRounds: Number(process.env.JOB_MAX_TOOL_ROUNDS || 2),
+                timeoutMs: Number(process.env.JOB_WORKER_TIMEOUT_MS || 90_000),
+            });
 
+            throwIfCancelled(jobId, signal);
             const workerMessage = makeMessage({
                 from: job.assignedAgent,
                 to: 'vera',
@@ -148,7 +206,12 @@ export const runJobLoop = async jobId => {
                 content: worker.content,
                 iteration,
             });
-            active.set(jobId, { jobId, agentId: 'vera', stage: 'reviewing', iteration, title: job.title });
+            updateActive(jobId, {
+                agentId: 'vera',
+                stage: 'reviewing',
+                iteration,
+                title: job.title,
+            });
             job = await updateJob(jobId, {
                 status: 'qc_review',
                 result: worker.content,
@@ -159,7 +222,16 @@ export const runJobLoop = async jobId => {
                 role: 'user',
                 content: qcPrompt(job, worker.content, iteration),
                 createdAt: new Date().toISOString(),
-            }]);
+            }], {
+                signal,
+                allowTools: false,
+                includeMemory: false,
+                includeAutomaticProjectContext: false,
+                maxToolRounds: 0,
+                timeoutMs: Number(process.env.JOB_QC_TIMEOUT_MS || 45_000),
+            });
+            throwIfCancelled(jobId, signal);
+
             const review = parseReview(qc.content);
             const attempt = {
                 iteration,
@@ -188,7 +260,12 @@ export const runJobLoop = async jobId => {
             const messages = [...job.messages, qcMessage];
 
             if (review.verdict === 'pass') {
-                active.set(jobId, { jobId, agentId: 'nora', stage: 'accepted', iteration, title: job.title });
+                updateActive(jobId, {
+                    agentId: 'nora',
+                    stage: 'accepted',
+                    iteration,
+                    title: job.title,
+                });
                 return updateJob(jobId, {
                     status: 'completed',
                     attempts,
@@ -218,30 +295,96 @@ export const runJobLoop = async jobId => {
 
         return job;
     } catch (error) {
+        if (isCancellationError(error) || isCancelled(jobId, signal)) {
+            try { return await markCancelled(jobId, job); }
+            catch { return { jobId, status: 'cancelled' }; }
+        }
         return updateJob(jobId, {
             status: 'failed',
             lastError: error.message || 'Job execution failed.',
         });
-    } finally {
-        active.delete(jobId);
+    }
+};
+
+const priorityWeight = value => ({ high: 0, normal: 1, low: 2 }[value] ?? 1);
+
+const pumpQueue = () => {
+    while (active.size < concurrency && pendingQueue.length) {
+        const queued = pendingQueue.shift();
+        if (!queued || cancelled.has(queued.jobId)) continue;
+        queuedIds.delete(queued.jobId);
+
+        const controller = new AbortController();
+        controllers.set(queued.jobId, controller);
+        active.set(queued.jobId, {
+            jobId: queued.jobId,
+            agentId: queued.assignedAgent,
+            stage: 'starting',
+            iteration: queued.currentIteration || 0,
+            title: queued.title,
+            startedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+        });
+
+        const task = runJobLoop(queued.jobId, { signal: controller.signal })
+            .catch(error => console.error(`[jobs] ${queued.jobId}:`, error.message))
+            .finally(() => {
+                active.delete(queued.jobId);
+                controllers.delete(queued.jobId);
+                tasks.delete(queued.jobId);
+                pumpQueue();
+            });
+        tasks.set(queued.jobId, task);
     }
 };
 
 export const enqueueJob = async jobId => {
     const id = String(jobId || '').trim();
     if (!id) throw Object.assign(new Error('Job ID is required.'), { statusCode: 400 });
-    if (scheduled.has(id) || active.has(id)) {
+    if (queuedIds.has(id) || active.has(id)) {
         return { jobId: id, queued: false, alreadyScheduled: true };
     }
 
-    scheduled.add(id);
-    const task = queueTail.then(async () => {
-        scheduled.delete(id);
-        try { return await runJobLoop(id); }
-        finally { active.delete(id); }
+    const job = await getJob(id);
+    if (!job) throw Object.assign(new Error('Job not found.'), { statusCode: 404 });
+    cancelled.delete(id);
+    await updateJob(id, { status: 'queued', lastError: '' });
+    pendingQueue.push({
+        jobId: id,
+        title: job.title,
+        assignedAgent: job.assignedAgent,
+        priority: job.priority,
+        currentIteration: job.currentIteration,
+        queuedAt: new Date().toISOString(),
     });
-    queueTail = task.catch(error => console.error(`[jobs] ${id}:`, error.message));
-    return { jobId: id, queued: true, alreadyScheduled: false };
+    pendingQueue.sort((a, b) => priorityWeight(a.priority) - priorityWeight(b.priority)
+        || new Date(a.queuedAt) - new Date(b.queuedAt));
+    queuedIds.add(id);
+    pumpQueue();
+    return { jobId: id, queued: true, alreadyScheduled: false, position: pendingQueue.findIndex(item => item.jobId === id) + 1 };
+};
+
+export const cancelJob = async jobId => {
+    const id = String(jobId || '').trim();
+    const job = await getJob(id);
+    if (!job) throw Object.assign(new Error('Job not found.'), { statusCode: 404 });
+    if (['completed', 'failed', 'cancelled'].includes(job.status) && !active.has(id) && !queuedIds.has(id)) {
+        return { jobId: id, status: job.status, stopped: false };
+    }
+
+    cancelled.add(id);
+    const index = pendingQueue.findIndex(item => item.jobId === id);
+    if (index !== -1) pendingQueue.splice(index, 1);
+    queuedIds.delete(id);
+    controllers.get(id)?.abort();
+    const updated = await markCancelled(id, job);
+    return { jobId: id, status: updated.status, stopped: true };
+};
+
+export const stopAllJobs = async () => {
+    const ids = [...new Set([...pendingQueue.map(item => item.jobId), ...active.keys()])];
+    await Promise.allSettled(ids.map(cancelJob));
+    return { stopped: ids.length, jobIds: ids };
 };
 
 export const retryJob = async jobId => {
@@ -249,6 +392,7 @@ export const retryJob = async jobId => {
     if (!job) throw Object.assign(new Error('Job not found.'), { statusCode: 404 });
     if (job.status === 'completed' && job.qcVerdict === 'pass') return { jobId, queued: false, completed: true };
 
+    cancelled.delete(jobId);
     const extendedLimit = Math.min(Math.max(job.maxIterations, job.currentIteration) + 2, 8);
     await updateJob(jobId, {
         status: 'queued',
@@ -265,6 +409,56 @@ export const retryJob = async jobId => {
     return enqueueJob(jobId);
 };
 
+const deleteJobFile = async job => {
+    if (!job?.path) return false;
+    const root = path.resolve(getVaultPath());
+    const target = path.resolve(root, job.path);
+    if (target === root || !target.startsWith(`${root}${path.sep}`)) {
+        throw Object.assign(new Error('Job path escapes the Obsidian vault.'), { statusCode: 400 });
+    }
+    await fs.rm(target, { force: true });
+    invalidateIndex();
+    return true;
+};
+
+export const deleteJob = async jobId => {
+    const id = String(jobId || '').trim();
+    const job = await getJob(id);
+    if (!job) throw Object.assign(new Error('Job not found.'), { statusCode: 404 });
+    if (active.has(id) || queuedIds.has(id)) {
+        await cancelJob(id);
+        const task = tasks.get(id);
+        if (task) await Promise.allSettled([task]);
+    }
+    await deleteJobFile(job);
+    cancelled.delete(id);
+    return { jobId: id, deleted: true };
+};
+
+export const clearJobs = async ({ scope = 'terminal' } = {}) => {
+    const normalized = String(scope || 'terminal').toLowerCase();
+    if (!['terminal', 'completed', 'cancelled', 'all'].includes(normalized)) {
+        throw Object.assign(new Error('Job clear scope must be terminal, completed, cancelled, or all.'), { statusCode: 400 });
+    }
+
+    if (normalized === 'all') {
+        await stopAllJobs();
+        await Promise.allSettled([...tasks.values()]);
+    }
+
+    const jobs = await listJobs({ limit: 500 });
+    const selected = jobs.filter(job => {
+        if (normalized === 'all') return true;
+        if (normalized === 'completed') return job.status === 'completed';
+        if (normalized === 'cancelled') return job.status === 'cancelled';
+        return ['completed', 'failed', 'cancelled'].includes(job.status);
+    });
+
+    await Promise.all(selected.map(deleteJobFile));
+    selected.forEach(job => cancelled.delete(job.jobId));
+    return { scope: normalized, cleared: selected.length, jobIds: selected.map(job => job.jobId) };
+};
+
 export const resumePendingJobs = async () => {
     const jobs = await listJobs({ limit: 500 });
     const pending = jobs.filter(job => ['queued', 'running', 'qc_review'].includes(job.status));
@@ -273,6 +467,8 @@ export const resumePendingJobs = async () => {
 };
 
 export const jobRunnerStatus = () => ({
-    queued: scheduled.size,
+    concurrency,
+    queued: pendingQueue.length,
+    queue: pendingQueue.map((item, index) => ({ ...item, position: index + 1 })),
     active: [...active.values()],
 });
