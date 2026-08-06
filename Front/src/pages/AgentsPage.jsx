@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
-import { IconCloud, IconDeviceDesktop, IconRefresh, IconRobot, IconSelector } from '@tabler/icons-react';
+import { IconCloud, IconDeviceDesktop, IconRefresh, IconRobot, IconSelector, IconWifiOff } from '@tabler/icons-react';
 import { toast } from 'sonner';
 import api from '../api';
 import StatusBadge from '../components/StatusBadge';
 
 const providerOptions = [
-    { id: 'ollama', label: 'Ollama · local' },
+    { id: 'ollama', label: 'Ollama · local and cloud' },
     { id: 'openai', label: 'OpenAI' },
     { id: 'openai-compatible', label: 'OpenAI-compatible' },
     { id: 'claude', label: 'Anthropic Claude' },
@@ -45,6 +45,8 @@ function AgentEditor({ agent, ollamaModels, onSaved }) {
         }
     };
 
+    const cloudModel = form.provider !== 'ollama' || String(form.model || '').endsWith(':cloud');
+
     return (
         <article className="agent-card">
             <div className="agent-card-header">
@@ -66,7 +68,7 @@ function AgentEditor({ agent, ollamaModels, onSaved }) {
                     </select>
                 </label>
                 <label>
-                    <span>Model</span>
+                    <span>Primary model</span>
                     {form.provider === 'ollama' && ollamaModels.length ? (
                         <select value={form.model} onChange={event => update('model', event.target.value)}>
                             {!ollamaModels.includes(form.model) && <option value={form.model}>{form.model}</option>}
@@ -92,23 +94,31 @@ function AgentEditor({ agent, ollamaModels, onSaved }) {
 
             <div className="fallback-box">
                 <div className="fallback-heading">
-                    <div><IconCloud size={17} /><strong>Cloud fallback</strong></div>
+                    <div><IconWifiOff size={17} /><strong>Offline fallback</strong></div>
                     <label className="switch-line compact">
                         <input type="checkbox" checked={!!form.fallback?.enabled} onChange={event => updateFallback('enabled', event.target.checked)} />
                         <span />
                     </label>
                 </div>
+                <p className="fallback-copy">Used only when the primary model fails because cloud connectivity is unavailable. Authentication, quota, and model errors remain visible.</p>
                 {form.fallback?.enabled && (
                     <div className="form-grid fallback-fields">
                         <label>
                             <span>Provider</span>
-                            <select value={form.fallback.provider || 'openai'} onChange={event => updateFallback('provider', event.target.value)}>
-                                {providerOptions.filter(item => item.id !== 'ollama').map(provider => <option key={provider.id} value={provider.id}>{provider.label}</option>)}
+                            <select value={form.fallback.provider || 'ollama'} onChange={event => updateFallback('provider', event.target.value)}>
+                                {providerOptions.map(provider => <option key={provider.id} value={provider.id}>{provider.label}</option>)}
                             </select>
                         </label>
                         <label>
-                            <span>Model</span>
-                            <input value={form.fallback.model || ''} onChange={event => updateFallback('model', event.target.value)} />
+                            <span>Fallback model</span>
+                            {form.fallback.provider === 'ollama' && ollamaModels.length ? (
+                                <select value={form.fallback.model || ''} onChange={event => updateFallback('model', event.target.value)}>
+                                    {!ollamaModels.includes(form.fallback.model) && <option value={form.fallback.model}>{form.fallback.model}</option>}
+                                    {ollamaModels.map(model => <option key={model} value={model}>{model}</option>)}
+                                </select>
+                            ) : (
+                                <input value={form.fallback.model || ''} onChange={event => updateFallback('model', event.target.value)} />
+                            )}
                         </label>
                         <label className="span-2">
                             <span>Base URL</span>
@@ -119,8 +129,8 @@ function AgentEditor({ agent, ollamaModels, onSaved }) {
             </div>
 
             <div className="agent-card-footer">
-                <StatusBadge tone={form.provider === 'ollama' ? 'info' : 'warning'}>
-                    {form.provider === 'ollama' ? <><IconDeviceDesktop size={13} /> Local</> : <><IconCloud size={13} /> Cloud</>}
+                <StatusBadge tone={cloudModel ? 'warning' : 'info'}>
+                    {cloudModel ? <><IconCloud size={13} /> Cloud primary</> : <><IconDeviceDesktop size={13} /> Local primary</>}
                 </StatusBadge>
                 <button className="primary-button" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save agent'}</button>
             </div>
@@ -151,12 +161,12 @@ export default function AgentsPage({ agents, setAgents }) {
     return (
         <div className="standard-page">
             <div className="page-header">
-                <div><div className="eyebrow">Runtime configuration</div><h1>Agents</h1><p>Hot-swap models and providers without restarting Carlos Office.</p></div>
+                <div><div className="eyebrow">Runtime configuration</div><h1>Agents</h1><p>Use Ollama cloud models as primary runtimes with local models reserved for connectivity failures.</p></div>
                 <button className="secondary-button" onClick={loadModels} disabled={loadingModels}><IconRefresh size={17} /> Refresh Ollama</button>
             </div>
             <div className="summary-strip">
                 <div><IconRobot /><span><strong>{agents.length}</strong> configured agents</span></div>
-                <div><IconSelector /><span><strong>{ollamaModels.length}</strong> local models detected</span></div>
+                <div><IconSelector /><span><strong>{ollamaModels.length}</strong> Ollama models detected</span></div>
             </div>
             <div className="agent-grid">
                 {agents.map(agent => <AgentEditor key={agent.agentId} agent={agent} ollamaModels={ollamaModels} onSaved={onSaved} />)}

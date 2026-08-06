@@ -1,13 +1,50 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { agentDefinitions, defaultAgentConfig } from '../agents/agents.config.mjs';
 import { callAI, providerSupportsTools } from './ai.mjs';
 import { executeTool, getOpenAITools } from './toolRegistry.mjs';
 import { buildMemoryContext } from './memory.mjs';
-import { getAgentConfig } from './officeStore.mjs';
+import { getVaultPath } from './memoryCore.mjs';
+import { getAgentConfig, saveAgentConfig } from './officeStore.mjs';
+import { connectivityErrorText, isConnectivityFailure } from './connectivity.mjs';
 
 export const ensureAgentConfig = async agentId => {
     const definition = agentDefinitions[agentId];
     if (!definition) throw Object.assign(new Error(`Unknown agent: ${agentId}`), { statusCode: 404 });
-    return getAgentConfig(agentId, defaultAgentConfig(agentId));
+    const defaults = defaultAgentConfig(agentId);
+    const config = await getAgentConfig(agentId, defaults);
+    const marker = path.join(
+        getVaultPath(), '90-System', 'Runtime', 'Agents', '.Migrations', `${agentId}-minimax-m3-v1.md`,
+    );
+    try {
+        await fs.access(marker);
+        return config;
+    } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+    }
+
+    const migrated = await saveAgentConfig(agentId, {
+        provider: defaults.provider,
+        model: defaults.model,
+        baseUrl: defaults.baseUrl,
+        fallback: defaults.fallback,
+    }, defaults);
+    await fs.mkdir(path.dirname(marker), { recursive: true });
+    await fs.writeFile(marker, [
+        '---',
+        'type: "runtime-migration"',
+        `agent: ${JSON.stringify(agentId)}`,
+        'migration: "minimax-m3-primary-v1"',
+        `appliedAt: ${JSON.stringify(new Date().toISOString())}`,
+        '---',
+        '',
+        '# MiniMax M3 primary migration',
+        '',
+        `Primary model: ${migrated.model}`,
+        `Offline fallback: ${migrated.fallback?.model || 'disabled'}`,
+        '',
+    ].join('\n'), 'utf8');
+    return migrated;
 };
 
 const parseArguments = value => {
@@ -16,20 +53,16 @@ const parseArguments = value => {
     try { return JSON.parse(value); } catch { return {}; }
 };
 
-const invokeWithFallback = async (config, messages, tools) => {
-    try {
-        return await callAI(config, messages, tools);
-    } catch (error) {
-        if (!config.fallback?.enabled) throw error;
-        const fallbackConfig = {
-            ...config,
-            provider: config.fallback.provider,
-            model: config.fallback.model,
-            baseUrl: config.fallback.baseUrl,
-        };
-        if (!fallbackConfig.model) throw error;
-        return callAI(fallbackConfig, messages, tools);
-    }
+const fallbackConfig = config => ({
+    ...config,
+    provider: config.fallback.provider,
+    model: config.fallback.model,
+    baseUrl: config.fallback.baseUrl,
+});
+
+const mayUseFallback = (config, error) => {
+    if (!config.fallback?.enabled || !config.fallback?.model) return false;
+    return isConnectivityFailure(error);
 };
 
 export const runAgent = async (agentId, history = []) => {
@@ -49,12 +82,25 @@ export const runAgent = async (agentId, history = []) => {
             content: item.content || '',
         })),
     ];
-    const tools = providerSupportsTools(config.provider) ? getOpenAITools(agentId) : [];
     const toolEvents = [];
+    let runtimeConfig = config;
+    let fallbackUsed = false;
+    let fallbackReason = '';
     let response = null;
 
     for (let round = 0; round <= (config.maxToolRounds || 4); round++) {
-        response = await invokeWithFallback(config, messages, tools);
+        const tools = providerSupportsTools(runtimeConfig.provider) ? getOpenAITools(agentId) : [];
+        try {
+            response = await callAI(runtimeConfig, messages, tools);
+        } catch (error) {
+            if (fallbackUsed || !mayUseFallback(config, error)) throw error;
+            runtimeConfig = fallbackConfig(config);
+            fallbackUsed = true;
+            fallbackReason = connectivityErrorText(error).slice(0, 500);
+            const fallbackTools = providerSupportsTools(runtimeConfig.provider) ? getOpenAITools(agentId) : [];
+            response = await callAI(runtimeConfig, messages, fallbackTools);
+        }
+
         if (!response.toolCalls?.length) break;
 
         messages.push({
@@ -90,6 +136,12 @@ export const runAgent = async (agentId, history = []) => {
         content: response?.content || 'The model returned no text response.',
         toolEvents,
         memoryRefs: memory.notes,
-        model: { provider: config.provider, model: config.model },
+        model: {
+            provider: runtimeConfig.provider,
+            model: runtimeConfig.model,
+            fallbackUsed,
+            primaryModel: config.model,
+            fallbackReason,
+        },
     };
 };

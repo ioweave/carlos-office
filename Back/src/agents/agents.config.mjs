@@ -47,23 +47,28 @@ Prefer simple JavaScript solutions and state technical tradeoffs clearly.`,
 
 export const defaultAgentConfig = agentId => {
     const definition = agentDefinitions[agentId];
-    const model = process.env.OLLAMA_MODEL || 'qwen3:8b';
+    const baseUrl = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
+    const configuredPrimary = String(process.env.OLLAMA_MODEL || '').trim();
+    const primaryModel = !configuredPrimary || configuredPrimary === 'qwen3:8b'
+        ? 'minimax-m3:cloud'
+        : configuredPrimary;
 
     return {
+        configVersion: 2,
         agentId,
         name: definition.name,
         role: definition.role,
         provider: 'ollama',
-        model,
-        baseUrl: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
+        model: primaryModel,
+        baseUrl,
         temperature: agentId === 'luma' ? 0.6 : 0.2,
         maxToolRounds: 4,
         enabled: true,
         fallback: {
-            enabled: false,
-            provider: 'openai',
-            model: '',
-            baseUrl: 'https://api.openai.com/v1',
+            enabled: true,
+            provider: 'ollama',
+            model: process.env.OLLAMA_FALLBACK_MODEL || 'qwen3:8b',
+            baseUrl,
         },
     };
 };

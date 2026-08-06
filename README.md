@@ -6,18 +6,36 @@ Local-first operating interface for Mer1dian's agent team: Nora, Marco, Luma, an
 
 - JavaScript only: `.mjs` backend and `.jsx` frontend
 - Node.js ESM
-- Axios
 - React + Vite
-- Ollama-first local inference
-- Obsidian-compatible Markdown for **all persistent data**
-- no login for local operation
-- no MongoDB or other database service
-- no agent framework
-- no TypeScript
+- Ollama for local and Ollama Cloud inference
+- Obsidian-compatible Markdown for all persistent data
+- no login and no database service
+
+## Model routing
+
+The default runtime is:
+
+```text
+Primary:  minimax-m3:cloud
+Fallback: qwen3:8b
+Policy:   fallback only for internet/cloud-connectivity failures
+```
+
+Authentication, quota, invalid-model, and configuration errors are not hidden by the fallback. They are returned to the UI so they can be corrected.
+
+Existing installations created with `qwen3:8b` as the original default are migrated automatically when the agent configuration is next loaded. Manual model changes made after migration remain editable from the Agents screen.
+
+Prepare Ollama:
+
+```powershell
+ollama signin
+ollama pull minimax-m3:cloud
+ollama pull qwen3:8b
+```
+
+Ollama Cloud models are accessed through the local Ollama API at `http://127.0.0.1:11434`, so Carlos Office keeps one provider configuration for both the cloud primary and local fallback.
 
 ## Obsidian-only storage
-
-Carlos Office has no database connection. The configured Obsidian vault stores:
 
 ```text
 CarlosOfficeVault/
@@ -32,20 +50,20 @@ CarlosOfficeVault/
     └── Runtime/Agents/          Provider and model settings
 ```
 
-Every stored object is a `.md` file that can be inspected, backed up, moved, or edited through Obsidian. Machine-readable state is embedded inside the Markdown notes; there are no JSON database files.
+Conversation history is available from the chat sidebar and can reopen any saved Markdown thread.
 
-Agent runtime configuration notes are excluded from automatic semantic memory injection. Curated notes, agent notes, conversations, and job records remain searchable through the shared memory tools.
+## Voice input and output
 
-## Local architecture
+The chat interface supports:
 
-```text
-Browser (127.0.0.1:5173)
-    -> Carlos Office API (127.0.0.1:3002)
-        -> Obsidian Markdown vault
-        -> Ollama (127.0.0.1:11434)
-        -> optional cloud AI providers
-        -> shared web/MCP tool registry
-```
+- microphone dictation through the browser's Speech Recognition API
+- manual playback of each assistant response
+- optional automatic reading of new responses
+- English and Spanish language selection
+
+Voice is independent of the selected LLM. Text generation still comes from MiniMax M3 or the local Qwen fallback.
+
+Speech synthesis normally uses installed browser or operating-system voices. Browser speech recognition support varies and may use the browser vendor's online recognition service. Chrome or Edge provides the most practical Windows experience. No microphone audio is sent to the Carlos Office backend.
 
 ## Start locally
 
@@ -53,27 +71,22 @@ Prerequisites:
 
 - Node.js 20 or newer
 - Ollama
-- Obsidian is optional but recommended for viewing and editing the vault
-
-```bash
-ollama serve
-ollama pull qwen3:8b
-```
+- Obsidian, optional but recommended
 
 Backend:
 
-```bash
+```powershell
 cd Back
-cp .env.example .env
+Copy-Item .env.example .env
 npm install
 npm run dev
 ```
 
 Frontend:
 
-```bash
+```powershell
 cd Front
-cp .env.example .env
+Copy-Item .env.example .env
 npm install
 npm run dev
 ```
@@ -87,37 +100,25 @@ OBSIDIAN_VAULT_PATH=C:\absolute\path\to\CarlosOfficeVault
 MEMORY_TIME_ZONE=America/Guayaquil
 ```
 
-Open that same folder as a vault in Obsidian.
+## Backend environment
 
-## Model hot-swapping
+```env
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=minimax-m3:cloud
+OLLAMA_FALLBACK_MODEL=qwen3:8b
+```
 
-Each agent's provider, model, base URL, temperature, tool limit, enabled state, and optional fallback are stored in a Markdown configuration note under `90-System/Runtime/Agents`.
+The application also tolerates an older local `.env` containing `OLLAMA_MODEL=qwen3:8b`; that original default is upgraded to MiniMax M3 during migration.
 
-Saving a change in the Agents screen affects the next invocation without restarting the application. Cloud fallback remains disabled by default.
+## MCP server
 
-## Permanent memory and MCP tools
-
-All agents can use:
-
-- `memory_search`
-- `memory_read`
-- `memory_list`
-- `memory_write`
-- `web_search`
-- `fetch_url`
-- `current_time`
-
-Nora can also list agents, inspect installed Ollama models, and create durable worker jobs.
-
-Run the MCP stdio server with:
-
-```bash
+```powershell
 cd Back
 npm run mcp
 ```
 
-## Local-only boundary
+Shared tools include permanent memory, web research, current time, Ollama model inspection, agent listing, and durable job creation.
 
-The API binds to `127.0.0.1` and has no authentication by design. Do not bind it to a public interface without first adding authentication and authorization.
+## Validation
 
-This scaffold does not expose autonomous email, ad-platform, payment, publishing, GitHub, deployment, or destructive filesystem actions.
+Use [`NORA_VALIDATION.md`](./NORA_VALIDATION.md) for the behavioral and functional acceptance checks.
