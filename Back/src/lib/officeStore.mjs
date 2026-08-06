@@ -64,12 +64,13 @@ const agentConfig = (agentId, value = {}, defaults = {}) => ({
     name: String(value.name ?? defaults.name ?? AGENT_NAMES[agentId] ?? agentId),
     role: String(value.role ?? defaults.role ?? ''),
     provider: String(value.provider ?? defaults.provider ?? 'ollama'),
-    model: String(value.model ?? defaults.model ?? process.env.OLLAMA_MODEL ?? 'qwen3:8b'),
+    model: String(value.model ?? defaults.model ?? process.env.OLLAMA_MODEL ?? 'minimax-m3:cloud'),
     baseUrl: String(value.baseUrl ?? defaults.baseUrl ?? process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434'),
     temperature: Number(value.temperature ?? defaults.temperature ?? 0.2),
     maxToolRounds: Math.max(0, Math.min(Number(value.maxToolRounds ?? defaults.maxToolRounds ?? 4), 12)),
     enabled: Boolean(value.enabled ?? defaults.enabled ?? true),
     fallback: fallback(value.fallback, defaults.fallback),
+    configVersion: Number(value.configVersion ?? defaults.configVersion ?? 1),
     createdAt: iso(value.createdAt ?? defaults.createdAt),
     updatedAt: iso(value.updatedAt),
 });
@@ -174,44 +175,167 @@ export const listConversations = async ({ limit = 50 } = {}) => {
     return result.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)).slice(0, Math.min(Number(limit) || 50, 500));
 };
 
-const job = value => ({
-    jobId: String(value.jobId || randomUUID()), createdBy: String(value.createdBy || 'nora'),
-    assignedAgent: String(value.assignedAgent || 'marco'), title: String(value.title || 'Untitled job'),
-    instructions: String(value.instructions || ''),
-    priority: ['low', 'normal', 'high'].includes(value.priority) ? value.priority : 'normal',
-    status: String(value.status || 'queued'), result: String(value.result || ''),
-    createdAt: iso(value.createdAt), updatedAt: iso(value.updatedAt),
+const criteria = value => {
+    const source = Array.isArray(value) ? value : String(value || '').split(/\r?\n/);
+    return source.map(item => String(item).replace(/^\s*[-*]\s*/, '').trim()).filter(Boolean).slice(0, 30);
+};
+const attempt = value => ({
+    iteration: Math.max(1, Number(value?.iteration || 1)),
+    workerOutput: String(value?.workerOutput || ''),
+    workerModel: value?.workerModel || null,
+    qcVerdict: ['pass', 'revise'].includes(value?.qcVerdict) ? value.qcVerdict : 'revise',
+    qcScore: Math.max(0, Math.min(Number(value?.qcScore || 0), 100)),
+    qcSummary: String(value?.qcSummary || ''),
+    qcFeedback: String(value?.qcFeedback || ''),
+    missing: criteria(value?.missing || []),
+    qcModel: value?.qcModel || null,
+    createdAt: iso(value?.createdAt),
 });
-const jobMarkdown = value => `${yaml({
-    type: 'agent-job', jobId: value.jobId, createdBy: value.createdBy, assignedAgent: value.assignedAgent,
-    title: value.title, priority: value.priority, status: value.status, createdAt: value.createdAt, updatedAt: value.updatedAt,
-})}# ${value.title}
+const job = value => ({
+    jobId: String(value.jobId || randomUUID()),
+    createdBy: String(value.createdBy || 'nora'),
+    assignedAgent: String(value.assignedAgent || 'marco'),
+    qcAgent: 'vera',
+    title: String(value.title || 'Untitled job'),
+    instructions: String(value.instructions || ''),
+    expectedResult: String(value.expectedResult || ''),
+    acceptanceCriteria: criteria(value.acceptanceCriteria || []),
+    priority: ['low', 'normal', 'high'].includes(value.priority) ? value.priority : 'normal',
+    status: String(value.status || 'queued'),
+    maxIterations: Math.max(1, Math.min(Number(value.maxIterations || 4), 8)),
+    currentIteration: Math.max(0, Number(value.currentIteration || 0)),
+    attempts: Array.isArray(value.attempts) ? value.attempts.map(attempt) : [],
+    result: String(value.result || ''),
+    qcVerdict: String(value.qcVerdict || ''),
+    qcScore: Math.max(0, Math.min(Number(value.qcScore || 0), 100)),
+    qcFeedback: String(value.qcFeedback || ''),
+    lastError: String(value.lastError || ''),
+    createdAt: iso(value.createdAt),
+    updatedAt: iso(value.updatedAt),
+    path: String(value.path || ''),
+});
+const jobMarkdown = value => {
+    const criteriaList = value.acceptanceCriteria.length
+        ? value.acceptanceCriteria.map(item => `- ${item}`).join('\n')
+        : '_No explicit criteria supplied._';
+    const attempts = value.attempts.length
+        ? value.attempts.map(item => `### Iteration ${item.iteration}
+
+- **Worker model:** ${item.workerModel?.provider || 'unknown'} · ${item.workerModel?.model || 'unknown'}
+- **Vera verdict:** ${item.qcVerdict}
+- **QC score:** ${item.qcScore}/100
+- **QC model:** ${item.qcModel?.provider || 'unknown'} · ${item.qcModel?.model || 'unknown'}
+
+#### Worker output
+
+${clean(item.workerOutput)}
+
+#### Vera assessment
+
+${clean(item.qcSummary)}
+
+${item.missing.length ? `**Missing:** ${item.missing.join('; ')}` : ''}
+
+${clean(item.qcFeedback)}`).join('\n\n---\n\n')
+        : '_No iterations have run yet._';
+
+    return `${yaml({
+        type: 'agent-job', jobId: value.jobId, createdBy: value.createdBy, assignedAgent: value.assignedAgent,
+        qcAgent: value.qcAgent, title: value.title, priority: value.priority, status: value.status,
+        currentIteration: value.currentIteration, maxIterations: value.maxIterations,
+        qcVerdict: value.qcVerdict, qcScore: value.qcScore,
+        createdAt: value.createdAt, updatedAt: value.updatedAt,
+    })}# ${value.title}
 
 ## Instructions
 
 ${clean(value.instructions)}
 
-## Result
+## Expected result
+
+${clean(value.expectedResult) || '_Not specified._'}
+
+## Acceptance criteria
+
+${criteriaList}
+
+## Current result
 
 ${clean(value.result) || '_Not completed yet._'}
 
+## QC status
+
+- **Vera verdict:** ${value.qcVerdict || 'pending'}
+- **QC score:** ${value.qcScore || 0}/100
+- **Iteration:** ${value.currentIteration}/${value.maxIterations}
+
+${clean(value.qcFeedback)}
+${value.lastError ? `\n\n**Last error:** ${clean(value.lastError)}` : ''}
+
+## Iteration history
+
+${attempts}
+
 ${block('job', value)}
 `;
+};
+const findJobRecord = async jobId => {
+    for (const relative of await files(DIR.jobs)) {
+        const raw = await read(relative);
+        const stored = unblock(raw, 'job');
+        const parsed = stored || parseFrontmatter(raw).data;
+        if (String(parsed.jobId || '') === String(jobId)) return { relative, raw, stored: parsed };
+    }
+    return null;
+};
+
 export const createJob = async value => {
     await ensureOfficeStore();
     const item = job(value);
     const relative = `${DIR.jobs}/${item.createdAt.slice(0, 10)}-${slugify(item.title)}-${item.jobId.slice(0, 8)}.md`;
+    item.path = relative;
     await write(relative, jobMarkdown(item));
-    return { ...item, path: relative };
+    return item;
 };
+export const getJob = async jobId => {
+    await ensureOfficeStore();
+    const record = await findJobRecord(jobId);
+    return record ? job({ ...record.stored, path: record.relative }) : null;
+};
+export const saveJob = async value => {
+    const item = job({ ...value, updatedAt: new Date().toISOString() });
+    return locked(`job:${item.jobId}`, async () => {
+        const existing = item.path ? { relative: item.path } : await findJobRecord(item.jobId);
+        const relative = existing?.relative
+            || `${DIR.jobs}/${item.createdAt.slice(0, 10)}-${slugify(item.title)}-${item.jobId.slice(0, 8)}.md`;
+        item.path = relative;
+        await write(relative, jobMarkdown(item));
+        return item;
+    });
+};
+export const updateJob = async (jobId, update = {}) => locked(`job:${jobId}`, async () => {
+    const current = await getJob(jobId);
+    if (!current) throw Object.assign(new Error('Job not found.'), { statusCode: 404 });
+    const item = job({
+        ...current,
+        ...update,
+        attempts: update.attempts === undefined ? current.attempts : update.attempts,
+        acceptanceCriteria: update.acceptanceCriteria === undefined ? current.acceptanceCriteria : update.acceptanceCriteria,
+        createdAt: current.createdAt,
+        updatedAt: new Date().toISOString(),
+        path: current.path,
+    });
+    await write(item.path, jobMarkdown(item));
+    return item;
+});
 export const listJobs = async ({ limit = 100 } = {}) => {
     const result = [];
     for (const relative of await files(DIR.jobs)) {
         try {
             const raw = await read(relative);
             const parsed = parseFrontmatter(raw);
-            const instructions = parsed.body.match(/## Instructions\s+([\s\S]*?)(?:\n## Result|$)/)?.[1]?.trim() || '';
-            result.push({ ...job(unblock(raw, 'job') || { ...parsed.data, instructions }), path: toUnixPath(relative) });
+            const instructions = parsed.body.match(/## Instructions\s+([\s\S]*?)(?:\n## Expected result|$)/)?.[1]?.trim() || '';
+            result.push(job({ ...(unblock(raw, 'job') || { ...parsed.data, instructions }), path: toUnixPath(relative) }));
         } catch (error) { console.error('[store] Could not read job:', error.message); }
     }
     return result.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, Math.min(Number(limit) || 100, 500));
