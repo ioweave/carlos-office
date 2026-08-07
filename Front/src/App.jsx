@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Toaster, toast } from 'sonner';
 import api from './api';
 import Sidebar from './components/Sidebar';
+import RuntimeWorkflowBanner from './components/RuntimeWorkflowBanner';
 import ChatPage from './pages/ChatPage';
 import OfficeMapPage from './pages/OfficeMapPage';
 import AgentsPage from './pages/AgentsPage';
@@ -61,15 +62,14 @@ export default function App() {
         setActive('chat');
     };
 
-    const page = {
-        chat: <ChatPage agents={agents} health={health} openRequest={chatRequest} />,
+    const secondaryPage = {
         map: <OfficeMapPage agents={agents} onOpenConversation={openConversationFromMap} />,
         agents: <AgentsPage agents={agents} setAgents={setAgents} />,
         jobs: <JobsConsolePage />,
         tools: <ToolsPage tools={tools} />,
         memory: <MemoryPage health={health} />,
         settings: <SettingsPage health={health} />,
-    }[active];
+    }[active] || null;
 
     return (
         <div className="office-shell">
@@ -80,8 +80,16 @@ export default function App() {
                         <div className="loader" />
                         <span>Starting Carlos Office…</span>
                     </div>
-                ) : page}
+                ) : (
+                    <>
+                        <div className="office-shell__page" hidden={active !== 'chat'}>
+                            <ChatPage agents={agents} health={health} openRequest={chatRequest} />
+                        </div>
+                        {active !== 'chat' && secondaryPage}
+                    </>
+                )}
             </main>
+            {!loading && <RuntimeWorkflowBanner activePage={active} setActive={setActive} />}
             <Toaster richColors theme={theme === 'light' ? 'light' : 'dark'} position="bottom-right" />
         </div>
     );
