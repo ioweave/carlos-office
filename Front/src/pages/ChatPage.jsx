@@ -327,10 +327,17 @@ export default function ChatPage({ agents, health, openRequest }) {
                     <div className="message-column">
                         {messages.map((item, index) => (
                             <article key={`${item.createdAt}-${index}`} className={`chat-message ${item.role === 'user' ? 'user' : 'assistant'} ${item.error ? 'error' : ''}`}>
-                                <div className="message-author-avatar">{item.role === 'user' ? 'C' : agent?.name?.[0] || 'N'}</div>
                                 <div className="message-content-wrap">
-                                    <div className="message-meta"><strong>{item.role === 'user' ? 'Carlos' : agent?.name || 'Nora'}</strong><span>{formatDate(item.createdAt)}</span>{item.model?.model && <span>{item.model.provider} · {item.model.model}</span>}
-                                        {item.role === 'assistant' && <button type="button" onClick={() => speaking === index ? stopSpeech() : speak(item.content, index)} aria-label="Read response aloud">{speaking === index ? <IconPlayerStop size={15} /> : <IconVolume size={15} />}</button>}
+                                    <div className="message-meta">
+                                        <strong className="meta-message-name">
+                                            {item.role === 'user' 
+                                                ? 'Carlos' 
+                                                : agent?.name || 'Nora'
+                                            }
+                                            {item.role === 'assistant' && <button type="button" onClick={() => speaking === index ? stopSpeech() : speak(item.content, index)} aria-label="Read response aloud">{speaking === index ? <IconPlayerStop size={15} /> : <IconVolume size={15} />}</button>}
+                                        </strong>
+                                        <span>{formatDate(item.createdAt)}</span>
+                                        {item.model?.model && <span>{item.model.provider} · {item.model.model}</span>}
                                     </div>
                                     {item.role === 'assistant' ? <MarkdownMessage content={item.content} /> : <div className="user-message-text">{item.content}</div>}
                                     {!!item.attachments?.length && <div className="message-attachments">{item.attachments.map(file => <button type="button" key={file.attachmentId || file.name} onClick={() => downloadAttachment(file)} disabled={file.local}><IconFile size={17} /><span><strong>{file.name}</strong><small>{formatBytes(file.size)}</small></span>{!file.local && <IconDownload size={14} />}</button>)}</div>}

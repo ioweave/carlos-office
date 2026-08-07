@@ -95,7 +95,7 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .message-assistant .message-avatar { color: rgb(var(--content-inv)); background: rgb(var(--accent)); border-color: transparent; }
 .message-body { min-width: 0; padding: 14px 16px; background: rgb(var(--surface-1)); border: 1px solid rgb(var(--line-muted)); border-radius: 14px; }
 .message-error .message-body { border-color: rgba(var(--danger), .45); }
-.message-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.message-meta { display: flex; flex-flow: column nowrap; align-items: end !important; gap: 8px; margin-bottom: 8px; }
 .message-meta span { font-size: 11px; color: rgb(var(--content-3)); }
 .message-content { white-space: pre-wrap; line-height: 1.65; color: rgb(var(--content)); }
 .tool-events { margin-top: 12px; display: grid; gap: 7px; }
@@ -233,4 +233,9 @@ code { color: rgb(var(--info)); background: rgba(var(--info), .08); padding: 2px
     .form-grid, .settings-grid { grid-template-columns: 1fr; }
     .span-2 { grid-column: span 1; }
     .tool-list { grid-template-columns: 1fr; }
+}
+
+.message-meta > .meta-message-name { 
+    display: flex;
+    align-items: center; 
 }

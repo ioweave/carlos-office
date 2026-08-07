@@ -45,6 +45,7 @@
 }
 
 .chat-message.user .user-message-text {
+    text-align: right !important;
     display: block !important;
     inline-size: min(100%, 760px) !important;
     max-inline-size: min(100%, 760px) !important;
