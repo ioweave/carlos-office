@@ -5,7 +5,7 @@ import Sidebar from './components/Sidebar';
 import ChatPage from './pages/ChatPage';
 import OfficeMapPage from './pages/OfficeMapPage';
 import AgentsPage from './pages/AgentsPage';
-import JobsPage from './pages/JobsPage';
+import JobsConsolePage from './pages/JobsConsolePage';
 import ToolsPage from './pages/ToolsPage';
 import MemoryPage from './pages/MemoryPage';
 import SettingsPage from './pages/SettingsPage';
@@ -65,7 +65,7 @@ export default function App() {
         chat: <ChatPage agents={agents} health={health} openRequest={chatRequest} />,
         map: <OfficeMapPage agents={agents} onOpenConversation={openConversationFromMap} />,
         agents: <AgentsPage agents={agents} setAgents={setAgents} />,
-        jobs: <JobsPage />,
+        jobs: <JobsConsolePage />,
         tools: <ToolsPage tools={tools} />,
         memory: <MemoryPage health={health} />,
         settings: <SettingsPage health={health} />,
