@@ -7,10 +7,12 @@ import {
     updateJob as updateStoredJob,
 } from './officeStore.mjs';
 import { getVaultPath, invalidateIndex } from './memoryCore.mjs';
+import { getExecutionContext } from './executionContext.mjs';
+import { attachJobToWorkflow, ensureRuntimeWorkflow, workflowForJob } from './runtimeWorkflows.mjs';
 
 const traces = new Map();
 const traceTtlMs = Math.max(60_000, Number(process.env.JOB_TRACE_RETENTION_MS || 86_400_000));
-const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'awaiting_approval']);
+const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'needs_attention', 'awaiting_approval']);
 const clone = value => structuredClone(value);
 const now = () => new Date().toISOString();
 
@@ -20,6 +22,10 @@ const traceFrom = job => ({
     attempts: clone(job.attempts || []),
     messages: clone(job.messages || []),
     result: String(job.result || ''),
+    workflowId: String(job.workflowId || workflowForJob(job.jobId) || ''),
+    waitingOn: String(job.waitingOn || ''),
+    attentionReason: String(job.attentionReason || ''),
+    attentionMessage: String(job.attentionMessage || ''),
     retainedAt: now(),
     expiresAt: new Date(Date.now() + traceTtlMs).toISOString(),
 });
@@ -40,9 +46,21 @@ const mergeTrace = job => {
         attempts: clone(trace.attempts),
         messages: clone(trace.messages),
         result: trace.result,
+        workflowId: trace.workflowId,
+        waitingOn: trace.waitingOn,
+        attentionReason: trace.attentionReason,
+        attentionMessage: trace.attentionMessage,
         traceRetention: 'memory',
         traceExpiresAt: trace.expiresAt,
-    } : { ...job, traceRetention: 'receipt-only', traceExpiresAt: null };
+    } : {
+        ...job,
+        workflowId: workflowForJob(job.jobId),
+        waitingOn: job.status === 'needs_attention' || job.status === 'awaiting_approval' ? 'carlos' : '',
+        attentionReason: '',
+        attentionMessage: '',
+        traceRetention: 'receipt-only',
+        traceExpiresAt: null,
+    };
 };
 
 const compactUpdate = (next, update) => {
@@ -72,9 +90,23 @@ const deleteStoredJob = async jobId => {
 
 export const createJob = async value => {
     const stored = await createStoredJob(value);
-    traces.set(stored.jobId, traceFrom(stored));
-    await updateStoredJob(stored.jobId, compactUpdate(stored, { attempts: [], messages: [], result: '' }));
-    return mergeTrace(stored);
+    const context = getExecutionContext();
+    let workflowId = '';
+    if (context.agentId === 'nora' && context.requestId) {
+        const workflow = ensureRuntimeWorkflow({
+            requestId: context.requestId,
+            conversationId: context.conversationId,
+            objective: context.objective,
+            title: context.objective || stored.title,
+            plan: 'Nora delegated one or more jobs from the current request. Workers execute, Vera verifies, then Nora performs final plan review.',
+        });
+        workflowId = workflow.workflowId;
+        attachJobToWorkflow(workflowId, stored);
+    }
+    const decorated = { ...stored, workflowId, waitingOn: stored.assignedAgent };
+    traces.set(stored.jobId, traceFrom(decorated));
+    await updateStoredJob(stored.jobId, compactUpdate(decorated, { attempts: [], messages: [], result: '' }));
+    return mergeTrace(decorated);
 };
 
 export const getJob = async jobId => mergeTrace(await getStoredJob(jobId));
@@ -95,7 +127,7 @@ export const updateJob = async (jobId, update = {}) => {
     };
     traces.set(jobId, traceFrom(next));
     const receipt = await updateStoredJob(jobId, compactUpdate(next, update));
-    return mergeTrace({ ...receipt, result: terminalStatuses.has(next.status) ? receipt.result : '' });
+    return mergeTrace({ ...receipt, workflowId: next.workflowId, result: terminalStatuses.has(next.status) ? receipt.result : '' });
 };
 
 export const deleteJob = async jobId => {
