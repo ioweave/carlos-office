@@ -1,4 +1,5 @@
-.office-map__inspector {
+.office-map__inspector,
+.office-map__sidebar {
     scrollbar-width: thin;
     scrollbar-color:
         color-mix(in srgb, var(--color-text-faint) 62%, transparent)
