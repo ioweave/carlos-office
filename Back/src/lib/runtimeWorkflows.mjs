@@ -126,27 +126,35 @@ const summarizeWorkflow = (workflow, jobs = []) => {
     const failedJob = members.find(job => job.status === 'failed');
     const cancelledJob = members.find(job => job.status === 'cancelled');
     const activeJob = members.find(job => active.has(job.status));
-    const allCompleted = members.length === workflow.jobIds.length && members.every(job => job.status === 'completed');
+    const queuedJob = members.find(job => job.status === 'queued');
+    const allKnown = members.length === workflow.jobIds.length;
+    const allCompleted = allKnown && members.every(job => job.status === 'completed');
+    const allTerminal = allKnown && members.every(job => terminal.has(job.status));
     let status = workflow.status;
     let stage = workflow.stage;
     let waitingOn = workflow.waitingOn;
     let attentionReason = workflow.attentionReason;
     let attentionMessage = workflow.attentionMessage;
-    if (attentionJob) {
+
+    if (activeJob || queuedJob) {
+        const current = activeJob || queuedJob;
+        status = 'running';
+        stage = current.status;
+        waitingOn = current.status === 'qc_review' ? 'vera' : current.status === 'nora_review' ? 'nora' : current.assignedAgent;
+    } else if (allCompleted) {
+        status = 'completed';
+        stage = workflow.stage === 'delivered' ? 'delivered' : 'complete';
+        waitingOn = workflow.stage === 'delivered' ? '' : 'nora';
+    } else if (allTerminal && attentionJob) {
         status = 'needs_attention'; stage = 'needs-carlos'; waitingOn = 'carlos';
         attentionReason = attentionJob.attentionReason || (attentionJob.qcVerdict === 'revise' ? 'vera_iteration_limit' : 'nora_iteration_limit');
         attentionMessage = attentionJob.attentionMessage || attentionJob.qcFeedback || `${attentionJob.title} needs a decision.`;
-    } else if (failedJob) {
+    } else if (allTerminal && failedJob) {
         status = 'failed'; stage = 'failed'; waitingOn = 'carlos'; attentionReason = 'job_failed'; attentionMessage = failedJob.lastError || `${failedJob.title} failed.`;
-    } else if (cancelledJob && members.every(job => terminal.has(job.status))) {
+    } else if (allTerminal && cancelledJob) {
         status = 'cancelled'; stage = 'cancelled'; waitingOn = '';
-    } else if (allCompleted) {
-        status = 'completed'; stage = 'complete'; waitingOn = 'nora';
-    } else if (activeJob) {
-        status = 'running'; stage = activeJob.status; waitingOn = activeJob.status === 'qc_review' ? 'vera' : activeJob.status === 'nora_review' ? 'nora' : activeJob.assignedAgent;
-    } else if (members.some(job => job.status === 'queued')) {
-        status = 'running'; stage = 'queued'; waitingOn = members.find(job => job.status === 'queued')?.assignedAgent || 'worker';
     }
+
     return { ...workflow, status, stage, waitingOn, attentionReason, attentionMessage, jobs: members.map(job => ({
         jobId: job.jobId, title: job.title, assignedAgent: job.assignedAgent, status: job.status,
         currentIteration: job.currentIteration, maxIterations: job.maxIterations, qcVerdict: job.qcVerdict,
