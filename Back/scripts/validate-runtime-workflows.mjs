@@ -12,25 +12,31 @@ const { runWithExecutionContext } = await import('../src/lib/executionContext.mj
 const { createJob, listJobs, updateJob } = await import('../src/lib/jobLifecycle.mjs');
 const { emitRuntimeEvent, getRuntimeWorkflow, listRuntimeEvents } = await import('../src/lib/runtimeWorkflows.mjs');
 
+const createInRequest = (requestId, value) => runWithExecutionContext({
+    requestId,
+    conversationId: 'temporary-chat-test',
+    objective: 'Evaluate a delegated workflow.',
+    agentId: 'nora',
+}, () => createJob({ createdBy: 'nora', priority: 'normal', maxIterations: 2, status: 'queued', ...value }));
+
 try {
-    const job = await runWithExecutionContext({
-        requestId: 'request-test-1',
-        conversationId: 'temporary-chat-test',
-        objective: 'Evaluate a delegated workflow.',
-        agentId: 'nora',
-    }, () => createJob({
-        createdBy: 'nora',
+    const job = await createInRequest('request-test-1', {
         assignedAgent: 'iris',
         title: 'Research test',
         instructions: 'Research the requested subject.',
         expectedResult: 'A verified brief.',
         acceptanceCriteria: ['Evidence is verified.'],
-        priority: 'normal',
-        maxIterations: 2,
-        status: 'queued',
-    }));
+    });
+    const sibling = await createInRequest('request-test-1', {
+        assignedAgent: 'marco',
+        title: 'Commercial test',
+        instructions: 'Assess the commercial impact.',
+        expectedResult: 'A commercial assessment.',
+        acceptanceCriteria: ['Trade-offs are explicit.'],
+    });
 
     assert.ok(job.workflowId, 'Nora-created job must attach to the originating runtime workflow.');
+    assert.equal(job.workflowId, sibling.workflowId, 'Sibling jobs created by one Nora request must share a workflow.');
     assert.equal(job.waitingOn, 'iris');
 
     emitRuntimeEvent({
@@ -57,9 +63,19 @@ try {
         qcFeedback: 'One mandatory criterion remains unmet.',
         currentIteration: 2,
     });
+    await updateJob(sibling.jobId, { status: 'running', waitingOn: 'marco', currentIteration: 1 });
 
-    const jobs = await listJobs({ limit: 20 });
-    const workflow = getRuntimeWorkflow(job.workflowId, { jobs });
+    let jobs = await listJobs({ limit: 20 });
+    let workflow = getRuntimeWorkflow(job.workflowId, { jobs });
+    assert.equal(workflow.status, 'running', 'One attention job must not end the workflow while a sibling is still executing.');
+    assert.equal(workflow.waitingOn, 'marco');
+
+    await updateJob(sibling.jobId, {
+        status: 'completed', waitingOn: '', result: 'Commercial assessment complete.',
+        qcVerdict: 'pass', qcScore: 96, currentIteration: 1,
+    });
+    jobs = await listJobs({ limit: 20 });
+    workflow = getRuntimeWorkflow(job.workflowId, { jobs });
     assert.equal(workflow.status, 'needs_attention');
     assert.equal(workflow.waitingOn, 'carlos');
     assert.equal(workflow.attentionReason, 'vera_iteration_limit');
