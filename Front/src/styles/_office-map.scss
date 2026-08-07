@@ -293,19 +293,78 @@
 }
 
 .office-map__state {
-    display: flex;
-    justify-content: space-between;
-    gap: 8px;
+    display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: center;
+    gap: 4px 12px;
     margin: 12px;
     padding: 10px 12px;
+    border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
     background: var(--color-surface-soft);
-    text-transform: capitalize;
+
+    strong,
+    span {
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    strong {
+        color: var(--color-text);
+        font-size: 0.74rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        line-height: 1.25;
+        text-transform: uppercase;
+    }
+
+    span {
+        color: var(--color-text-muted);
+        font-size: 0.68rem;
+        line-height: 1.35;
+    }
+
+    &--queued {
+        border-color: color-mix(in srgb, var(--color-text-faint) 45%, var(--color-border));
+    }
+
+    &--running {
+        border-color: color-mix(in srgb, var(--color-warning) 46%, var(--color-border));
+        background: color-mix(in srgb, var(--color-warning) 8%, var(--color-surface));
+
+        strong { color: var(--color-warning); }
+    }
+
+    &--qc_review {
+        border-color: color-mix(in srgb, var(--color-success) 42%, var(--color-border));
+        background: color-mix(in srgb, var(--color-success) 7%, var(--color-surface));
+
+        strong { color: var(--color-success); }
+    }
+
+    &--nora_review {
+        border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+        background: color-mix(in srgb, var(--color-accent) 7%, var(--color-surface));
+
+        strong { color: var(--color-accent); }
+    }
+
+    &--completed {
+        border-color: color-mix(in srgb, var(--color-success) 38%, var(--color-border));
+        background: color-mix(in srgb, var(--color-success) 6%, var(--color-surface));
+
+        strong { color: var(--color-success); }
+    }
 
     &--needs_attention,
     &--awaiting_approval,
     &--failed {
-        background: color-mix(in srgb, var(--color-danger) 14%, var(--color-surface));
+        border-color: color-mix(in srgb, var(--color-danger) 52%, var(--color-border));
+        background: color-mix(in srgb, var(--color-danger) 10%, var(--color-surface));
+        box-shadow: inset 3px 0 0 color-mix(in srgb, var(--color-danger) 85%, transparent);
+
+        strong { color: var(--color-danger); }
     }
 }
 
@@ -555,6 +614,14 @@
         flex-direction: row;
         align-items: flex-end;
         justify-content: space-between;
+    }
+
+    .office-map__state {
+        grid-template-columns: minmax(0, 1fr) auto;
+
+        span {
+            text-align: right;
+        }
     }
 
     .office-map__legend {
