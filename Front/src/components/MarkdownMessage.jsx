@@ -21,6 +21,7 @@ const inline = (value, prefix = 'inline') => {
         if (match.index > cursor) result.push(source.slice(cursor, match.index));
         const token = match[0];
         const key = `${prefix}-${index++}`;
+
         if (token.startsWith('`')) {
             result.push(<code key={key}>{token.slice(1, -1)}</code>);
         } else if (token.startsWith('**')) {
@@ -32,6 +33,7 @@ const inline = (value, prefix = 'inline') => {
                 ? <a key={key} href={href} target="_blank" rel="noreferrer">{link[1]}</a>
                 : token);
         }
+
         cursor = match.index + token.length;
     }
 
@@ -45,6 +47,7 @@ const tableCells = line => line.trim().replace(/^\||\|$/g, '').split('|').map(ce
 const specialLine = (lines, index) => {
     const line = lines[index] || '';
     const next = lines[index + 1] || '';
+
     return (
         /^```/.test(line)
         || /^#{1,6}\s+/.test(line)
@@ -63,6 +66,7 @@ export default function MarkdownMessage({ content }) {
 
     while (index < lines.length) {
         const line = lines[index];
+
         if (!line.trim()) {
             index += 1;
             continue;
@@ -72,14 +76,16 @@ export default function MarkdownMessage({ content }) {
             const language = line.slice(3).trim();
             const code = [];
             index += 1;
+
             while (index < lines.length && !lines[index].startsWith('```')) {
                 code.push(lines[index]);
                 index += 1;
             }
+
             if (index < lines.length) index += 1;
             blocks.push(
-                <div className="markdown-code" key={`code-${blocks.length}`}>
-                    {language && <div className="markdown-code-label">{language}</div>}
+                <div className="rich-text__code" key={`code-${blocks.length}`}>
+                    {language && <div className="rich-text__code-label">{language}</div>}
                     <pre><code>{code.join('\n')}</code></pre>
                 </div>,
             );
@@ -97,10 +103,12 @@ export default function MarkdownMessage({ content }) {
 
         if (/^>\s?/.test(line)) {
             const quoted = [];
+
             while (index < lines.length && /^>\s?/.test(lines[index])) {
                 quoted.push(lines[index].replace(/^>\s?/, ''));
                 index += 1;
             }
+
             blocks.push(
                 <blockquote key={`quote-${blocks.length}`}>
                     {quoted.map((item, quoteIndex) => (
@@ -116,15 +124,18 @@ export default function MarkdownMessage({ content }) {
 
         const unordered = line.match(/^\s*[-*+]\s+(.+)$/);
         const ordered = line.match(/^\s*\d+\.\s+(.+)$/);
+
         if (unordered || ordered) {
             const items = [];
             const expression = unordered ? /^\s*[-*+]\s+(.+)$/ : /^\s*\d+\.\s+(.+)$/;
+
             while (index < lines.length) {
                 const match = lines[index].match(expression);
                 if (!match) break;
                 items.push(match[1]);
                 index += 1;
             }
+
             const Tag = unordered ? 'ul' : 'ol';
             blocks.push(
                 <Tag key={`list-${blocks.length}`}>
@@ -140,12 +151,14 @@ export default function MarkdownMessage({ content }) {
             const headers = tableCells(line);
             index += 2;
             const rows = [];
+
             while (index < lines.length && lines[index].includes('|') && lines[index].trim()) {
                 rows.push(tableCells(lines[index]));
                 index += 1;
             }
+
             blocks.push(
-                <div className="markdown-table-wrap" key={`table-${blocks.length}`}>
+                <div className="rich-text__table" key={`table-${blocks.length}`}>
                     <table>
                         <thead>
                             <tr>{headers.map((cell, cellIndex) => <th key={`head-${cellIndex}`}>{inline(cell, `th-${cellIndex}`)}</th>)}</tr>
@@ -173,10 +186,12 @@ export default function MarkdownMessage({ content }) {
 
         const paragraph = [line.trim()];
         index += 1;
+
         while (index < lines.length && lines[index].trim() && !specialLine(lines, index)) {
             paragraph.push(lines[index].trim());
             index += 1;
         }
+
         blocks.push(
             <p key={`paragraph-${blocks.length}`}>
                 {inline(paragraph.join(' '), `paragraph-${blocks.length}`)}
@@ -184,5 +199,5 @@ export default function MarkdownMessage({ content }) {
         );
     }
 
-    return <div className="markdown-body">{blocks}</div>;
+    return <div className="rich-text">{blocks}</div>;
 }

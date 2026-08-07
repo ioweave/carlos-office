@@ -25,40 +25,42 @@ export default function Sidebar({ active, setActive, health, theme, setTheme }) 
     const working = health?.jobs?.active?.length || 0;
 
     return (
-        <aside className="sidebar">
-            <button className="brand" onClick={() => setActive('chat')} aria-label="Open Carlos Office chat">
-                <div className="brand-mark">C</div>
-                <div>
-                    <strong>Carlos Office</strong>
-                </div>
+        <aside className="office-nav">
+            <button className="office-nav__brand" onClick={() => setActive('chat')} aria-label="Open Carlos Office chat">
+                <span className="office-nav__mark">C</span>
+                <strong>Carlos Office</strong>
             </button>
 
-            <nav className="nav-list" aria-label="Office navigation">
+            <nav className="office-nav__menu" aria-label="Office navigation">
                 {items.map(item => {
                     const Icon = item.icon;
+                    const current = active === item.id;
+
                     return (
                         <button
                             key={item.id}
-                            className={`nav-item ${active === item.id ? 'active' : ''}`}
+                            className={`office-nav__item ${current ? 'office-nav__item--active' : ''}`}
                             onClick={() => setActive(item.id)}
+                            aria-current={current ? 'page' : undefined}
                         >
                             <Icon size={19} stroke={1.7} />
                             <span>{item.label}</span>
-                            {item.id === 'map' && working > 0 && <small className="nav-count">{working}</small>}
+                            {item.id === 'map' && working > 0 && <small className="office-nav__count">{working}</small>}
                         </button>
                     );
                 })}
             </nav>
 
-            <div className="sidebar-footer">
-                <div className="system-card">
-                    <span className={`live-dot ${health?.status === 'online' ? 'online' : ''}`} />
+            <div className="office-nav__footer">
+                <div className="office-nav__status">
+                    <span className={`office-nav__status-dot ${health?.status === 'online' ? 'office-nav__status-dot--online' : ''}`} />
                     <div>
                         <strong>{working ? `${working} agent${working === 1 ? '' : 's'} working` : (health?.status === 'online' ? 'Office ready' : 'Office unavailable')}</strong>
                         <span>{health?.ollama?.online ? 'Ollama connected' : 'Ollama offline'}</span>
                     </div>
                 </div>
-                <button className="theme-button" onClick={() => setTheme(nextTheme)}>
+
+                <button className="office-nav__theme" onClick={() => setTheme(nextTheme)}>
                     {theme === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}
                     <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
                 </button>

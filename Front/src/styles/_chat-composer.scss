@@ -1,0 +1,40 @@
+.chat {
+    &__composer-zone {
+        position: absolute;
+        z-index: 12;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        width: min(100%, calc(var(--content-chat) + 32px));
+        margin: 0 auto;
+        padding: 0 10px 10px;
+        background: linear-gradient(to bottom, transparent, var(--color-bg) 30%);
+        pointer-events: none;
+    }
+
+    &__pending-files {
+        margin: 0 6px 6px;
+        pointer-events: auto;
+        > div { background: var(--color-surface-raised); > button { display: grid; width: 24px; height: 24px; place-items: center; padding: 0; border: 0; color: var(--color-text-faint); background: transparent; } }
+    }
+
+    &__composer {
+        overflow: hidden;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-xl);
+        background: var(--color-surface-raised);
+        box-shadow: var(--shadow-composer);
+        pointer-events: auto;
+        &:focus-within { border-color: var(--color-border-strong); box-shadow: 0 0 0 1px var(--color-border), var(--shadow-composer); }
+        textarea { display: block; width: 100%; min-height: 54px; max-height: 220px; padding: 16px 16px 7px; resize: none; overflow-y: auto; border: 0; border-radius: 0; background: transparent; box-shadow: none; font-size: 15px; line-height: 1.45; &:focus { outline: 0; } }
+    }
+
+    &__composer-toolbar { justify-content: space-between; gap: 8px; padding: 4px 7px 7px; }
+    &__composer-tools { min-width: 0; gap: 2px; > button { display: grid; width: 36px; height: 36px; flex: 0 0 auto; place-items: center; padding: 0; border: 0; border-radius: 50%; color: var(--color-text-muted); background: transparent; &:hover { color: var(--color-text); background: var(--color-surface-soft); } } }
+    &__composer-tool--active { color: var(--color-danger) !important; background: color-mix(in srgb, var(--color-danger) 10%, transparent) !important; }
+    &__composer-context { display: none; min-width: 0; overflow: hidden; color: var(--color-text-faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+    &__send, &__stop { display: grid; width: 36px; height: 36px; flex: 0 0 auto; place-items: center; padding: 0; border: 0; border-radius: 50%; }
+    &__send { color: var(--color-text-inverse); background: var(--color-text); &:disabled { color: var(--color-text-faint); background: var(--color-surface-soft); } }
+    &__stop { color: #fff; background: var(--color-danger); }
+    &__composer-hint { margin: 5px 0 0; color: var(--color-text-faint); font-size: 9px; text-align: center; pointer-events: none; }
+}

@@ -72,10 +72,15 @@ export default function App() {
     }[active];
 
     return (
-        <div className="app-shell">
+        <div className="office-shell">
             <Sidebar active={active} setActive={setActive} health={health} theme={theme} setTheme={setTheme} />
-            <main className="main-content">
-                {loading ? <div className="loading-screen"><div className="loader" /><span>Starting Carlos Office…</span></div> : page}
+            <main className="office-shell__main">
+                {loading ? (
+                    <div className="office-shell__loading">
+                        <div className="loader" />
+                        <span>Starting Carlos Office…</span>
+                    </div>
+                ) : page}
             </main>
             <Toaster richColors theme={theme === 'light' ? 'light' : 'dark'} position="bottom-right" />
         </div>

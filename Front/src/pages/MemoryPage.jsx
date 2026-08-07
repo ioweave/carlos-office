@@ -9,7 +9,6 @@ import {
 } from '@tabler/icons-react';
 import { toast } from 'sonner';
 import api from '../api';
-import '../memory.scss';
 
 const emptyEditor = {
     title: '',
