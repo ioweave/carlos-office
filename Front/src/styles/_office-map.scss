@@ -213,11 +213,13 @@
 .office-map__inspector {
     position: absolute;
     z-index: 24;
-    display: grid;
+    display: block;
     width: min(420px, calc(100% - 20px));
     max-height: min(580px, calc(100% - 20px));
-    grid-template-rows: auto minmax(0, 1fr);
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
     border: 1px solid var(--color-border-strong);
     border-radius: 12px;
     background: color-mix(in srgb, var(--color-surface-raised) 96%, transparent);
