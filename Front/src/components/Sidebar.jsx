@@ -30,7 +30,6 @@ export default function Sidebar({ active, setActive, health, theme, setTheme }) 
                 <div className="brand-mark">C</div>
                 <div>
                     <strong>Carlos Office</strong>
-                    <span>Private local operations</span>
                 </div>
             </button>
 
