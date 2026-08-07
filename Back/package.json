@@ -13,7 +13,8 @@
     "mcp": "node --env-file=.env src/mcp/server.mjs",
     "playwright:install": "playwright install chromium",
     "validate:capabilities": "node scripts/validate-agent-capabilities.mjs",
-    "validate:retention": "node scripts/validate-retention-lifecycle.mjs"
+    "validate:retention": "node scripts/validate-retention-lifecycle.mjs",
+    "validate:workflows": "node scripts/validate-runtime-workflows.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
