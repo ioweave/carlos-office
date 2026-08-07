@@ -8,6 +8,12 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 
+# Carlos Office local integration configuration and OAuth/session material
+Back/mcp.config.json
+Back/mcp.monitors.json
+Back/.google-workspace-mcp/
+Back/.mcp-auth/
+
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
@@ -43,7 +49,7 @@ build/Release
 node_modules/
 jspm_packages/
 
-# Snowpack dependency directory (https://snowpack.dev/)
+# Snowpack dependency directory
 web_modules/
 
 # TypeScript cache

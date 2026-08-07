@@ -6,6 +6,7 @@ import { agentDefinitions, defaultAgentConfig } from '../agents/agents.config.mj
 import { createJob, getJob, listAgentConfigs, listJobs } from './officeStore.mjs';
 import { listProjectFiles, readProjectFile, searchProjectFiles } from './projectFiles.mjs';
 import { checkPage, inspectPage, interactWithPage } from './browserTools.mjs';
+import { capabilityDefinitions } from './capabilityRegistry.mjs';
 
 const allAgents = ['nora', 'marco', 'luma', 'dex', 'iris', 'vera'];
 const sourceAgents = ['nora', 'dex', 'iris', 'vera'];
@@ -273,7 +274,7 @@ const toolDefinitions = [
     },
     {
         name: 'create_agent_job',
-        description: 'Create and automatically run a bounded worker-to-Vera QC loop for Marco, Luma, Dex, or Iris. The job repeats until Vera passes it or the iteration limit is reached.',
+        description: 'Create and automatically run a bounded worker-to-Vera QC loop for Marco, Luma, Dex, or Iris. Vera verifies the work and Nora performs final plan approval before completion.',
         allowedAgents: ['nora'],
         inputSchema: {
             type: 'object',
@@ -287,7 +288,7 @@ const toolDefinitions = [
                     items: { type: 'string' },
                     minItems: 1,
                     maxItems: 20,
-                    description: 'Objective pass/fail conditions for Vera.',
+                    description: 'Objective pass/fail conditions for Vera and Nora.',
                 },
                 priority: { type: 'string', enum: ['low', 'normal', 'high'], default: 'normal' },
                 maxIterations: { type: 'integer', minimum: 1, maximum: 8, default: 2 },
@@ -301,15 +302,8 @@ const toolDefinitions = [
             priority = 'normal', maxIterations = Number(process.env.JOB_DEFAULT_ITERATIONS || 2), autoRun = true,
         }) => {
             const job = await createJob({
-                createdBy: 'nora',
-                assignedAgent,
-                title,
-                instructions,
-                expectedResult,
-                acceptanceCriteria,
-                priority,
-                maxIterations,
-                status: 'queued',
+                createdBy: 'nora', assignedAgent, title, instructions, expectedResult,
+                acceptanceCriteria, priority, maxIterations, status: 'queued',
             });
             let execution = { queued: false };
             if (autoRun) {
@@ -321,14 +315,9 @@ const toolDefinitions = [
     },
     {
         name: 'get_agent_job',
-        description: 'Read one delegated job, including its current Vera verdict, inter-agent communication, and iteration history.',
+        description: 'Read one delegated job, including worker output, Vera verification, Nora approval state, inter-agent communication, and iteration history.',
         allowedAgents: ['nora'],
-        inputSchema: {
-            type: 'object',
-            properties: { jobId: { type: 'string' } },
-            required: ['jobId'],
-            additionalProperties: false,
-        },
+        inputSchema: { type: 'object', properties: { jobId: { type: 'string' } }, required: ['jobId'], additionalProperties: false },
         execute: async ({ jobId }) => {
             const job = await getJob(jobId);
             if (!job) throw Object.assign(new Error('Job not found.'), { statusCode: 404 });
@@ -337,25 +326,16 @@ const toolDefinitions = [
     },
     {
         name: 'list_agent_jobs',
-        description: 'List recent delegated jobs and their Vera QC status.',
+        description: 'List recent delegated jobs and their worker/Vera/Nora approval state.',
         allowedAgents: ['nora'],
-        inputSchema: {
-            type: 'object',
-            properties: { limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
-            additionalProperties: false,
-        },
+        inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 } }, additionalProperties: false },
         execute: async ({ limit = 20 }) => listJobs({ limit }),
     },
     {
         name: 'retry_agent_job',
         description: 'Continue a failed, cancelled, or unaccepted job with up to two additional bounded iterations.',
         allowedAgents: ['nora'],
-        inputSchema: {
-            type: 'object',
-            properties: { jobId: { type: 'string' } },
-            required: ['jobId'],
-            additionalProperties: false,
-        },
+        inputSchema: { type: 'object', properties: { jobId: { type: 'string' } }, required: ['jobId'], additionalProperties: false },
         execute: async ({ jobId }) => {
             const { retryJob } = await import('./jobRunner.mjs');
             return retryJob(jobId);
@@ -365,12 +345,7 @@ const toolDefinitions = [
         name: 'cancel_agent_job',
         description: 'Stop a queued or running job, abort its in-flight model request, and persist the cancelled status in its Markdown record.',
         allowedAgents: ['nora'],
-        inputSchema: {
-            type: 'object',
-            properties: { jobId: { type: 'string' } },
-            required: ['jobId'],
-            additionalProperties: false,
-        },
+        inputSchema: { type: 'object', properties: { jobId: { type: 'string' } }, required: ['jobId'], additionalProperties: false },
         execute: async ({ jobId }) => {
             const { cancelJob } = await import('./jobRunner.mjs');
             return cancelJob(jobId);
@@ -392,9 +367,7 @@ const toolDefinitions = [
         allowedAgents: ['nora'],
         inputSchema: {
             type: 'object',
-            properties: {
-                scope: { type: 'string', enum: ['terminal', 'completed', 'cancelled', 'all'], default: 'terminal' },
-            },
+            properties: { scope: { type: 'string', enum: ['terminal', 'completed', 'cancelled', 'all'], default: 'terminal' } },
             additionalProperties: false,
         },
         execute: async ({ scope = 'terminal' }) => {
@@ -402,6 +375,7 @@ const toolDefinitions = [
             return clearJobs({ scope });
         },
     },
+    ...capabilityDefinitions,
 ];
 
 export const listTools = agentId => toolDefinitions

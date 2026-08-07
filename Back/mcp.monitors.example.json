@@ -1,0 +1,30 @@
+{
+  "monitors": [
+    {
+      "id": "gmail-inbox",
+      "enabled": true,
+      "enabledIfEnv": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_WORKSPACE_EMAIL"],
+      "server": "google-workspace",
+      "tool": "manage_email",
+      "args": {
+        "operation": "triage",
+        "email": "${GOOGLE_WORKSPACE_EMAIL}"
+      },
+      "intervalMinutes": 5,
+      "description": "Periodic Gmail inbox triage snapshot for Nora."
+    },
+    {
+      "id": "calendar-agenda",
+      "enabled": true,
+      "enabledIfEnv": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_WORKSPACE_EMAIL"],
+      "server": "google-workspace",
+      "tool": "manage_calendar",
+      "args": {
+        "operation": "agenda",
+        "email": "${GOOGLE_WORKSPACE_EMAIL}"
+      },
+      "intervalMinutes": 15,
+      "description": "Periodic calendar agenda snapshot for Nora."
+    }
+  ]
+}

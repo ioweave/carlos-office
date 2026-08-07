@@ -3,18 +3,19 @@ import path from 'node:path';
 
 const DEFAULT_ROOT = path.resolve(process.cwd(), '..');
 const projectRoot = path.resolve(process.env.PROJECT_ROOT || DEFAULT_ROOT);
-const blockedSegments = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.env']);
+const blockedSegments = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage']);
 const textExtensions = new Set([
     '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.json', '.md', '.scss', '.css', '.html',
     '.yml', '.yaml', '.toml', '.txt', '.sh', '.ps1', '.xml', '.svg', '.sql', '.graphql',
 ]);
 
 const normalizeRelative = value => String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+const isSecretEnvPath = part => part === '.env' || (part.startsWith('.env.') && part !== '.env.example');
 
 const safeProjectPath = value => {
     const relative = normalizeRelative(value);
     const parts = relative.split('/').filter(Boolean);
-    if (parts.some(part => blockedSegments.has(part) || part.startsWith('.env'))) {
+    if (parts.some(part => blockedSegments.has(part) || isSecretEnvPath(part))) {
         throw Object.assign(new Error('That project path is not available to agents.'), { statusCode: 403 });
     }
     const absolute = path.resolve(projectRoot, relative || '.');
@@ -43,7 +44,7 @@ export const listProjectFiles = async ({ folder = 'Front/src', limit = 200 } = {
         }
         for (const entry of entries) {
             if (result.length >= max) break;
-            if (blockedSegments.has(entry.name) || entry.name.startsWith('.env')) continue;
+            if (blockedSegments.has(entry.name) || isSecretEnvPath(entry.name)) continue;
             const target = path.join(current, entry.name);
             if (entry.isDirectory()) await walk(target);
             else if (entry.isFile() && isReadableText(target)) {

@@ -1,0 +1,35 @@
+name: Validate agent capabilities
+
+on:
+  push:
+    branches:
+      - main
+      - staging/agent-capabilities
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout final source tree
+        uses: actions/checkout@v4
+
+      - name: Use Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.12'
+          cache: npm
+          cache-dependency-path: Back/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: Back
+        run: npm install --ignore-scripts
+
+      - name: Check backend syntax
+        run: find Back -type f -name '*.mjs' -not -path '*/node_modules/*' -print0 | xargs -0 -n1 node --check
+
+      - name: Validate agent capability contract
+        working-directory: Back
+        run: npm run validate:capabilities
