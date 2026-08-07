@@ -6,6 +6,7 @@ on:
       - main
       - staging/agent-capabilities
       - agent/retention-architecture-v4
+      - fix/live-workflows-v1
   pull_request:
   workflow_dispatch:
 
@@ -40,6 +41,10 @@ jobs:
       - name: Validate retention lifecycle
         working-directory: Back
         run: npm run validate:retention
+
+      - name: Validate live workflows
+        working-directory: Back
+        run: npm run validate:workflows
 
       - name: Install frontend dependencies
         working-directory: Front
