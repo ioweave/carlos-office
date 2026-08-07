@@ -116,10 +116,13 @@ const runAgentUnlocked = async (agentId, history = [], options = {}) => {
             : buildAutomaticProjectContext(agentId, history),
     ]);
 
-    let memory = { content: '', notes: [] };
+    let memory = { content: '', notes: [], facts: [] };
     if (options.includeMemory !== false) {
-        try { memory = await buildMemoryContext(agentId, history); }
-        catch (error) { console.error('[memory] Retrieval failed:', error.message); }
+        try {
+            memory = await buildMemoryContext(agentId, history, { projectId: options.projectId || '' });
+        } catch (error) {
+            console.error('[memory] Retrieval failed:', error.message);
+        }
     }
 
     let messages = [
@@ -208,7 +211,10 @@ const runAgentUnlocked = async (agentId, history = [], options = {}) => {
     return {
         content: response?.content || 'The model returned no text response.',
         toolEvents,
-        memoryRefs: memory.notes,
+        memoryRefs: [
+            ...(memory.notes || []),
+            ...(memory.facts || []).map(factId => `fact:${factId}`),
+        ],
         model: {
             provider: runtimeConfig.provider,
             model: runtimeConfig.model,

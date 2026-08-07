@@ -8,6 +8,7 @@ import { startMcpMonitors, stopMcpMonitors } from './src/lib/mcpMonitors.mjs';
 import { shutdownMcpClients } from './src/lib/mcpClient.mjs';
 import { ensureOfficeWorkspace } from './src/lib/officeFiles.mjs';
 import { migrateAgentRuntimeConfigs } from './src/lib/agentMigrations.mjs';
+import { startRetentionManager, stopRetentionManager } from './src/lib/retentionManager.mjs';
 
 const router = new Router(routes);
 const host = process.env.LOCAL_HOST || '127.0.0.1';
@@ -94,11 +95,17 @@ try {
 } catch (error) {
     console.error('[agents] Could not migrate runtime configurations:', error.message);
 }
+try {
+    const retention = await startRetentionManager();
+    console.log(`Retention manager: temporary chats/sources and recent job traces are volatile; cleanup every ${Math.round(retention.intervalMs / 60_000)} minute(s).`);
+} catch (error) {
+    console.error('[retention] Could not start retention manager:', error.message);
+}
 
 server.listen(port, host, async () => {
     console.log(`Carlos Office backend: http://${host}:${port}`);
     console.log('Private local company mode: authentication is disabled.');
-    console.log('Persistent application state is stored in the Obsidian vault.');
+    console.log('Obsidian stores curated knowledge, compact memory, saved chats, receipts, and configuration; disposable runtime state stays volatile.');
     try {
         const runtime = await getRuntimeDiagnostics('nora');
         console.log(`Project root: ${runtime.projectRoot}`);
@@ -117,6 +124,7 @@ server.listen(port, host, async () => {
 });
 
 const shutdown = async () => {
+    stopRetentionManager();
     stopMcpMonitors();
     await shutdownMcpClients();
     server.close(() => process.exit(0));

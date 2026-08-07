@@ -10,20 +10,22 @@ import {
     searchMemory as searchMemoryNotes,
     writeMemory as writeMemoryNote,
 } from '../lib/memory.mjs';
+import { listAgentConfigs, saveAgentConfig } from '../lib/officeStore.mjs';
 import {
-    deleteConversation as deleteStoredConversation,
-    getConversation as getStoredConversation,
-    getJob as getStoredJob,
-    hydrateConversationMessages,
-    listAgentConfigs,
-    listConversations as listStoredConversations,
-    listJobs as listStoredJobs,
-    readConversationAttachment,
-    saveAgentConfig,
-    saveConversation,
-    saveConversationAttachments,
-    updateConversation as updateStoredConversation,
-} from '../lib/officeStore.mjs';
+    deleteConversationRecord,
+    getConversationRecord,
+    hydrateConversationRecordMessages,
+    listSavedConversations,
+    promoteConversation,
+    readConversationRecordAttachment,
+    saveConversationRecord,
+    saveConversationRecordAttachments,
+    updateConversationRecord,
+} from '../lib/conversationLifecycle.mjs';
+import { temporaryConversationStatus } from '../lib/temporaryConversations.mjs';
+import { factMemoryStatus, listFacts } from '../lib/factMemory.mjs';
+import { knowledgeLifecycleStatus, listKnowledgeSources } from '../lib/knowledgeLifecycle.mjs';
+import { getJob as getLifecycleJob, listJobs as listLifecycleJobs } from '../lib/jobLifecycle.mjs';
 import {
     cancelJob,
     clearJobs,
@@ -34,10 +36,7 @@ import {
     stopAllJobs,
 } from '../lib/jobRunner.mjs';
 
-const allowedConfigFields = [
-    'provider', 'model', 'baseUrl', 'temperature', 'maxToolRounds', 'enabled', 'fallback',
-];
-
+const allowedConfigFields = ['provider', 'model', 'baseUrl', 'temperature', 'maxToolRounds', 'enabled', 'fallback'];
 const isCancellation = error => (
     error?.statusCode === 499
     || error?.code === 'EXECUTION_CANCELLED'
@@ -56,17 +55,21 @@ export default class OfficeController {
         } catch {}
 
         let memory = { online: false, path: '', notes: 0 };
-        try { memory = await getMemoryStatus(); }
-        catch (error) { memory.error = error.message; }
+        try { memory = await getMemoryStatus(); } catch (error) { memory.error = error.message; }
 
         return {
             statusCode: 200,
             body: {
                 status: 'online',
                 localOnly: true,
-                storage: 'obsidian',
+                storage: 'obsidian + volatile runtime',
                 ollama,
                 memory,
+                retention: {
+                    conversations: temporaryConversationStatus(),
+                    facts: await factMemoryStatus(),
+                    knowledge: await knowledgeLifecycleStatus(),
+                },
                 jobs: jobRunnerStatus(),
                 timestamp: new Date().toISOString(),
             },
@@ -74,23 +77,15 @@ export default class OfficeController {
     }
 
     static async listAgents() {
-        return {
-            statusCode: 200,
-            body: await listAgentConfigs(agentDefinitions, defaultAgentConfig),
-        };
+        return { statusCode: 200, body: await listAgentConfigs(agentDefinitions, defaultAgentConfig) };
     }
 
     static async updateAgent({ params, body }) {
         const agentId = params.agentId;
         if (!agentDefinitions[agentId]) return { statusCode: 404, body: { error: 'Unknown agent' } };
         const update = {};
-        allowedConfigFields.forEach(field => {
-            if (body[field] !== undefined) update[field] = body[field];
-        });
-        return {
-            statusCode: 200,
-            body: await saveAgentConfig(agentId, update, defaultAgentConfig(agentId)),
-        };
+        allowedConfigFields.forEach(field => { if (body[field] !== undefined) update[field] = body[field]; });
+        return { statusCode: 200, body: await saveAgentConfig(agentId, update, defaultAgentConfig(agentId)) };
     }
 
     static async listModels({ query }) {
@@ -101,14 +96,10 @@ export default class OfficeController {
         return { statusCode: 200, body: (response.data?.models || []).map(item => item.name) };
     }
 
-    static async listTools({ query }) {
-        return { statusCode: 200, body: listTools(query.agentId) };
-    }
-
+    static async listTools({ query }) { return { statusCode: 200, body: listTools(query.agentId) }; }
     static async invokeTool({ params, body }) {
         const agentId = body.agentId || 'nora';
-        const result = await executeTool(agentId, params.toolName, body.args || {});
-        return { statusCode: 200, body: result };
+        return { statusCode: 200, body: await executeTool(agentId, params.toolName, body.args || {}) };
     }
 
     static async listMemory({ query }) {
@@ -118,60 +109,47 @@ export default class OfficeController {
             : await listMemoryNotes({ folder: query.folder || '', limit });
         return { statusCode: 200, body: notes };
     }
-
     static async readMemory({ query }) {
         if (!query.path) return { statusCode: 400, body: { error: 'Memory path is required' } };
         return { statusCode: 200, body: await readMemoryNote({ path: query.path }) };
     }
-
     static async writeMemory({ body }) {
-        const note = await writeMemoryNote({
-            agentId: body.agentId || 'nora',
-            title: body.title,
-            content: body.content,
-            scope: body.scope,
-            tags: body.tags,
-            source: body.source,
-            path: body.path,
-            mode: body.mode,
-        });
-        return { statusCode: 200, body: note };
+        return {
+            statusCode: 200,
+            body: await writeMemoryNote({
+                agentId: body.agentId || 'nora', title: body.title, content: body.content,
+                scope: body.scope, tags: body.tags, source: body.source, path: body.path, mode: body.mode,
+            }),
+        };
+    }
+    static async listFacts({ query }) {
+        return { statusCode: 200, body: await listFacts({ scope: query.scope || '', projectId: query.projectId || '', agentId: query.agentId || '', status: query.status ?? 'active', limit: query.limit }) };
+    }
+    static async listKnowledgeSources({ query }) {
+        return { statusCode: 200, body: await listKnowledgeSources({ lifecycle: query.lifecycle || '', projectId: query.projectId || '', status: query.status || '' }) };
     }
 
     static async listConversations({ query }) {
-        return {
-            statusCode: 200,
-            body: await listStoredConversations({ limit: Math.min(Number(query.limit) || 100, 500) }),
-        };
+        return { statusCode: 200, body: await listSavedConversations({ limit: Math.min(Number(query.limit) || 100, 500) }) };
     }
-
     static async getConversation({ params }) {
-        const conversation = await getStoredConversation(params.conversationId);
+        const conversation = await getConversationRecord(params.conversationId);
         if (!conversation) return { statusCode: 404, body: { error: 'Conversation not found' } };
         return { statusCode: 200, body: conversation };
     }
-
     static async updateConversation({ params, body }) {
         const title = String(body.title || '').trim();
         if (!title) return { statusCode: 400, body: { error: 'Conversation title is required' } };
-        return {
-            statusCode: 200,
-            body: await updateStoredConversation(params.conversationId, { title }),
-        };
+        return { statusCode: 200, body: await updateConversationRecord(params.conversationId, { title }) };
     }
-
+    static async saveConversation({ params }) {
+        return { statusCode: 200, body: await promoteConversation(params.conversationId) };
+    }
     static async deleteConversation({ params }) {
-        return {
-            statusCode: 200,
-            body: await deleteStoredConversation(params.conversationId),
-        };
+        return { statusCode: 200, body: await deleteConversationRecord(params.conversationId) };
     }
-
     static async getConversationAttachment({ params }) {
-        return {
-            statusCode: 200,
-            body: await readConversationAttachment(params.conversationId, params.attachmentId),
-        };
+        return { statusCode: 200, body: await readConversationRecordAttachment(params.conversationId, params.attachmentId) };
     }
 
     static async chat({ body, signal }) {
@@ -184,93 +162,66 @@ export default class OfficeController {
 
         const conversationId = body.conversationId || randomUUID();
         const now = new Date().toISOString();
-        const conversation = await getStoredConversation(conversationId) || {
+        let conversation = await getConversationRecord(conversationId) || {
             conversationId,
             agentId,
             title: (suppliedMessage || attachmentInputs[0]?.name || 'New conversation').slice(0, 72),
             messages: [],
             createdAt: now,
             updatedAt: now,
+            persisted: false,
+            storage: 'volatile',
         };
+        const persisted = Boolean(conversation.persisted);
         if (conversation.agentId !== agentId && conversation.messages.length) {
-            return { statusCode: 409, body: { error: 'A saved conversation cannot change agents. Start a new chat instead.' } };
+            return { statusCode: 409, body: { error: 'A conversation with messages cannot change agents. Start a new chat instead.' } };
         }
 
         const attachments = attachmentInputs.length
-            ? await saveConversationAttachments(conversationId, attachmentInputs)
+            ? await saveConversationRecordAttachments(conversationId, attachmentInputs, { persisted })
             : [];
-        conversation.messages.push({
-            role: 'user',
-            content: message,
-            attachments,
-            createdAt: now,
-        });
-        await saveConversation(conversation);
+        conversation.messages.push({ role: 'user', content: message, attachments, createdAt: now });
+        conversation = await saveConversationRecord(conversation, { persisted });
 
         let result;
         try {
-            const modelHistory = await hydrateConversationMessages(conversation.messages);
+            const modelHistory = await hydrateConversationRecordMessages(conversationId, conversation.messages, { persisted });
             result = await runAgent(agentId, modelHistory, { signal });
         } catch (error) {
             if (isCancellation(error)) {
                 return {
                     statusCode: 499,
-                    body: {
-                        error: 'Response generation stopped.',
-                        cancelled: true,
-                        conversationId,
-                    },
+                    body: { error: 'Response generation stopped.', cancelled: true, conversationId, persisted },
                 };
             }
-
             const assistantFailure = {
-                role: 'assistant',
-                content: `I could not complete that request: ${error.message || 'Model execution failed.'}`,
-                toolEvents: [],
-                memoryRefs: [],
-                model: null,
-                attachments: [],
-                error: true,
-                createdAt: new Date().toISOString(),
+                role: 'assistant', content: `I could not complete that request: ${error.message || 'Model execution failed.'}`,
+                toolEvents: [], memoryRefs: [], model: null, attachments: [], error: true, createdAt: new Date().toISOString(),
             };
             conversation.messages.push(assistantFailure);
-            const failed = await saveConversation(conversation);
+            const failed = await saveConversationRecord(conversation, { persisted });
             return {
                 statusCode: error.statusCode || 500,
                 body: {
-                    error: error.message || 'Model execution failed.',
-                    conversationId,
-                    conversation: {
-                        title: failed.title,
-                        updatedAt: failed.updatedAt,
-                        messageCount: failed.messages.length,
-                    },
+                    error: error.message || 'Model execution failed.', conversationId, persisted,
+                    conversation: { title: failed.title, updatedAt: failed.updatedAt, messageCount: failed.messages.length, persisted },
                     message: assistantFailure,
                 },
             };
         }
 
         const assistantMessage = {
-            role: 'assistant',
-            content: result.content,
-            toolEvents: result.toolEvents,
-            memoryRefs: result.memoryRefs,
-            model: result.model,
-            attachments: [],
-            createdAt: new Date().toISOString(),
+            role: 'assistant', content: result.content, toolEvents: result.toolEvents, memoryRefs: result.memoryRefs,
+            model: result.model, attachments: [], createdAt: new Date().toISOString(),
         };
         conversation.messages.push(assistantMessage);
-        const saved = await saveConversation(conversation);
+        const saved = await saveConversationRecord(conversation, { persisted });
 
         return {
             statusCode: 200,
             body: {
-                conversationId,
-                conversation: {
-                    title: saved.title,
-                    updatedAt: saved.updatedAt,
-                    messageCount: saved.messages.length,
-                },
+                conversationId, persisted,
+                conversation: { title: saved.title, updatedAt: saved.updatedAt, messageCount: saved.messages.length, persisted },
                 message: assistantMessage,
                 model: result.model,
             },
@@ -278,58 +229,30 @@ export default class OfficeController {
     }
 
     static async listJobs({ query }) {
-        return {
-            statusCode: 200,
-            body: await listStoredJobs({ limit: Math.min(Number(query.limit) || 100, 500) }),
-        };
+        return { statusCode: 200, body: await listLifecycleJobs({ limit: Math.min(Number(query.limit) || 100, 500) }) };
     }
-
     static async getJob({ params }) {
-        const job = await getStoredJob(params.jobId);
+        const job = await getLifecycleJob(params.jobId);
         if (!job) return { statusCode: 404, body: { error: 'Job not found' } };
         return { statusCode: 200, body: job };
     }
-
     static async runJob({ params }) {
-        const job = await getStoredJob(params.jobId);
+        const job = await getLifecycleJob(params.jobId);
         if (!job) return { statusCode: 404, body: { error: 'Job not found' } };
-        const execution = ['failed', 'awaiting_approval', 'cancelled'].includes(job.status)
-            ? await retryJob(job.jobId)
-            : await enqueueJob(job.jobId);
+        const execution = ['failed', 'awaiting_approval', 'cancelled'].includes(job.status) ? await retryJob(job.jobId) : await enqueueJob(job.jobId);
         return { statusCode: 202, body: execution };
     }
-
-    static async stopJob({ params }) {
-        return { statusCode: 202, body: await cancelJob(params.jobId) };
-    }
-
-    static async stopAllJobs() {
-        return { statusCode: 202, body: await stopAllJobs() };
-    }
-
-    static async deleteJob({ params }) {
-        return { statusCode: 200, body: await deleteJob(params.jobId) };
-    }
-
-    static async clearJobs({ query }) {
-        return { statusCode: 200, body: await clearJobs({ scope: query.scope || 'terminal' }) };
-    }
+    static async stopJob({ params }) { return { statusCode: 202, body: await cancelJob(params.jobId) }; }
+    static async stopAllJobs() { return { statusCode: 202, body: await stopAllJobs() }; }
+    static async deleteJob({ params }) { return { statusCode: 200, body: await deleteJob(params.jobId) }; }
+    static async clearJobs({ query }) { return { statusCode: 200, body: await clearJobs({ scope: query.scope || 'terminal' }) }; }
 
     static async officeMap() {
         const [agents, conversations, jobs] = await Promise.all([
             listAgentConfigs(agentDefinitions, defaultAgentConfig),
-            listStoredConversations({ limit: 300 }),
-            listStoredJobs({ limit: 300 }),
+            listSavedConversations({ limit: 300 }),
+            listLifecycleJobs({ limit: 300 }),
         ]);
-        return {
-            statusCode: 200,
-            body: {
-                agents,
-                conversations,
-                jobs,
-                runner: jobRunnerStatus(),
-                generatedAt: new Date().toISOString(),
-            },
-        };
+        return { statusCode: 200, body: { agents, conversations, jobs, runner: jobRunnerStatus(), generatedAt: new Date().toISOString() } };
     }
 }

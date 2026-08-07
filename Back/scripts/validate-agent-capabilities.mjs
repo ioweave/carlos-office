@@ -16,10 +16,11 @@ const forbidTools = (agentId, forbidden) => {
 assert.deepEqual(Object.keys(agentDefinitions).sort(), ['dex', 'iris', 'luma', 'marco', 'nora', 'vera']);
 
 requireTools('nora', [
-    'memory_search', 'memory_write', 'web_search', 'fetch_url',
-    'office_file_list', 'office_file_read', 'office_file_write',
-    'mcp_list_servers', 'mcp_list_tools', 'mcp_call',
-    'monitor_list', 'monitor_read', 'monitor_run',
+    'memory_search', 'memory_write', 'memory_remember_fact', 'memory_list_facts', 'memory_update_fact', 'memory_forget_fact',
+    'knowledge_source_list', 'knowledge_source_register', 'knowledge_source_update', 'knowledge_source_remove',
+    'knowledge_note_write', 'knowledge_note_promote', 'knowledge_retention_scan', 'knowledge_retention_directive',
+    'web_search', 'fetch_url', 'office_file_list', 'office_file_read', 'office_file_write',
+    'mcp_list_servers', 'mcp_list_tools', 'mcp_call', 'monitor_list', 'monitor_read', 'monitor_run',
     'create_agent_job', 'get_agent_job', 'list_agent_jobs', 'retry_agent_job', 'cancel_agent_job',
     'list_agents', 'agent_get_config', 'agent_update_config',
 ]);
@@ -32,16 +33,26 @@ requireTools('dex', [
 requireTools('iris', [
     'web_search', 'fetch_url', 'project_read_file', 'playwright_inspect_page',
     'office_file_write', 'mcp_list_servers', 'mcp_call', 'monitor_list', 'monitor_read', 'monitor_run',
+    'memory_list_facts', 'knowledge_source_list', 'knowledge_source_register', 'knowledge_source_update',
+    'knowledge_note_write', 'knowledge_retention_scan', 'knowledge_retention_execute',
 ]);
 requireTools('vera', [
     'memory_search', 'web_search', 'fetch_url', 'project_read_file', 'project_run_check',
     'playwright_inspect_page', 'playwright_check_page', 'mcp_list_servers', 'mcp_call', 'monitor_read',
 ]);
 
-forbidTools('vera', ['project_write_file', 'project_delete_file', 'office_file_write', 'office_file_archive', 'agent_update_config']);
-forbidTools('iris', ['project_write_file', 'project_delete_file', 'agent_update_config']);
-forbidTools('marco', ['project_write_file', 'project_run_check', 'agent_update_config']);
-forbidTools('luma', ['project_write_file', 'project_run_check', 'agent_update_config']);
+forbidTools('vera', [
+    'project_write_file', 'project_delete_file', 'office_file_write', 'office_file_archive', 'agent_update_config',
+    'memory_remember_fact', 'memory_update_fact', 'memory_forget_fact', 'knowledge_source_register',
+    'knowledge_note_write', 'knowledge_note_promote', 'knowledge_retention_directive', 'knowledge_retention_execute',
+]);
+forbidTools('iris', [
+    'project_write_file', 'project_delete_file', 'agent_update_config',
+    'memory_remember_fact', 'memory_update_fact', 'memory_forget_fact', 'knowledge_source_remove',
+    'knowledge_note_promote', 'knowledge_retention_directive',
+]);
+forbidTools('marco', ['project_write_file', 'project_run_check', 'agent_update_config', 'knowledge_retention_execute', 'knowledge_retention_directive']);
+forbidTools('luma', ['project_write_file', 'project_run_check', 'agent_update_config', 'knowledge_retention_execute', 'knowledge_retention_directive']);
 
 assert.equal(classifyMcpAction({ name: 'manage_email' }, { operation: 'search' }), 'read');
 assert.equal(classifyMcpAction({ name: 'manage_email' }, { operation: 'send' }), 'dangerous');
