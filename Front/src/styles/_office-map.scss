@@ -514,8 +514,19 @@
 
 .office-map__job-link,
 .office-map__chat-row {
+    min-width: 0;
+
     span {
-        flex: 1;
+        min-width: 0;
+        flex: 1 1 auto;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    small {
+        max-width: 38%;
+        flex: 0 1 auto;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -534,13 +545,17 @@
     align-content: start;
     gap: 14px;
     padding: 10px;
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     background: var(--color-surface-muted);
 
     section {
         display: grid;
+        min-width: 0;
         gap: 6px;
     }
 
@@ -637,7 +652,7 @@
 
 @media (min-width: 1040px) {
     .office-map__workspace {
-        grid-template-columns: minmax(0, 1fr) 285px;
+        grid-template-columns: minmax(0, 1fr) clamp(320px, 23vw, 380px);
         grid-template-rows: minmax(0, 1fr);
     }
 
