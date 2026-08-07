@@ -1,0 +1,188 @@
+/* Structural chat layout. Uses unique selectors so legacy message rules cannot collapse turns. */
+.chat-turns {
+    display: block;
+    inline-size: min(100%, 980px);
+    min-inline-size: 0;
+}
+
+.chat-turn {
+    display: flex !important;
+    grid-template-columns: none !important;
+    align-items: flex-start;
+    gap: 13px;
+    inline-size: 100% !important;
+    max-inline-size: 100% !important;
+    min-inline-size: 0;
+    margin: 0 0 28px;
+    padding: 0 !important;
+}
+
+.chat-turn__avatar {
+    display: grid;
+    flex: 0 0 34px;
+    inline-size: 34px;
+    block-size: 34px;
+    place-items: center;
+    border: 1px solid rgb(var(--line));
+    border-radius: 10px;
+    color: rgb(var(--content));
+    background: rgb(var(--surface-2));
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.chat-turn--assistant .chat-turn__avatar {
+    color: rgb(var(--content-inv));
+    border-color: transparent;
+    background: rgb(var(--accent));
+}
+
+.chat-turn__main {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    inline-size: calc(100% - 47px);
+    max-inline-size: calc(100% - 47px);
+    min-inline-size: 0;
+}
+
+.chat-turn__meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 7px;
+    inline-size: 100%;
+    min-inline-size: 0;
+    min-block-size: 30px;
+    margin-block-end: 7px;
+}
+
+.chat-turn__meta strong {
+    color: rgb(var(--content));
+    font-size: 12px;
+}
+
+.chat-turn__meta span {
+    max-inline-size: min(36ch, 40%);
+    overflow: hidden;
+    color: rgb(var(--content-3));
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.chat-turn__meta button {
+    display: inline-grid;
+    flex: 0 0 28px;
+    inline-size: 28px;
+    block-size: 28px;
+    margin-inline-start: auto;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    color: rgb(var(--content-2));
+    background: transparent;
+}
+
+.chat-turn__meta button:hover {
+    color: rgb(var(--content));
+    background: rgb(var(--surface-2));
+}
+
+.chat-turn__surface {
+    inline-size: 100%;
+    max-inline-size: 100%;
+    min-inline-size: 0;
+}
+
+.chat-turn--user .chat-turn__main {
+    align-items: flex-end;
+}
+
+.chat-turn--user .chat-turn__meta {
+    justify-content: flex-end;
+}
+
+.chat-turn--user .chat-turn__surface {
+    inline-size: min(100%, 760px);
+    max-inline-size: min(100%, 760px);
+    min-inline-size: min(260px, 100%);
+    margin-inline-start: auto;
+    padding: 12px 15px;
+    border: 1px solid rgba(var(--accent), .22);
+    border-radius: 14px;
+    color: rgb(var(--content));
+    background: rgba(var(--accent), .1);
+}
+
+.chat-turn__user-text {
+    display: block;
+    inline-size: 100%;
+    min-inline-size: 0;
+    line-height: 1.62;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    word-break: normal;
+}
+
+.chat-turn--assistant .chat-turn__surface {
+    padding-inline-end: 8px;
+}
+
+.chat-turn--error .chat-turn__surface {
+    padding: 12px 14px;
+    border: 1px solid rgba(var(--danger), .4);
+    border-radius: 11px;
+    background: rgba(var(--danger), .06);
+}
+
+.chat-turn--thinking {
+    margin-block-end: 14px;
+}
+
+.chat-turn--thinking .thinking-dots {
+    min-block-size: 34px;
+}
+
+.chat-turn .message-attachments,
+.chat-turn .tool-trace {
+    align-self: stretch;
+    inline-size: 100%;
+    max-inline-size: 100%;
+}
+
+.chat-turn--user .message-attachments,
+.chat-turn--user .tool-trace {
+    inline-size: min(100%, 760px);
+    margin-inline-start: auto;
+}
+
+@media (max-width: 820px) {
+    .message-column.chat-turns {
+        padding-inline: 16px;
+    }
+
+    .chat-turn {
+        gap: 10px;
+    }
+
+    .chat-turn__avatar {
+        flex-basis: 30px;
+        inline-size: 30px;
+        block-size: 30px;
+    }
+
+    .chat-turn__main {
+        inline-size: calc(100% - 40px);
+        max-inline-size: calc(100% - 40px);
+    }
+
+    .chat-turn--user .chat-turn__surface,
+    .chat-turn--user .message-attachments,
+    .chat-turn--user .tool-trace {
+        inline-size: 100%;
+        max-inline-size: 100%;
+        min-inline-size: 0;
+    }
+}
