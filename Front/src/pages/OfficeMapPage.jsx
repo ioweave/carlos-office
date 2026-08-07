@@ -325,13 +325,13 @@ export default function OfficeMapPage({ onOpenConversation }) {
             recentEvents.forEach(event => {
                 const from = projected.get(event.fromNode); const to = projected.get(event.toNode);
                 if (!from || !to || event.fromNode === event.toNode) return;
-                const elapsed = Math.max(0, now - new Date(event.createdAt).getTime());
+                const elapsed = Math.max(0, Date.now() - new Date(event.createdAt).getTime());
                 const opacity = Math.max(0.08, 1 - elapsed / PACKET_TTL_MS);
                 const color = eventColor(event.tone);
                 context.beginPath(); context.moveTo(from.x, from.y); context.lineTo(to.x, to.y);
                 context.lineWidth = 1.25; context.strokeStyle = rgba(color, opacity * 0.38); context.stroke();
                 if (!reducedMotionRef.current) {
-                    const progress = (elapsed % 1700) / 1700;
+                    const progress = ((now + (hash(event.eventId) % 1700)) % 1700) / 1700;
                     const x = from.x + (to.x - from.x) * progress;
                     const y = from.y + (to.y - from.y) * progress;
                     context.save(); context.shadowColor = color; context.shadowBlur = 13;
