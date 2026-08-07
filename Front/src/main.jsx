@@ -6,6 +6,7 @@ import './chat.scss';
 import './workspace.scss';
 import './refinements.scss';
 import './chat-layout-fix.scss';
+import './map-inspector-fix.scss';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
     <React.StrictMode>
