@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 const workflows = new Map();
 const jobWorkflow = new Map();
+const requestWorkflow = new Map();
 const events = [];
 const eventRetentionMs = Math.max(60_000, Number(process.env.RUNTIME_EVENT_RETENTION_MS || 300_000));
 const workflowRetentionMs = Math.max(eventRetentionMs, Number(process.env.RUNTIME_WORKFLOW_RETENTION_MS || 86_400_000));
@@ -19,6 +20,7 @@ const prune = () => {
         if (new Date(workflow.completedAt).getTime() >= workflowCutoff) continue;
         workflows.delete(id);
         workflow.jobIds.forEach(jobId => jobWorkflow.delete(jobId));
+        if (workflow.requestId) requestWorkflow.delete(workflow.requestId);
     }
 };
 
@@ -44,11 +46,12 @@ export const emitRuntimeEvent = input => {
     return clone(event);
 };
 
-export const createRuntimeWorkflow = ({ title, objective = '', plan = '', conversationId = '' } = {}) => {
+export const createRuntimeWorkflow = ({ title, objective = '', plan = '', conversationId = '', requestId = '' } = {}) => {
     prune();
     const workflowId = randomUUID();
     const workflow = {
         workflowId,
+        requestId: String(requestId || ''),
         title: String(title || objective || 'Delegated workflow').trim().slice(0, 140),
         objective: String(objective || '').trim(),
         plan: String(plan || '').trim(),
@@ -64,6 +67,7 @@ export const createRuntimeWorkflow = ({ title, objective = '', plan = '', conver
         completedAt: '',
     };
     workflows.set(workflowId, workflow);
+    if (workflow.requestId) requestWorkflow.set(workflow.requestId, workflowId);
     emitRuntimeEvent({
         type: 'workflow.planned', workflowId, from: 'nora', to: 'office',
         fromNode: 'agent:nora', toNode: 'agent:nora', stage: 'planning',
@@ -71,6 +75,16 @@ export const createRuntimeWorkflow = ({ title, objective = '', plan = '', conver
     });
     return clone(workflow);
 };
+
+export const ensureRuntimeWorkflow = ({ requestId = '', conversationId = '', objective = '', title = '', plan = '' } = {}) => {
+    prune();
+    const key = String(requestId || '');
+    const existingId = key ? requestWorkflow.get(key) : '';
+    if (existingId && workflows.has(existingId)) return clone(workflows.get(existingId));
+    return createRuntimeWorkflow({ requestId: key, conversationId, objective, title: title || objective, plan });
+};
+
+export const workflowForRequest = requestId => requestWorkflow.get(String(requestId || '')) || '';
 
 export const attachJobToWorkflow = (workflowId, job) => {
     if (!workflowId) return null;
