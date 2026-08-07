@@ -382,19 +382,26 @@
     background: var(--surface-1);
     box-shadow: 0 12px 34px rgba(0,0,0,.18);
 }
-.chat-composer:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-strong)); box-shadow: 0 0 0 3px var(--accent-soft), 0 12px 34px rgba(0,0,0,.18); }
+.chat-composer:focus-within {
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--line-strong));
+    box-shadow: 0 0 0 3px var(--accent-soft), 0 12px 34px rgba(0, 0, 0, .18);
+}
 .chat-composer textarea {
     display: block;
     width: 100%;
     min-height: 64px;
     max-height: 220px;
     resize: vertical;
-    padding: 14px 15px 8px;
+    padding: 14px 15px;
     border: 0;
     outline: 0;
     color: var(--text-strong);
     background: transparent;
     font: 14px/1.55 inherit;
+    &:focus {
+        box-shadow: none;
+        outline: none;
+    }
 }
 .composer-toolbar { justify-content: space-between; gap: 12px; padding: 6px 8px 8px; }
 .composer-toolbar > div { min-width: 0; gap: 4px; }
