@@ -5,6 +5,7 @@ import './styles.scss';
 import './chat.scss';
 import './workspace.scss';
 import './refinements.scss';
+import './chat-layout-fix.scss';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
     <React.StrictMode>
