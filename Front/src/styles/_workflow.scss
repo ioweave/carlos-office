@@ -1,0 +1,164 @@
+.office-shell__page {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+}
+
+.workflow-banner {
+    position: fixed;
+    z-index: 40;
+    top: 66px;
+    right: 12px;
+    display: grid;
+    gap: 9px;
+    width: min(390px, calc(100vw - 24px));
+    padding: 12px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--color-surface-raised) 94%, transparent);
+    box-shadow: var(--shadow-popover);
+    backdrop-filter: blur(18px);
+}
+
+.workflow-banner--attention {
+    border-color: color-mix(in srgb, var(--color-danger) 46%, var(--color-border));
+}
+
+.workflow-banner__header {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 9px;
+    align-items: start;
+}
+
+.workflow-banner__pulse {
+    width: 9px;
+    height: 9px;
+    margin-top: 5px;
+    border-radius: 50%;
+    background: var(--color-accent);
+    box-shadow: 0 0 10px var(--color-accent);
+    animation: workflow-pulse 1.4s ease-in-out infinite;
+}
+
+.workflow-banner--attention .workflow-banner__pulse {
+    background: var(--color-danger);
+    box-shadow: 0 0 10px var(--color-danger);
+}
+
+.workflow-banner--completed .workflow-banner__pulse {
+    background: var(--color-success);
+    box-shadow: 0 0 10px var(--color-success);
+    animation: none;
+}
+
+.workflow-banner__identity {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+
+.workflow-banner__identity small {
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.64rem;
+}
+
+.workflow-banner__identity strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.workflow-banner__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px 10px;
+    color: var(--color-text-muted);
+    font-size: 0.72rem;
+    text-transform: capitalize;
+}
+
+.workflow-banner__attention {
+    margin: 0;
+    padding: 8px 9px;
+    border-radius: var(--radius-xs);
+    background: color-mix(in srgb, var(--color-danger) 9%, transparent);
+    color: var(--color-text);
+    line-height: 1.4;
+    font-size: 0.76rem;
+}
+
+.workflow-banner__jobs {
+    display: grid;
+    gap: 4px;
+}
+
+.workflow-banner__job {
+    display: grid;
+    grid-template-columns: 7px auto minmax(0, 1fr);
+    gap: 7px;
+    align-items: center;
+    min-width: 0;
+    font-size: 0.72rem;
+}
+
+.workflow-banner__job small {
+    overflow: hidden;
+    color: var(--color-text-muted);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-transform: capitalize;
+}
+
+.workflow-banner__job-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--color-text-faint);
+}
+
+.workflow-banner__job-dot--running,
+.workflow-banner__job-dot--queued { background: var(--color-warning); }
+.workflow-banner__job-dot--qc_review { background: var(--color-success); }
+.workflow-banner__job-dot--nora_review { background: var(--color-accent); }
+.workflow-banner__job-dot--completed { background: var(--color-success); }
+.workflow-banner__job-dot--needs_attention,
+.workflow-banner__job-dot--awaiting_approval,
+.workflow-banner__job-dot--failed { background: var(--color-danger); }
+
+.workflow-banner__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+}
+
+.workflow-banner__actions button {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 31px;
+    padding: 0 9px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-soft);
+    color: var(--color-text);
+}
+
+.workflow-banner__actions button:disabled {
+    opacity: 0.45;
+}
+
+@keyframes workflow-pulse {
+    0%, 100% { opacity: 0.55; transform: scale(0.86); }
+    50% { opacity: 1; transform: scale(1.18); }
+}
+
+@media (min-width: 720px) {
+    .workflow-banner { top: 76px; right: 18px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .workflow-banner__pulse { animation: none; }
+}
