@@ -5,30 +5,41 @@ const extension = value => {
 };
 const nameOf = value => normalize(value).split('/').filter(Boolean).at(-1) || 'artifact';
 
+const mimeFor = ext => ({
+    '.md': 'text/markdown', '.markdown': 'text/markdown', '.txt': 'text/plain', '.json': 'application/json',
+    '.jsonl': 'application/jsonl', '.csv': 'text/csv', '.html': 'text/html', '.htm': 'text/html', '.css': 'text/css',
+    '.scss': 'text/x-scss', '.js': 'text/javascript', '.jsx': 'text/jsx', '.mjs': 'text/javascript', '.ts': 'text/typescript',
+    '.tsx': 'text/tsx', '.yml': 'text/yaml', '.yaml': 'text/yaml', '.toml': 'text/toml', '.xml': 'application/xml',
+    '.svg': 'image/svg+xml', '.sql': 'text/sql', '.graphql': 'text/graphql', '.png': 'image/png', '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.avif': 'image/avif', '.pdf': 'application/pdf',
+    '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.wave': 'audio/wav', '.m4a': 'audio/mp4', '.aac': 'audio/aac',
+    '.ogg': 'audio/ogg', '.oga': 'audio/ogg', '.opus': 'audio/ogg', '.flac': 'audio/flac', '.weba': 'audio/webm',
+    '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.ogv': 'video/ogg',
+    '.avi': 'video/x-msvideo', '.mkv': 'video/x-matroska',
+}[ext] || 'application/octet-stream');
+
+const kindFor = (ext, mimeType) => {
+    const mime = String(mimeType || '').toLowerCase();
+    if (mime.startsWith('audio/')) return 'audio';
+    if (mime.startsWith('video/')) return 'video';
+    if (mime.startsWith('image/') && mime !== 'image/svg+xml') return 'image';
+    if (mime === 'application/pdf') return 'pdf';
+    if (['.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif'].includes(ext)) return 'image';
+    if (['.mp3', '.wav', '.wave', '.m4a', '.aac', '.ogg', '.oga', '.opus', '.flac', '.weba'].includes(ext)) return 'audio';
+    if (['.mp4', '.m4v', '.webm', '.mov', '.ogv', '.avi', '.mkv'].includes(ext)) return 'video';
+    if (ext === '.pdf') return 'pdf';
+    if (['.md', '.markdown'].includes(ext)) return 'markdown';
+    if (['.html', '.htm', '.svg'].includes(ext)) return 'html';
+    if (['.json', '.jsonl'].includes(ext)) return 'json';
+    return 'code';
+};
+
 const meta = ({ source, path, agentId = '', title = '', size = 0, mimeType = '', previewKind = '' }) => {
     const normalizedPath = normalize(path);
     if (!normalizedPath) return null;
     const ext = extension(normalizedPath);
     const name = nameOf(normalizedPath);
-    const inferredMime = ({
-        '.md': 'text/markdown', '.markdown': 'text/markdown', '.txt': 'text/plain', '.json': 'application/json',
-        '.jsonl': 'application/jsonl', '.csv': 'text/csv', '.html': 'text/html', '.htm': 'text/html', '.css': 'text/css',
-        '.scss': 'text/x-scss', '.js': 'text/javascript', '.jsx': 'text/jsx', '.mjs': 'text/javascript', '.ts': 'text/typescript',
-        '.tsx': 'text/tsx', '.yml': 'text/yaml', '.yaml': 'text/yaml', '.toml': 'text/toml', '.xml': 'application/xml',
-        '.svg': 'image/svg+xml', '.sql': 'text/sql', '.graphql': 'text/graphql', '.png': 'image/png', '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.pdf': 'application/pdf',
-    }[ext] || 'text/plain');
-    const inferredKind = ['.png', '.jpg', '.jpeg', '.webp', '.gif'].includes(ext)
-        ? 'image'
-        : ext === '.pdf'
-            ? 'pdf'
-            : ['.md', '.markdown'].includes(ext)
-                ? 'markdown'
-                : ['.html', '.htm', '.svg'].includes(ext)
-                    ? 'html'
-                    : ['.json', '.jsonl'].includes(ext)
-                        ? 'json'
-                        : 'code';
+    const inferredMime = mimeType || mimeFor(ext);
     return {
         artifactId: `${source}:${agentId}:${normalizedPath}`,
         source,
@@ -37,8 +48,8 @@ const meta = ({ source, path, agentId = '', title = '', size = 0, mimeType = '',
         name,
         title: String(title || name),
         size: Number(size || 0),
-        mimeType: mimeType || inferredMime,
-        previewKind: previewKind || inferredKind,
+        mimeType: inferredMime,
+        previewKind: previewKind || kindFor(ext, inferredMime),
     };
 };
 
