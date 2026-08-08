@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { listTools } from '../src/lib/toolRegistry.mjs';
 import { agentDefinitions } from '../src/agents/agents.config.mjs';
 import { classifyMcpAction } from '../src/lib/mcpClient.mjs';
+import { buildAutomaticProjectContext } from '../src/lib/runtimeContext.mjs';
 
 const names = agentId => new Set(listTools(agentId).map(tool => tool.name));
 const sorted = values => [...values].sort();
@@ -83,6 +84,13 @@ assert.match(agentDefinitions.nora.system, /memory tool returned success/i, 'Nor
 assert.match(agentDefinitions.vera.system, /source-of-truth discipline/i, 'Vera must verify source-of-truth discipline for planning work.');
 assert.match(agentDefinitions.vera.system, /exhaustive allowlist/i, 'Vera must distinguish required-tool checks from exhaustive capability contracts.');
 
+const planningContext = await buildAutomaticProjectContext('nora', [{
+    role: 'user',
+    content: 'Audit Dex and make an implementation plan for turning it into a Claude Code alternative.',
+}]);
+assert(planningContext.files.includes('Back/artifacts/README.md'), 'Planning requests must preload the durable project artifact index.');
+assert.match(planningContext.content, /DEX_CLAUDE_CODE_PLAN\.md/, 'The planning preflight must expose the canonical Dex roadmap through the artifact index.');
+
 // MCP action classification remains independently governed from the agent allowlist.
 assert.equal(classifyMcpAction({ name: 'manage_email' }, { operation: 'search' }), 'read');
 assert.equal(classifyMcpAction({ name: 'manage_email' }, { operation: 'send' }), 'dangerous');
@@ -93,7 +101,7 @@ assert.equal(classifyMcpAction({ name: 'manage_drive' }, { operation: 'share' })
 assert.equal(classifyMcpAction({ name: 'browser_click' }, { selector: '#submit' }), 'dangerous');
 assert.equal(classifyMcpAction({ name: 'search_issues', annotations: { readOnlyHint: true } }, {}), 'read');
 
-console.log('Agent capability contract passed (exhaustive allowlists).');
+console.log('Agent capability contract passed (exhaustive allowlists + planning preflight).');
 for (const agentId of Object.keys(agentDefinitions)) {
     console.log(`${agentId}: ${listTools(agentId).length} approved tools`);
 }
