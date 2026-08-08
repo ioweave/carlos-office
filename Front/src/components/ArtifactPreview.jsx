@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { IconDownload, IconFile, IconX } from '@tabler/icons-react';
-import { toast } from 'sonner';
 import api from '../api';
 import MarkdownMessage from './MarkdownMessage';
 
