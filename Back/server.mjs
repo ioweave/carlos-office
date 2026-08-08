@@ -53,7 +53,8 @@ const server = http.createServer(async (req, res) => {
     const corsHeaders = origin && corsAllowed ? {
         'Access-Control-Allow-Origin': origin,
         'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Headers': 'Content-Type,Range',
+        'Access-Control-Expose-Headers': 'Accept-Ranges,Content-Range,Content-Length,Content-Disposition',
         Vary: 'Origin',
     } : {};
     if (!corsAllowed) {
@@ -73,6 +74,23 @@ const server = http.createServer(async (req, res) => {
         const body = ['POST', 'PUT', 'PATCH'].includes(req.method) ? await readBody(req) : {};
         const response = await router.handle(req.method, req.url, { headers: req.headers, body, signal: requestController.signal });
         if (res.destroyed || res.writableEnded) return;
+
+        if (response.stream && typeof response.stream.pipe === 'function') {
+            res.writeHead(response.statusCode || 200, {
+                'Content-Type': 'application/octet-stream',
+                'X-Content-Type-Options': 'nosniff',
+                ...corsHeaders,
+                ...(response.headers || {}),
+            });
+            response.stream.once('error', error => {
+                console.error('[office] media stream error', error.message);
+                if (!res.destroyed) res.destroy(error);
+            });
+            requestController.signal.addEventListener('abort', () => response.stream.destroy(), { once: true });
+            response.stream.pipe(res);
+            return;
+        }
+
         res.writeHead(response.statusCode || 200, {
             'Content-Type': 'application/json; charset=utf-8',
             'X-Content-Type-Options': 'nosniff',
