@@ -1,5 +1,23 @@
 import OfficeController from './controllers/OfficeController.mjs';
 import { streamArtifact } from './lib/artifacts.mjs';
+import { runtimeActivitySnapshot } from './lib/runtimeActivity.mjs';
+import { listTemporaryConversations } from './lib/temporaryConversations.mjs';
+
+const officeMapWithRuntime = async args => {
+    const response = await OfficeController.officeMap(args);
+    const conversations = new Map((response.body?.conversations || []).map(item => [item.conversationId, item]));
+    listTemporaryConversations({ limit: 300 }).forEach(item => {
+        if (!conversations.has(item.conversationId)) conversations.set(item.conversationId, item);
+    });
+    return {
+        ...response,
+        body: {
+            ...response.body,
+            conversations: [...conversations.values()],
+            activity: runtimeActivitySnapshot({ limit: 300 }),
+        },
+    };
+};
 
 export default [
     { method: 'GET', path: '/api/health', handler: OfficeController.health },
@@ -28,6 +46,15 @@ export default [
     { method: 'DELETE', path: '/api/conversations/{conversationId}', handler: OfficeController.deleteConversation },
     { method: 'GET', path: '/api/conversations/{conversationId}/attachments/{attachmentId}', handler: OfficeController.getConversationAttachment },
     { method: 'POST', path: '/api/chat', handler: OfficeController.chat },
+    { method: 'GET', path: '/api/runtime-activity', handler: ({ query }) => ({
+        statusCode: 200,
+        body: runtimeActivitySnapshot({
+            requestId: query.requestId || '',
+            conversationId: query.conversationId || '',
+            agentId: query.agentId || '',
+            limit: query.limit,
+        }),
+    }) },
     { method: 'GET', path: '/api/jobs', handler: OfficeController.listJobs },
     { method: 'DELETE', path: '/api/jobs', handler: OfficeController.clearJobs },
     { method: 'POST', path: '/api/jobs/stop-all', handler: OfficeController.stopAllJobs },
@@ -35,5 +62,5 @@ export default [
     { method: 'DELETE', path: '/api/jobs/{jobId}', handler: OfficeController.deleteJob },
     { method: 'POST', path: '/api/jobs/{jobId}/run', handler: OfficeController.runJob },
     { method: 'POST', path: '/api/jobs/{jobId}/stop', handler: OfficeController.stopJob },
-    { method: 'GET', path: '/api/office-map', handler: OfficeController.officeMap },
+    { method: 'GET', path: '/api/office-map', handler: officeMapWithRuntime },
 ];
