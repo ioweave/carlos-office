@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { agentDefinitions, defaultAgentConfig } from '../agents/agents.config.mjs';
 import { runAgent } from '../lib/agentRunner.mjs';
 import { executeTool, listTools } from '../lib/toolRegistry.mjs';
+import { readArtifact } from '../lib/artifacts.mjs';
 import {
     getMemoryStatus,
     listMemory as listMemoryNotes,
@@ -101,6 +102,9 @@ export default class OfficeController {
         const agentId = body.agentId || 'nora';
         return { statusCode: 200, body: await executeTool(agentId, params.toolName, body.args || {}) };
     }
+    static async readArtifact({ query }) {
+        return { statusCode: 200, body: await readArtifact({ source: query.source, path: query.path, agentId: query.agentId || 'nora' }) };
+    }
 
     static async listMemory({ query }) {
         const limit = Math.max(1, Math.min(Number(query.limit) || 100, 500));
@@ -179,7 +183,17 @@ export default class OfficeController {
                         ...synthesis,
                         toolEvents: [
                             ...(result.toolEvents || []),
-                            { name: 'delegated_workflow', args: { workflowId }, result: { status: workflow.status, waitingOn: workflow.waitingOn, jobs: workflow.jobs?.map(job => ({ jobId: job.jobId, status: job.status })) || [] }, failed: false },
+                            {
+                                name: 'delegated_workflow',
+                                args: { workflowId },
+                                result: {
+                                    status: workflow.status,
+                                    waitingOn: workflow.waitingOn,
+                                    jobs: workflow.jobs?.map(job => ({ jobId: job.jobId, status: job.status })) || [],
+                                    artifacts: workflow.artifacts || [],
+                                },
+                                failed: false,
+                            },
                         ],
                         memoryRefs: [...new Set([...(result.memoryRefs || []), ...(synthesis.memoryRefs || [])])],
                     };
