@@ -8,6 +8,13 @@ import { getVaultPath } from './memoryCore.mjs';
 import { getAgentConfig, saveAgentConfig } from './officeStore.mjs';
 import { connectivityErrorText, isConnectivityFailure } from './connectivity.mjs';
 import { buildAutomaticProjectContext, buildRuntimeManifest } from './runtimeContext.mjs';
+import {
+    beginAgentRun,
+    failAgentRun,
+    finishAgentRun,
+    recordAgentActivity,
+    recordToolActivity,
+} from './runtimeActivity.mjs';
 
 const agentQueues = new Map();
 
@@ -104,9 +111,16 @@ const textOnlyMessages = messages => messages.map(item => ({
 }));
 
 const runAgentUnlocked = async (agentId, history = [], options = {}) => {
+    const runtimeRunId = options.runtimeRunId || '';
     throwIfAborted(options.signal);
     const config = await ensureAgentConfig(agentId);
     if (!config.enabled) throw Object.assign(new Error(`${config.name} is disabled.`), { statusCode: 409 });
+
+    recordAgentActivity(runtimeRunId, {
+        phase: 'grounding',
+        summary: `${config.name} is loading runtime, repository, and memory context.`,
+        direction: 'out',
+    });
 
     const definition = agentDefinitions[agentId];
     const [runtimeManifest, automaticProjectContext] = await Promise.all([
@@ -154,6 +168,14 @@ const runAgentUnlocked = async (agentId, history = [], options = {}) => {
         const tools = allowTools && providerSupportsTools(runtimeConfig.provider)
             ? getOpenAITools(agentId)
             : [];
+        recordAgentActivity(runtimeRunId, {
+            phase: 'thinking',
+            round: round + 1,
+            summary: round === 0
+                ? `${config.name} is thinking…`
+                : `${config.name} is continuing after tool results…`,
+            direction: 'in',
+        });
         try {
             response = await callAI(runtimeConfig, messages, tools, {
                 signal: options.signal,
@@ -166,6 +188,13 @@ const runAgentUnlocked = async (agentId, history = [], options = {}) => {
             fallbackUsed = true;
             fallbackReason = connectivityErrorText(error).slice(0, 500);
             messages = textOnlyMessages(messages);
+            recordAgentActivity(runtimeRunId, {
+                phase: 'fallback',
+                round: round + 1,
+                summary: `${config.name} is switching to the configured fallback model.`,
+                direction: 'out',
+                tone: 'warning',
+            });
             const fallbackTools = allowTools && providerSupportsTools(runtimeConfig.provider)
                 ? getOpenAITools(agentId)
                 : [];
@@ -176,6 +205,13 @@ const runAgentUnlocked = async (agentId, history = [], options = {}) => {
         }
 
         if (!response.toolCalls?.length || !allowTools) break;
+
+        recordAgentActivity(runtimeRunId, {
+            phase: 'tool-plan',
+            round: round + 1,
+            summary: `${config.name} requested ${response.toolCalls.length} tool ${response.toolCalls.length === 1 ? 'operation' : 'operations'}.`,
+            direction: 'out',
+        });
 
         messages.push({
             role: 'assistant',
@@ -190,12 +226,27 @@ const runAgentUnlocked = async (agentId, history = [], options = {}) => {
             let result;
             let failed = false;
 
+            recordToolActivity(runtimeRunId, name, args, {
+                phase: 'tool-started',
+                round: round + 1,
+                direction: 'out',
+            });
+
             try {
                 result = await executeTool(agentId, name, args);
             } catch (error) {
                 failed = true;
                 result = { error: error.message };
             }
+
+            recordToolActivity(runtimeRunId, name, args, {
+                phase: failed ? 'tool-failed' : 'tool-completed',
+                round: round + 1,
+                direction: 'in',
+                failed,
+                tone: failed ? 'danger' : 'success',
+                summary: `${String(name || 'tool').replaceAll('_', ' ')} ${failed ? 'failed' : 'completed'}.`,
+            });
 
             toolEvents.push({ name, args, result, failed });
             messages.push({
@@ -208,6 +259,11 @@ const runAgentUnlocked = async (agentId, history = [], options = {}) => {
     }
 
     throwIfAborted(options.signal);
+    recordAgentActivity(runtimeRunId, {
+        phase: 'finalizing',
+        summary: `${config.name} is finalizing the response.`,
+        direction: 'in',
+    });
     return {
         content: response?.content || 'The model returned no text response.',
         toolEvents,
@@ -226,8 +282,22 @@ const runAgentUnlocked = async (agentId, history = [], options = {}) => {
 };
 
 export const runAgent = (agentId, history = [], options = {}) => {
+    const runtimeRunId = beginAgentRun(agentId, {
+        requestId: options.requestId,
+        conversationId: options.conversationId,
+        workflowId: options.workflowId,
+        jobId: options.jobId,
+    });
     const previous = agentQueues.get(agentId) || Promise.resolve();
-    const task = previous.then(() => runAgentUnlocked(agentId, history, options));
+    const task = previous
+        .then(() => runAgentUnlocked(agentId, history, { ...options, runtimeRunId }))
+        .then(result => {
+            finishAgentRun(runtimeRunId, `${agentDefinitions[agentId]?.name || agentId} finished the response.`);
+            return result;
+        }, error => {
+            failAgentRun(runtimeRunId, error);
+            throw error;
+        });
     agentQueues.set(agentId, task.catch(error => {
         if (!isAbortFailure(error)) console.error(`[agent:${agentId}]`, error.message);
     }));
