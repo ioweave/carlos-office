@@ -47,6 +47,23 @@ export const getTemporaryConversation = conversationId => {
     return value ? clone(value) : null;
 };
 
+export const listTemporaryConversations = ({ limit = 300 } = {}) => {
+    cleanupTemporaryConversations();
+    return [...conversations.values()]
+        .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+        .slice(0, Math.max(1, Math.min(Number(limit) || 300, 500)))
+        .map(item => ({
+            conversationId: item.conversationId,
+            agentId: item.agentId,
+            title: item.title,
+            messageCount: item.messages?.length || 0,
+            createdAt: item.createdAt,
+            updatedAt: item.updatedAt,
+            persisted: false,
+            storage: 'volatile',
+        }));
+};
+
 export const saveTemporaryConversation = value => {
     cleanupTemporaryConversations();
     const conversationId = safeId(value.conversationId);

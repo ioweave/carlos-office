@@ -20,6 +20,10 @@
     backdrop-filter: blur(18px);
 }
 
+.workflow-banner--activity {
+    border-color: color-mix(in srgb, var(--color-accent) 42%, var(--color-border));
+}
+
 .workflow-banner--attention {
     border-color: color-mix(in srgb, var(--color-danger) 46%, var(--color-border));
 }
@@ -88,6 +92,72 @@
     color: var(--color-text);
     line-height: 1.4;
     font-size: 0.76rem;
+}
+
+.workflow-banner__live {
+    display: grid;
+    grid-template-columns: 7px auto minmax(0, 1fr);
+    gap: 7px;
+    align-items: center;
+    min-width: 0;
+    padding: 7px 8px;
+    border: 1px solid color-mix(in srgb, var(--color-accent) 24%, var(--color-border));
+    border-radius: var(--radius-xs);
+    background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+    font-size: 0.72rem;
+}
+
+.workflow-banner__live-pulse {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--color-accent);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--color-accent) 70%, transparent);
+    animation: workflow-pulse 1.1s ease-in-out infinite;
+}
+
+.workflow-banner__live small {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.workflow-banner__activity-log {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+    padding: 7px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xs);
+    background: color-mix(in srgb, var(--color-surface-soft) 74%, transparent);
+}
+
+.workflow-banner__activity-event {
+    display: grid;
+    grid-template-columns: 6px minmax(0, 1fr);
+    gap: 7px;
+    align-items: center;
+    min-width: 0;
+}
+
+.workflow-banner__activity-event > span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-accent);
+}
+
+.workflow-banner__activity-event--failed > span { background: var(--color-danger); }
+
+.workflow-banner__activity-event small {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-size: 0.68rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .workflow-banner__jobs {
@@ -160,5 +230,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .workflow-banner__pulse { animation: none; }
+    .workflow-banner__pulse,
+    .workflow-banner__live-pulse { animation: none; }
 }
