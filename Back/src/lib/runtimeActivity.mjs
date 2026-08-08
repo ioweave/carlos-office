@@ -18,6 +18,7 @@ const safeUrl = value => {
         return `${url.origin}${url.pathname}`;
     } catch { return ''; }
 };
+const definedInput = value => Object.fromEntries(Object.entries(value || {}).filter(([, item]) => item !== undefined && item !== null));
 
 const describeTool = (name, args = {}) => {
     if (name === 'project_read_file') return `Reading ${clip(args.path, 100) || 'a project file'}`;
@@ -127,7 +128,7 @@ const emit = (run, input = {}) => {
 
 export const beginAgentRun = (agentId, input = {}) => {
     prune();
-    const context = { ...getExecutionContext(), ...input };
+    const context = { ...getExecutionContext(), ...definedInput(input) };
     const runId = randomUUID();
     const run = {
         runId,
