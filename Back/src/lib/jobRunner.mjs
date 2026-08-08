@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { runAgent } from './agentRunner.mjs';
 import { deleteJob as deleteLifecycleJob, getJob, listJobs, updateJob, jobTraceStatus } from './jobLifecycle.mjs';
-import { emitRuntimeEvent, workflowForJob } from './runtimeWorkflows.mjs';
+import { attachArtifactsToWorkflow, emitRuntimeEvent, workflowForJob } from './runtimeWorkflows.mjs';
+import { extractArtifacts } from './artifacts.mjs';
 
 const workerAgents = new Set(['marco', 'luma', 'dex', 'iris']);
 const pendingQueue = [];
@@ -57,6 +58,12 @@ const traffic = (job, input) => {
     if (!workflowId) return null;
     return emitRuntimeEvent({ workflowId, jobId: job.jobId, ...input });
 };
+const retainArtifacts = (job, result, agentId) => {
+    const artifacts = extractArtifacts(result?.toolEvents || [], { agentId });
+    if (!artifacts.length) return [];
+    attachArtifactsToWorkflow(job?.workflowId || workflowForJob(job?.jobId), artifacts);
+    return artifacts;
+};
 
 const markCancelled = async (jobId, job = null) => {
     const current = job || await getJob(jobId);
@@ -88,6 +95,7 @@ export const runJobLoop = async (jobId, { signal } = {}) => {
             const worker = await runAgent(job.assignedAgent, [{ role: 'user', content: workerPrompt(job, iteration, previous), createdAt: new Date().toISOString() }], {
                 signal, maxToolRounds: Number(process.env.JOB_MAX_TOOL_ROUNDS || 4), timeoutMs: Number(process.env.JOB_WORKER_TIMEOUT_MS || 120_000),
             });
+            retainArtifacts(job, worker, job.assignedAgent);
             throwIfCancelled(jobId, signal);
             const workerMessage = makeMessage({ from: job.assignedAgent, to: 'vera', type: 'deliverable', content: worker.content, iteration });
             traffic(job, { type: 'worker.delivered', from: job.assignedAgent, to: 'vera', fromNode: `agent:${job.assignedAgent}`, toNode: `job:${job.jobId}`, stage: 'submitted', iteration, summary: `${job.assignedAgent} submitted iteration ${iteration}.`, tone: 'worker' });
@@ -99,6 +107,7 @@ export const runJobLoop = async (jobId, { signal } = {}) => {
                 signal, allowTools: true, includeMemory: false, includeAutomaticProjectContext: false,
                 maxToolRounds: Number(process.env.JOB_QC_TOOL_ROUNDS || 2), timeoutMs: Number(process.env.JOB_QC_TIMEOUT_MS || 75_000),
             });
+            retainArtifacts(job, qc, 'vera');
             throwIfCancelled(jobId, signal);
             const review = parseReview(qc.content);
             let attempt = { iteration, workerOutput: worker.content, workerModel: worker.model, qcVerdict: review.verdict, qcScore: review.score, qcSummary: review.summary, qcFeedback: review.feedback, missing: review.missing, qcModel: qc.model, createdAt: new Date().toISOString() };
