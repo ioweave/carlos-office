@@ -81,6 +81,13 @@ const configuredRounds = name => {
     return value ? { maxToolRounds: Number(value) } : {};
 };
 
+export const firstIterationForRun = job => {
+    if (job?.traceRetention === 'receipt-only') {
+        return Math.max(1, Math.min(Number(job.currentIteration || 1), Number(job.maxIterations || 1)));
+    }
+    return Math.max(1, (job?.attempts?.length || 0) + 1);
+};
+
 const markCancelled = async (jobId, job = null) => {
     const current = job || await getJob(jobId);
     if (!current) return { jobId, status: 'cancelled' };
@@ -100,7 +107,7 @@ export const runJobLoop = async (jobId, { signal } = {}) => {
 
     try {
         throwIfCancelled(jobId, signal);
-        const startIteration = Math.max(1, (job.attempts?.length || 0) + 1);
+        const startIteration = firstIterationForRun(job);
         for (let iteration = startIteration; iteration <= job.maxIterations; iteration += 1) {
             throwIfCancelled(jobId, signal);
             const previous = job.attempts?.at(-1) || null;
