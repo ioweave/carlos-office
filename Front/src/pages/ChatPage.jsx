@@ -30,6 +30,7 @@ const MAX_FILE_BYTES = 8_388_608;
 const MAX_TOTAL_BYTES = 20_971_520;
 const ARTIFACT_MIN_WIDTH = 320;
 const ARTIFACT_DEFAULT_WIDTH = 460;
+const ACTIVE_CONVERSATION_KEY = 'office-active-conversation';
 
 const languages = [
     ['en-US', 'English · US'],
@@ -209,7 +210,11 @@ export default function ChatPage({ agents, health, openRequest }) {
         localStorage.setItem('office-chat-artifact-width', String(Math.round(next)));
     };
 
-    useEffect(() => { loadHistory(); }, []);
+    useEffect(() => {
+        loadHistory();
+        const activeConversation = sessionStorage.getItem(ACTIVE_CONVERSATION_KEY);
+        if (activeConversation) openConversation(activeConversation, { quiet: true });
+    }, []);
     useEffect(() => { scrollBottom(); }, [messages.length, sending]);
     useEffect(() => {
         if (activeArtifactId && !conversationArtifacts.some(item => item.artifactId === activeArtifactId)) setActiveArtifactId('');
@@ -238,6 +243,7 @@ export default function ChatPage({ agents, health, openRequest }) {
     const startNew = (nextAgent = agentId) => {
         if (sending) return toast.message('Stop the current response first.');
         if (conversationId && !persisted) discardTemporary(conversationId);
+        sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
         const selected = agents.find(item => item.agentId === nextAgent);
         setAgentId(nextAgent);
         setConversationId(null);
@@ -253,12 +259,13 @@ export default function ChatPage({ agents, health, openRequest }) {
         resizeComposer();
     };
 
-    const openConversation = async id => {
+    const openConversation = async (id, { quiet = false } = {}) => {
         if (!id || sending) return;
         if (conversationId && !persisted && conversationId !== id) discardTemporary(conversationId);
         try {
             const record = (await api.get(`/conversations/${encodeURIComponent(id)}`)).data;
             setConversationId(record.conversationId);
+            sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, record.conversationId);
             setPersisted(Boolean(record.persisted ?? true));
             setTitle(record.title || 'Conversation');
             setAgentId(record.agentId || 'nora');
@@ -270,7 +277,8 @@ export default function ChatPage({ agents, health, openRequest }) {
             setActiveArtifactId('');
             scrollBottom();
         } catch (error) {
-            toast.error(error.response?.data?.error || 'Could not open conversation.');
+            sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
+            if (!quiet) toast.error(error.response?.data?.error || 'Could not open conversation.');
         }
     };
 
@@ -389,6 +397,7 @@ export default function ChatPage({ agents, health, openRequest }) {
         const optimistic = { role: 'user', content: message || 'Review the attached files.', attachments: pendingAttachments, createdAt: new Date().toISOString() };
 
         setConversationId(id);
+        sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
         setMessages(current => [...current.filter(item => item.model?.model !== 'not invoked yet'), optimistic]);
         setInput('');
         setFiles([]);
@@ -399,7 +408,7 @@ export default function ChatPage({ agents, health, openRequest }) {
         requestRef.current = controller;
         try {
             const attachments = await Promise.all(files.map(item => filePayload(item.file)));
-            const response = await api.post('/chat', { conversationId: id, agentId, message, attachments }, { signal: controller.signal });
+            const response = await api.post('/chat', { conversationId: id, agentId, message, attachments }, { signal: controller.signal, timeout: 0 });
             const isSaved = Boolean(response.data.persisted || response.data.conversation?.persisted);
             const responseMessage = response.data.message;
             setPersisted(isSaved);

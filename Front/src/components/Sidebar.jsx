@@ -41,6 +41,7 @@ export default function Sidebar({ active, setActive, health, theme, setTheme }) 
                             key={item.id}
                             className={`office-nav__item ${current ? 'office-nav__item--active' : ''}`}
                             onClick={() => setActive(item.id)}
+                            aria-label={item.label}
                             aria-current={current ? 'page' : undefined}
                         >
                             <Icon size={19} stroke={1.7} />
@@ -60,7 +61,7 @@ export default function Sidebar({ active, setActive, health, theme, setTheme }) 
                     </div>
                 </div>
 
-                <button className="office-nav__theme" onClick={() => setTheme(nextTheme)}>
+                <button className="office-nav__theme" onClick={() => setTheme(nextTheme)} aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
                     {theme === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}
                     <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
                 </button>
