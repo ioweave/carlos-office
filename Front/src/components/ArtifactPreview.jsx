@@ -5,7 +5,28 @@ import MarkdownMessage from './MarkdownMessage';
 
 const bytes = value => value < 1024 ? `${value} B` : value < 1024 ** 2 ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1024 ** 2).toFixed(1)} MB`;
 
+const streamUrlFor = (record, { download = false } = {}) => {
+    if (!record) return '';
+    const base = String(api.defaults.baseURL || 'http://127.0.0.1:3002/api').replace(/\/$/, '');
+    const params = new URLSearchParams({
+        source: record.source || '',
+        path: record.path || '',
+        agentId: record.agentId || 'nora',
+    });
+    if (download) params.set('download', '1');
+    return `${base}/artifacts/stream?${params.toString()}`;
+};
+
 const downloadRecord = record => {
+    if (record.encoding === 'stream') {
+        const link = document.createElement('a');
+        link.href = streamUrlFor(record, { download: true });
+        link.rel = 'noopener';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        return;
+    }
     const blob = record.encoding === 'base64'
         ? new Blob([Uint8Array.from(atob(record.data || ''), character => character.charCodeAt(0))], { type: record.mimeType || 'application/octet-stream' })
         : new Blob([record.content || ''], { type: record.mimeType || 'text/plain;charset=utf-8' });
@@ -38,6 +59,8 @@ export default function ArtifactPreview({ artifact, artifacts, onSelect, onClose
     const dataUrl = useMemo(() => record?.encoding === 'base64' && record?.data
         ? `data:${record.mimeType || 'application/octet-stream'};base64,${record.data}`
         : '', [record]);
+    const streamUrl = useMemo(() => record?.encoding === 'stream' ? streamUrlFor(record) : '', [record]);
+    const binaryUrl = streamUrl || dataUrl;
 
     if (!artifact) return null;
 
@@ -73,15 +96,31 @@ export default function ArtifactPreview({ artifact, artifacts, onSelect, onClose
                 <span>{artifact.source}</span>
             </div>
 
-            <div className="chat-artifact__body">
+            <div className={`chat-artifact__body ${record?.previewKind ? `chat-artifact__body--${record.previewKind}` : ''}`}>
                 {loading && <div className="chat-artifact__status">Loading preview…</div>}
                 {!loading && error && <div className="chat-artifact__status chat-artifact__status--error"><strong>Preview unavailable</strong><p>{error}</p></div>}
-                {!loading && !error && record?.previewKind === 'image' && dataUrl && <img className="chat-artifact__image" src={dataUrl} alt={record.title || record.name || 'Generated artifact'} />}
-                {!loading && !error && record?.previewKind === 'pdf' && dataUrl && <iframe className="chat-artifact__frame" src={dataUrl} title={record.title || record.name} />}
+                {!loading && !error && record?.previewKind === 'image' && binaryUrl && <img className="chat-artifact__image" src={binaryUrl} alt={record.title || record.name || 'Generated artifact'} />}
+                {!loading && !error && record?.previewKind === 'pdf' && binaryUrl && <iframe className="chat-artifact__frame" src={binaryUrl} title={record.title || record.name} />}
+                {!loading && !error && record?.previewKind === 'audio' && binaryUrl && (
+                    <div className="chat-artifact__audio-shell">
+                        <div className="chat-artifact__audio-title">
+                            <strong>{record.title || record.name}</strong>
+                            <span>{record.mimeType}</span>
+                        </div>
+                        <audio className="chat-artifact__audio" controls preload="metadata" src={binaryUrl}>
+                            Your browser cannot play this audio artifact. Use Download instead.
+                        </audio>
+                    </div>
+                )}
+                {!loading && !error && record?.previewKind === 'video' && binaryUrl && (
+                    <video className="chat-artifact__video" controls playsInline preload="metadata" src={binaryUrl}>
+                        Your browser cannot play this video artifact. Use Download instead.
+                    </video>
+                )}
                 {!loading && !error && record?.previewKind === 'html' && <iframe className="chat-artifact__frame" sandbox="" srcDoc={record.content || ''} title={record.title || record.name} />}
                 {!loading && !error && record?.previewKind === 'markdown' && <div className="chat-artifact__markdown"><MarkdownMessage content={record.content || ''} /></div>}
                 {!loading && !error && ['code', 'json', 'text'].includes(record?.previewKind) && <pre className="chat-artifact__code">{record.content || ''}</pre>}
-                {!loading && !error && record && !['image', 'pdf', 'html', 'markdown', 'code', 'json', 'text'].includes(record.previewKind) && <pre className="chat-artifact__code">{record.content || 'No inline preview is available for this artifact.'}</pre>}
+                {!loading && !error && record && !['image', 'pdf', 'audio', 'video', 'html', 'markdown', 'code', 'json', 'text'].includes(record.previewKind) && <pre className="chat-artifact__code">{record.content || 'No inline preview is available for this artifact.'}</pre>}
                 {!loading && !error && record?.truncated && <div className="chat-artifact__notice">Preview truncated for safety. Download the artifact to view the complete file.</div>}
             </div>
         </aside>
