@@ -116,7 +116,7 @@ export const runJobLoop = async (jobId, { signal } = {}) => {
             traffic(job, { type: 'worker.started', from: 'nora', to: job.assignedAgent, fromNode: `job:${job.jobId}`, toNode: `agent:${job.assignedAgent}`, stage: 'worker-executing', iteration, summary: `${job.assignedAgent} started iteration ${iteration}.`, tone: 'worker' });
 
             const worker = await runAgent(job.assignedAgent, [{ role: 'user', content: workerPrompt(job, iteration, previous), createdAt: new Date().toISOString() }], {
-                signal, ...executionContextForJob(job), ...configuredRounds('JOB_MAX_TOOL_ROUNDS'), timeoutMs: Number(process.env.JOB_WORKER_TIMEOUT_MS || 120_000),
+                signal, ...executionContextForJob(job), ...configuredRounds('JOB_MAX_TOOL_ROUNDS'), timeoutMs: Number(process.env.JOB_WORKER_TIMEOUT_MS || 300_000),
             });
             retainArtifacts(job, worker, job.assignedAgent);
             throwIfCancelled(jobId, signal);
