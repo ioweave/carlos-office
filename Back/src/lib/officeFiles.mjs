@@ -39,6 +39,24 @@ export const ensureOfficeWorkspace = async () => {
     return base;
 };
 
+export const resolveOfficeFile = async (agentId, { path: filePath } = {}) => {
+    await ensureOfficeWorkspace();
+    const target = assertPath(agentId, filePath);
+    try {
+        const stat = await fs.stat(target.absolute);
+        if (!stat.isFile()) throw Object.assign(new Error('Office workspace artifact must be a file.'), { statusCode: 400 });
+        return {
+            path: target.relative,
+            absolute: target.absolute,
+            size: stat.size,
+            modifiedAt: stat.mtime.toISOString(),
+        };
+    } catch (error) {
+        if (error.code === 'ENOENT') throw Object.assign(new Error('Office workspace file not found.'), { statusCode: 404 });
+        throw error;
+    }
+};
+
 export const listOfficeFiles = async (agentId, { folder, limit = 200 } = {}) => {
     await ensureOfficeWorkspace();
     const agentFolder = cleanAgent(agentId);
@@ -73,16 +91,10 @@ export const listOfficeFiles = async (agentId, { folder, limit = 200 } = {}) => 
 };
 
 export const readOfficeFile = async (agentId, { path: filePath, maxChars = 100_000 } = {}) => {
-    await ensureOfficeWorkspace();
-    const target = assertPath(agentId, filePath);
-    try {
-        const content = await fs.readFile(target.absolute, 'utf8');
-        const limit = Math.max(1_000, Math.min(Number(maxChars) || 100_000, 500_000));
-        return { path: target.relative, content: content.slice(0, limit), truncated: content.length > limit };
-    } catch (error) {
-        if (error.code === 'ENOENT') throw Object.assign(new Error('Office workspace file not found.'), { statusCode: 404 });
-        throw error;
-    }
+    const target = await resolveOfficeFile(agentId, { path: filePath });
+    const content = await fs.readFile(target.absolute, 'utf8');
+    const limit = Math.max(1_000, Math.min(Number(maxChars) || 100_000, 500_000));
+    return { path: target.path, content: content.slice(0, limit), truncated: content.length > limit, size: target.size, modifiedAt: target.modifiedAt };
 };
 
 export const writeOfficeFile = async (agentId, { path: filePath, content = '', mode = 'replace' } = {}) => {
