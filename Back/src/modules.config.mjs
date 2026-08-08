@@ -7,6 +7,7 @@ export default [
     { method: 'GET', path: '/api/models', handler: OfficeController.listModels },
     { method: 'GET', path: '/api/tools', handler: OfficeController.listTools },
     { method: 'POST', path: '/api/tools/{toolName}', handler: OfficeController.invokeTool },
+    { method: 'GET', path: '/api/artifacts/read', handler: OfficeController.readArtifact },
     { method: 'GET', path: '/api/memory', handler: OfficeController.listMemory },
     { method: 'GET', path: '/api/memory/read', handler: OfficeController.readMemory },
     { method: 'POST', path: '/api/memory', handler: OfficeController.writeMemory },
