@@ -7,12 +7,12 @@ provider: "ollama"
 model: "minimax-m3:cloud"
 baseUrl: "http://127.0.0.1:11434"
 temperature: 0.15
-maxToolRounds: 6
+maxToolRounds: 9
 enabled: true
 fallback: {"enabled":true,"provider":"ollama","model":"qwen3:8b","baseUrl":"http://127.0.0.1:11434"}
-configVersion: 4
+configVersion: 6
 createdAt: "2026-08-07T00:32:15.964Z"
-updatedAt: "2026-08-07T00:32:15.964Z"
+updatedAt: "2026-08-07T16:41:07.787Z"
 ---
 # Iris runtime configuration
 
