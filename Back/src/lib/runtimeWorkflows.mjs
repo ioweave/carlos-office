@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { mergeArtifacts } from './artifacts.mjs';
 
 const workflows = new Map();
 const jobWorkflow = new Map();
@@ -62,6 +63,7 @@ export const createRuntimeWorkflow = ({ title, objective = '', plan = '', conver
         attentionReason: '',
         attentionMessage: '',
         jobIds: [],
+        artifacts: [],
         createdAt: now(),
         updatedAt: now(),
         completedAt: '',
@@ -107,6 +109,15 @@ export const attachJobToWorkflow = (workflowId, job) => {
         stage: 'queued', summary: `${job.assignedAgent} received the assignment.`, tone: 'info',
     });
     return clone(workflow);
+};
+
+export const attachArtifactsToWorkflow = (workflowId, artifacts = []) => {
+    if (!workflowId || !artifacts.length) return null;
+    const workflow = workflows.get(String(workflowId));
+    if (!workflow) return null;
+    workflow.artifacts = mergeArtifacts(workflow.artifacts, artifacts);
+    workflow.updatedAt = now();
+    return clone(workflow.artifacts);
 };
 
 export const workflowForJob = jobId => jobWorkflow.get(String(jobId || '')) || '';
