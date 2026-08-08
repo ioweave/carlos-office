@@ -12,6 +12,9 @@ const {
     runtimeActivitySnapshot,
 } = await import('../src/lib/runtimeActivity.mjs');
 const { listRuntimeEvents } = await import('../src/lib/runtimeWorkflows.mjs');
+const { attachJobToWorkflow, createRuntimeWorkflow } = await import('../src/lib/runtimeWorkflows.mjs');
+const { progressOnlyResponse } = await import('../src/lib/agentRunner.mjs');
+const { executionContextForJob } = await import('../src/lib/jobRunner.mjs');
 const {
     deleteTemporaryConversation,
     listTemporaryConversations,
@@ -50,6 +53,25 @@ assert(snapshot.events.every(event => !('args' in event) && !('result' in event)
 const traffic = listRuntimeEvents({ limit: 100 });
 assert(traffic.some(event => event.fromNode === `conversation:${conversationId}` && event.toNode === 'agent:nora'), 'Conversation-to-agent traffic must drive Office Map packets.');
 assert(traffic.some(event => event.fromNode === 'agent:nora' && event.toNode === `conversation:${conversationId}`), 'Agent-to-conversation traffic must drive Office Map packets.');
+
+assert(progressOnlyResponse('Now let me inspect the remaining source files:'), 'Forward-looking progress notes must not be accepted as final deliverables.');
+assert(progressOnlyResponse('Excellent. I have the first sources. Let me grab the license next.'), 'Embedded progress notes must trigger continued execution.');
+assert.equal(progressOnlyResponse('The research report is complete and includes the requested license matrix.'), false, 'Completed deliverables must not be forced through another model turn.');
+
+const workflow = createRuntimeWorkflow({ requestId, conversationId, objective: 'Validate job activity' });
+const job = { jobId: randomUUID(), workflowId: workflow.workflowId, assignedAgent: 'iris', title: 'Runtime job validation' };
+attachJobToWorkflow(workflow.workflowId, job);
+const jobContext = executionContextForJob(job);
+assert.equal(jobContext.requestId, requestId, 'Delegated work must retain its originating request identity.');
+assert.equal(jobContext.conversationId, conversationId, 'Delegated work must retain its originating conversation identity.');
+assert.equal(jobContext.workflowId, workflow.workflowId, 'Delegated work must carry its workflow identity.');
+assert.equal(jobContext.jobId, job.jobId, 'Delegated work must carry its job identity.');
+const jobRunId = beginAgentRun('iris', jobContext);
+recordAgentActivity(jobRunId, { phase: 'thinking', summary: 'Iris is researching.', direction: 'in' });
+finishAgentRun(jobRunId, 'Iris finished the job.');
+const jobTraffic = listRuntimeEvents({ jobId: job.jobId, limit: 20 });
+assert(jobTraffic.some(event => event.fromNode === `job:${job.jobId}` && event.toNode === 'agent:iris'), 'Job activity must drive job-to-worker Office Map packets.');
+assert(jobTraffic.some(event => event.fromNode === 'agent:iris' && event.toNode === `job:${job.jobId}`), 'Job activity must drive worker-to-job Office Map packets.');
 
 const temporary = listTemporaryConversations({ limit: 10 }).find(item => item.conversationId === conversationId);
 assert(temporary, 'Temporary conversations must be available to the runtime topology.');
