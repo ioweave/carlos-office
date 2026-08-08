@@ -110,6 +110,17 @@ const textOnlyMessages = messages => messages.map(item => ({
     content: textOnlyContent(item.content),
 }));
 
+export const progressOnlyResponse = value => {
+    const content = String(value || '').trim();
+    if (!content || content.length > 4_000) return false;
+    return /\b(?:now\s+)?let me\s+(?:read|inspect|check|grab|get|try|search|continue|drill|look|fetch|review|verify|find|open)\b/i.test(content)
+        || /\bi(?:'ll| will)\s+(?:read|inspect|check|grab|get|try|search|continue|drill|look|fetch|review|verify|find|open)\b/i.test(content);
+};
+
+const finalResponseInstruction = `The tool-use phase is complete. Return the complete answer or deliverable now.
+Do not describe what you intend to inspect, fetch, read, or do next. Do not return a progress report.
+Use the evidence already gathered, state any remaining uncertainty explicitly, and satisfy the user's requested output as fully as possible.`;
+
 const runAgentUnlocked = async (agentId, history = [], options = {}) => {
     const runtimeRunId = options.runtimeRunId || '';
     throwIfAborted(options.signal);
@@ -159,6 +170,7 @@ const runAgentUnlocked = async (agentId, history = [], options = {}) => {
     let fallbackUsed = false;
     let fallbackReason = '';
     let response = null;
+    let forceFinalResponse = false;
     const allowTools = options.allowTools !== false;
     const configuredRounds = Number(options.maxToolRounds ?? config.maxToolRounds ?? 4);
     const maxToolRounds = allowTools ? Math.max(0, Math.min(configuredRounds, 12)) : 0;
@@ -204,7 +216,26 @@ const runAgentUnlocked = async (agentId, history = [], options = {}) => {
             });
         }
 
-        if (!response.toolCalls?.length || !allowTools) break;
+        if (!response.toolCalls?.length || !allowTools) {
+            const shouldContinue = allowTools
+                && round < maxToolRounds
+                && toolEvents.length > 0
+                && progressOnlyResponse(response.content);
+            if (!shouldContinue) {
+                forceFinalResponse = allowTools && progressOnlyResponse(response.content);
+                break;
+            }
+            recordAgentActivity(runtimeRunId, {
+                phase: 'continuing',
+                round: round + 1,
+                summary: `${config.name} returned a progress note and is continuing toward the deliverable.`,
+                direction: 'in',
+                tone: 'warning',
+            });
+            messages.push({ role: 'assistant', content: response.content || '' });
+            messages.push({ role: 'user', content: finalResponseInstruction });
+            continue;
+        }
 
         recordAgentActivity(runtimeRunId, {
             phase: 'tool-plan',
@@ -256,6 +287,21 @@ const runAgentUnlocked = async (agentId, history = [], options = {}) => {
                 content: JSON.stringify(result),
             });
         }
+        if (round >= maxToolRounds) forceFinalResponse = true;
+    }
+
+    if (forceFinalResponse) {
+        throwIfAborted(options.signal);
+        messages.push({ role: 'user', content: finalResponseInstruction });
+        recordAgentActivity(runtimeRunId, {
+            phase: 'final-response',
+            summary: `${config.name} is producing the deliverable from the gathered evidence.`,
+            direction: 'in',
+        });
+        response = await callAI(runtimeConfig, messages, [], {
+            signal: options.signal,
+            timeoutMs: options.timeoutMs,
+        });
     }
 
     throwIfAborted(options.signal);

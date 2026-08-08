@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { runAgent } from './agentRunner.mjs';
 import { deleteJob as deleteLifecycleJob, getJob, listJobs, updateJob, jobTraceStatus } from './jobLifecycle.mjs';
-import { attachArtifactsToWorkflow, emitRuntimeEvent, workflowForJob } from './runtimeWorkflows.mjs';
+import { attachArtifactsToWorkflow, emitRuntimeEvent, getRuntimeWorkflow, workflowForJob } from './runtimeWorkflows.mjs';
 import { extractArtifacts } from './artifacts.mjs';
 
 const workerAgents = new Set(['marco', 'luma', 'dex', 'iris']);
@@ -65,6 +65,22 @@ const retainArtifacts = (job, result, agentId) => {
     return artifacts;
 };
 
+export const executionContextForJob = job => {
+    const workflowId = job?.workflowId || workflowForJob(job?.jobId);
+    const workflow = workflowId ? getRuntimeWorkflow(workflowId) : null;
+    return {
+        requestId: workflow?.requestId || '',
+        conversationId: workflow?.conversationId || '',
+        workflowId: workflowId || '',
+        jobId: job?.jobId || '',
+    };
+};
+
+const configuredRounds = name => {
+    const value = String(process.env[name] || '').trim();
+    return value ? { maxToolRounds: Number(value) } : {};
+};
+
 const markCancelled = async (jobId, job = null) => {
     const current = job || await getJob(jobId);
     if (!current) return { jobId, status: 'cancelled' };
@@ -93,7 +109,7 @@ export const runJobLoop = async (jobId, { signal } = {}) => {
             traffic(job, { type: 'worker.started', from: 'nora', to: job.assignedAgent, fromNode: `job:${job.jobId}`, toNode: `agent:${job.assignedAgent}`, stage: 'worker-executing', iteration, summary: `${job.assignedAgent} started iteration ${iteration}.`, tone: 'worker' });
 
             const worker = await runAgent(job.assignedAgent, [{ role: 'user', content: workerPrompt(job, iteration, previous), createdAt: new Date().toISOString() }], {
-                signal, maxToolRounds: Number(process.env.JOB_MAX_TOOL_ROUNDS || 4), timeoutMs: Number(process.env.JOB_WORKER_TIMEOUT_MS || 120_000),
+                signal, ...executionContextForJob(job), ...configuredRounds('JOB_MAX_TOOL_ROUNDS'), timeoutMs: Number(process.env.JOB_WORKER_TIMEOUT_MS || 120_000),
             });
             retainArtifacts(job, worker, job.assignedAgent);
             throwIfCancelled(jobId, signal);
@@ -104,8 +120,8 @@ export const runJobLoop = async (jobId, { signal } = {}) => {
             job = await updateJob(jobId, { status: 'qc_review', waitingOn: 'vera', result: worker.content, messages: [...(job.messages || []), workerMessage] });
 
             const qc = await runAgent('vera', [{ role: 'user', content: qcPrompt(job, worker.content, iteration), createdAt: new Date().toISOString() }], {
-                signal, allowTools: true, includeMemory: false, includeAutomaticProjectContext: false,
-                maxToolRounds: Number(process.env.JOB_QC_TOOL_ROUNDS || 2), timeoutMs: Number(process.env.JOB_QC_TIMEOUT_MS || 75_000),
+                signal, ...executionContextForJob(job), allowTools: true, includeMemory: false, includeAutomaticProjectContext: false,
+                ...configuredRounds('JOB_QC_TOOL_ROUNDS'), timeoutMs: Number(process.env.JOB_QC_TIMEOUT_MS || 75_000),
             });
             retainArtifacts(job, qc, 'vera');
             throwIfCancelled(jobId, signal);
@@ -120,7 +136,7 @@ export const runJobLoop = async (jobId, { signal } = {}) => {
                 updateActive(jobId, { agentId: 'nora', stage: 'nora-final-review', iteration, title: job.title });
                 job = await updateJob(jobId, { status: 'nora_review', waitingOn: 'nora', attempts, messages, result: worker.content, qcVerdict: 'pass', qcScore: review.score, qcFeedback: review.feedback || review.summary, currentIteration: iteration, lastError: '' });
                 const nora = await runAgent('nora', [{ role: 'user', content: noraReviewPrompt(job, worker.content, review, iteration), createdAt: new Date().toISOString() }], {
-                    signal, allowTools: false, includeMemory: false, includeAutomaticProjectContext: false, maxToolRounds: 0, timeoutMs: Number(process.env.JOB_NORA_REVIEW_TIMEOUT_MS || 40_000),
+                    signal, ...executionContextForJob(job), allowTools: false, includeMemory: false, includeAutomaticProjectContext: false, maxToolRounds: 0, timeoutMs: Number(process.env.JOB_NORA_REVIEW_TIMEOUT_MS || 40_000),
                 });
                 throwIfCancelled(jobId, signal);
                 const approval = parseNoraReview(nora.content);
