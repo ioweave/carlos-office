@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
     IconArrowUp,
+    IconCheck,
+    IconCopy,
     IconDeviceFloppy,
     IconDownload,
     IconFile,
@@ -18,12 +20,16 @@ import {
 } from '@tabler/icons-react';
 import { toast } from 'sonner';
 import api from '../api';
+import ArtifactPreview from '../components/ArtifactPreview';
 import MarkdownMessage from '../components/MarkdownMessage';
 import StatusBadge from '../components/StatusBadge';
+import { artifactsForConversation, artifactsForMessage } from '../lib/artifacts';
 
 const MAX_FILES = 8;
 const MAX_FILE_BYTES = 8_388_608;
 const MAX_TOTAL_BYTES = 20_971_520;
+const ARTIFACT_MIN_WIDTH = 320;
+const ARTIFACT_DEFAULT_WIDTH = 460;
 
 const languages = [
     ['en-US', 'English · US'],
@@ -74,6 +80,10 @@ const cancelled = error => error?.code === 'ERR_CANCELED'
     || error?.name === 'CanceledError'
     || error?.response?.status === 499
     || error?.response?.data?.cancelled;
+const initialArtifactWidth = () => {
+    const saved = Number(localStorage.getItem('office-chat-artifact-width'));
+    return Number.isFinite(saved) ? Math.max(ARTIFACT_MIN_WIDTH, Math.min(saved, 720)) : ARTIFACT_DEFAULT_WIDTH;
+};
 
 export default function ChatPage({ agents, health, openRequest }) {
     const [agentId, setAgentId] = useState('nora');
@@ -95,18 +105,25 @@ export default function ChatPage({ agents, health, openRequest }) {
     const [speaking, setSpeaking] = useState(null);
     const [language, setLanguage] = useState(localStorage.getItem('office-speech-language') || 'en-US');
     const [deleteTarget, setDeleteTarget] = useState(null);
+    const [copiedResponse, setCopiedResponse] = useState(null);
+    const [activeArtifactId, setActiveArtifactId] = useState('');
+    const [artifactWidth, setArtifactWidth] = useState(initialArtifactWidth);
 
     const textareaRef = useRef(null);
     const fileRef = useRef(null);
     const messagesRef = useRef(null);
+    const workspaceRef = useRef(null);
     const requestRef = useRef(null);
     const recognitionRef = useRef(null);
+    const copyTimerRef = useRef(null);
 
     const agent = useMemo(() => agents.find(item => item.agentId === agentId), [agents, agentId]);
     const filtered = useMemo(() => {
         const query = search.trim().toLowerCase();
         return conversations.filter(item => !query || item.title.toLowerCase().includes(query) || item.agentId.toLowerCase().includes(query));
     }, [conversations, search]);
+    const conversationArtifacts = useMemo(() => artifactsForConversation(messages, agentId), [messages, agentId]);
+    const activeArtifact = useMemo(() => conversationArtifacts.find(item => item.artifactId === activeArtifactId) || null, [conversationArtifacts, activeArtifactId]);
     const hasRealMessages = messages.some(item => item.model?.model !== 'not invoked yet');
 
     const resizeComposer = () => requestAnimationFrame(() => {
@@ -139,16 +156,78 @@ export default function ChatPage({ agents, health, openRequest }) {
         setSpeaking(index);
         window.speechSynthesis.speak(utterance);
     };
+    const copyResponse = async (text, index) => {
+        try {
+            if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(String(text || ''));
+            else {
+                const helper = document.createElement('textarea');
+                helper.value = String(text || '');
+                helper.style.position = 'fixed';
+                helper.style.opacity = '0';
+                document.body.appendChild(helper);
+                helper.select();
+                document.execCommand('copy');
+                helper.remove();
+            }
+            setCopiedResponse(index);
+            clearTimeout(copyTimerRef.current);
+            copyTimerRef.current = setTimeout(() => setCopiedResponse(null), 1600);
+        } catch {
+            toast.error('Could not copy the response.');
+        }
+    };
+    const artifactMaxWidth = () => {
+        const workspaceWidth = workspaceRef.current?.clientWidth || window.innerWidth;
+        return Math.max(ARTIFACT_MIN_WIDTH, Math.min(720, workspaceWidth - 340));
+    };
+    const updateArtifactWidth = value => {
+        const next = Math.max(ARTIFACT_MIN_WIDTH, Math.min(Number(value) || ARTIFACT_DEFAULT_WIDTH, artifactMaxWidth()));
+        setArtifactWidth(next);
+        return next;
+    };
+    const startArtifactResize = event => {
+        if (window.innerWidth < 900) return;
+        const startX = event.clientX;
+        const startWidth = artifactWidth;
+        const move = pointerEvent => updateArtifactWidth(startWidth - (pointerEvent.clientX - startX));
+        const end = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', end);
+            localStorage.setItem('office-chat-artifact-width', String(Math.round(artifactWidth)));
+            document.body.classList.remove('is-resizing-chat-artifact');
+        };
+        document.body.classList.add('is-resizing-chat-artifact');
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', end, { once: true });
+        event.preventDefault();
+    };
+    const resizeArtifactByKeyboard = event => {
+        if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+        event.preventDefault();
+        const direction = event.key === 'ArrowLeft' ? 32 : -32;
+        const next = updateArtifactWidth(artifactWidth + direction);
+        localStorage.setItem('office-chat-artifact-width', String(Math.round(next)));
+    };
 
     useEffect(() => { loadHistory(); }, []);
     useEffect(() => { scrollBottom(); }, [messages.length, sending]);
     useEffect(() => {
+        if (activeArtifactId && !conversationArtifacts.some(item => item.artifactId === activeArtifactId)) setActiveArtifactId('');
+    }, [conversationArtifacts, activeArtifactId]);
+    useEffect(() => {
         if (openRequest?.conversationId) openConversation(openRequest.conversationId);
     }, [openRequest?.token]);
+    useEffect(() => {
+        const resize = () => activeArtifactId && updateArtifactWidth(artifactWidth);
+        window.addEventListener('resize', resize);
+        return () => window.removeEventListener('resize', resize);
+    }, [activeArtifactId, artifactWidth]);
     useEffect(() => () => {
         requestRef.current?.abort();
         recognitionRef.current?.abort?.();
         window.speechSynthesis?.cancel?.();
+        clearTimeout(copyTimerRef.current);
+        document.body.classList.remove('is-resizing-chat-artifact');
     }, []);
 
     const discardTemporary = id => {
@@ -169,6 +248,7 @@ export default function ChatPage({ agents, health, openRequest }) {
         setFiles([]);
         setEditingTitle(false);
         setHistoryOpen(false);
+        setActiveArtifactId('');
         textareaRef.current?.focus();
         resizeComposer();
     };
@@ -187,6 +267,7 @@ export default function ChatPage({ agents, health, openRequest }) {
             setFiles([]);
             setEditingTitle(false);
             setHistoryOpen(false);
+            setActiveArtifactId('');
             scrollBottom();
         } catch (error) {
             toast.error(error.response?.data?.error || 'Could not open conversation.');
@@ -320,9 +401,12 @@ export default function ChatPage({ agents, health, openRequest }) {
             const attachments = await Promise.all(files.map(item => filePayload(item.file)));
             const response = await api.post('/chat', { conversationId: id, agentId, message, attachments }, { signal: controller.signal });
             const isSaved = Boolean(response.data.persisted || response.data.conversation?.persisted);
+            const responseMessage = response.data.message;
             setPersisted(isSaved);
             setTitle(response.data.conversation?.title || title);
-            setMessages(current => [...current, response.data.message]);
+            setMessages(current => [...current, responseMessage]);
+            const generated = artifactsForMessage(responseMessage, agentId);
+            if (generated.length) setActiveArtifactId(generated.at(-1).artifactId);
             if (isSaved) await loadHistory({ quiet: true });
         } catch (error) {
             if (cancelled(error)) {
@@ -339,7 +423,7 @@ export default function ChatPage({ agents, health, openRequest }) {
     };
 
     return (
-        <div className={`chat ${historyOpen ? 'chat--history-open' : ''}`}>
+        <div className={`chat ${historyOpen ? 'chat--history-open' : ''} ${activeArtifact ? 'chat--artifact-open' : ''}`}>
             <aside className="chat__history" aria-label="Saved conversation history">
                 <div className="chat__history-header">
                     <strong>Saved chats</strong>
@@ -411,62 +495,101 @@ export default function ChatPage({ agents, health, openRequest }) {
                     </div>
                 </header>
 
-                <div className="chat__scroll" ref={messagesRef}>
-                    <div className="chat__thread">
-                        {messages.map((item, index) => {
-                            const previous = messages[index - 1];
-                            const showDay = !previous || dayKey(previous.createdAt) !== dayKey(item.createdAt);
-                            const isUser = item.role === 'user';
-                            return (
-                                <div className="chat__turn-group" key={`${item.createdAt}-${index}`}>
-                                    {showDay && <div className="chat__day"><span>{dayLabel(item.createdAt)}</span></div>}
-                                    <article className={`chat__turn chat__turn--${isUser ? 'user' : 'assistant'} ${item.error ? 'chat__turn--error' : ''}`}>
-                                        <div className="chat__turn-meta">
-                                            <strong>{isUser ? 'Carlos' : agent?.name || 'Nora'}</strong>
-                                            <span>{formatTime(item.createdAt)}</span>
-                                            {item.model?.model && item.model.model !== 'not invoked yet' && <span>{item.model.provider} · {item.model.model}</span>}
-                                            {!isUser && (
-                                                <button type="button" onClick={() => speaking === index ? stopSpeech() : speak(item.content, index)} aria-label="Read response aloud">
-                                                    {speaking === index ? <IconPlayerStop size={15} /> : <IconVolume size={15} />}
-                                                </button>
-                                            )}
-                                        </div>
-                                        <div className="chat__turn-body">{isUser ? <div className="chat__user-bubble">{item.content}</div> : <MarkdownMessage content={item.content} />}</div>
-
-                                        {!!item.attachments?.length && (
-                                            <div className={`chat__attachments ${isUser ? 'chat__attachments--user' : ''}`}>
-                                                {item.attachments.map(file => (
-                                                    <button type="button" key={file.attachmentId || file.name} onClick={() => downloadAttachment(file)} disabled={file.local}>
-                                                        <IconFile size={17} />
-                                                        <span><strong>{file.name}</strong><small>{formatBytes(file.size)}</small></span>
-                                                        {!file.local && <IconDownload size={14} />}
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        )}
-
-                                        {!!item.toolEvents?.length && (
-                                            <details className="chat__tool-trace">
-                                                <summary>{item.toolEvents.length} tool event{item.toolEvents.length === 1 ? '' : 's'}</summary>
-                                                {item.toolEvents.map((tool, toolIndex) => (
-                                                    <div key={`${tool.name}-${toolIndex}`}>
-                                                        <strong>{tool.name}</strong>
-                                                        <pre>{JSON.stringify({ args: tool.args, result: tool.result }, null, 2)}</pre>
+                <div className="chat__workspace" ref={workspaceRef} style={{ '--chat-artifact-width': `${artifactWidth}px` }}>
+                    <div className="chat__scroll" ref={messagesRef}>
+                        <div className="chat__thread">
+                            {messages.map((item, index) => {
+                                const previous = messages[index - 1];
+                                const showDay = !previous || dayKey(previous.createdAt) !== dayKey(item.createdAt);
+                                const isUser = item.role === 'user';
+                                const messageArtifacts = isUser ? [] : artifactsForMessage(item, agentId);
+                                return (
+                                    <div className="chat__turn-group" key={`${item.createdAt}-${index}`}>
+                                        {showDay && <div className="chat__day"><span>{dayLabel(item.createdAt)}</span></div>}
+                                        <article className={`chat__turn chat__turn--${isUser ? 'user' : 'assistant'} ${item.error ? 'chat__turn--error' : ''}`}>
+                                            <div className="chat__turn-meta">
+                                                <strong>{isUser ? 'Carlos' : agent?.name || 'Nora'}</strong>
+                                                <span>{formatTime(item.createdAt)}</span>
+                                                {item.model?.model && item.model.model !== 'not invoked yet' && <span>{item.model.provider} · {item.model.model}</span>}
+                                                {!isUser && (
+                                                    <div className="chat__turn-actions">
+                                                        <button type="button" onClick={() => copyResponse(item.content, index)} aria-label="Copy response" title="Copy response">
+                                                            {copiedResponse === index ? <IconCheck size={15} /> : <IconCopy size={15} />}
+                                                        </button>
+                                                        <button type="button" onClick={() => speaking === index ? stopSpeech() : speak(item.content, index)} aria-label="Read response aloud" title="Read response aloud">
+                                                            {speaking === index ? <IconPlayerStop size={15} /> : <IconVolume size={15} />}
+                                                        </button>
                                                     </div>
-                                                ))}
-                                            </details>
-                                        )}
-                                    </article>
-                                </div>
-                            );
-                        })}
+                                                )}
+                                            </div>
+                                            <div className="chat__turn-body">{isUser ? <div className="chat__user-bubble">{item.content}</div> : <MarkdownMessage content={item.content} />}</div>
 
-                        {sending && (
-                            <article className="chat__turn chat__turn--assistant chat__turn--thinking">
-                                <div className="chat__thinking" aria-label={`${agent?.name || 'Nora'} is responding`}><span /><span /><span /></div>
-                            </article>
-                        )}
+                                            {!!messageArtifacts.length && (
+                                                <div className="chat__artifacts" aria-label="Generated artifacts">
+                                                    {messageArtifacts.map(artifact => (
+                                                        <button type="button" key={artifact.artifactId} className={activeArtifactId === artifact.artifactId ? 'chat__artifact-link chat__artifact-link--active' : 'chat__artifact-link'} onClick={() => setActiveArtifactId(artifact.artifactId)}>
+                                                            <IconFile size={16} />
+                                                            <span><strong>{artifact.title || artifact.name}</strong><small>{artifact.previewKind} · {artifact.source}</small></span>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            {!!item.attachments?.length && (
+                                                <div className={`chat__attachments ${isUser ? 'chat__attachments--user' : ''}`}>
+                                                    {item.attachments.map(file => (
+                                                        <button type="button" key={file.attachmentId || file.name} onClick={() => downloadAttachment(file)} disabled={file.local}>
+                                                            <IconFile size={17} />
+                                                            <span><strong>{file.name}</strong><small>{formatBytes(file.size)}</small></span>
+                                                            {!file.local && <IconDownload size={14} />}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            {!!item.toolEvents?.length && (
+                                                <details className="chat__tool-trace">
+                                                    <summary>{item.toolEvents.length} tool event{item.toolEvents.length === 1 ? '' : 's'}</summary>
+                                                    {item.toolEvents.map((tool, toolIndex) => (
+                                                        <div key={`${tool.name}-${toolIndex}`}>
+                                                            <strong>{tool.name}</strong>
+                                                            <pre>{JSON.stringify({ args: tool.args, result: tool.result }, null, 2)}</pre>
+                                                        </div>
+                                                    ))}
+                                                </details>
+                                            )}
+                                        </article>
+                                    </div>
+                                );
+                            })}
+
+                            {sending && (
+                                <article className="chat__turn chat__turn--assistant chat__turn--thinking">
+                                    <div className="chat__thinking" aria-label={`${agent?.name || 'Nora'} is responding`}><span /><span /><span /></div>
+                                </article>
+                            )}
+                        </div>
                     </div>
+
+                    {activeArtifact && (
+                        <>
+                            <div
+                                className="chat__artifact-splitter"
+                                role="separator"
+                                aria-label="Resize artifact preview"
+                                aria-orientation="vertical"
+                                tabIndex={0}
+                                onPointerDown={startArtifactResize}
+                                onKeyDown={resizeArtifactByKeyboard}
+                            ><span /></div>
+                            <ArtifactPreview
+                                artifact={activeArtifact}
+                                artifacts={conversationArtifacts}
+                                onSelect={setActiveArtifactId}
+                                onClose={() => setActiveArtifactId('')}
+                            />
+                        </>
+                    )}
                 </div>
 
                 <div className="chat__composer-zone">
