@@ -29,6 +29,24 @@ const isReadableText = filePath => textExtensions.has(path.extname(filePath).toL
 
 export const getProjectRoot = () => projectRoot;
 
+export const resolveProjectFile = async ({ path: filePath } = {}) => {
+    const target = safeProjectPath(filePath);
+    if (!target.relative) throw Object.assign(new Error('Project artifact path is required.'), { statusCode: 400 });
+    try {
+        const stat = await fs.stat(target.absolute);
+        if (!stat.isFile()) throw Object.assign(new Error('Project artifact must be a file.'), { statusCode: 400 });
+        return {
+            path: target.relative,
+            absolute: target.absolute,
+            size: stat.size,
+            modifiedAt: stat.mtime.toISOString(),
+        };
+    } catch (error) {
+        if (error.code === 'ENOENT') throw Object.assign(new Error('Project file not found.'), { statusCode: 404 });
+        throw error;
+    }
+};
+
 export const listProjectFiles = async ({ folder = 'Front/src', limit = 200 } = {}) => {
     const { absolute, relative } = safeProjectPath(folder);
     const max = Math.max(1, Math.min(Number(limit) || 200, 1000));
