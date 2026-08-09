@@ -54,7 +54,7 @@ const mergeTrace = job => {
         traceExpiresAt: trace.expiresAt,
     } : {
         ...job,
-        workflowId: workflowForJob(job.jobId),
+        workflowId: String(job.workflowId || workflowForJob(job.jobId) || ''),
         waitingOn: job.status === 'needs_attention' || job.status === 'awaiting_approval' ? 'carlos' : '',
         attentionReason: '',
         attentionMessage: '',
@@ -103,7 +103,14 @@ export const createJob = async value => {
         workflowId = workflow.workflowId;
         attachJobToWorkflow(workflowId, stored);
     }
-    const decorated = { ...stored, workflowId, waitingOn: stored.assignedAgent };
+    const decorated = {
+        ...stored,
+        workflowId,
+        conversationId: String(context.conversationId || ''),
+        requestId: String(context.requestId || ''),
+        workflowTitle: String(context.objective || stored.title),
+        waitingOn: stored.assignedAgent,
+    };
     traces.set(stored.jobId, traceFrom(decorated));
     await updateStoredJob(stored.jobId, compactUpdate(decorated, { attempts: [], messages: [], result: '' }));
     return mergeTrace(decorated);
