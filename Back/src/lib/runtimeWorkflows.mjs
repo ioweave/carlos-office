@@ -176,9 +176,33 @@ const summarizeWorkflow = (workflow, jobs = []) => {
 
 export const listRuntimeWorkflows = ({ jobs = [], conversationId = '' } = {}) => {
     prune();
-    return [...workflows.values()]
+    const live = [...workflows.values()]
         .filter(item => !conversationId || item.conversationId === conversationId)
-        .map(item => summarizeWorkflow(item, jobs))
+        .map(item => summarizeWorkflow(item, jobs));
+    const known = new Set(workflows.keys());
+    const recoveredGroups = new Map();
+    for (const job of jobs) {
+        const workflowId = String(job.workflowId || '');
+        if (!workflowId || known.has(workflowId)) continue;
+        if (!recoveredGroups.has(workflowId)) recoveredGroups.set(workflowId, []);
+        recoveredGroups.get(workflowId).push(job);
+    }
+    const recovered = [...recoveredGroups.entries()].map(([workflowId, members]) => {
+        const first = members[0];
+        const createdAt = members.map(item => item.createdAt).sort()[0] || now();
+        const updatedAt = members.map(item => item.updatedAt).sort().at(-1) || createdAt;
+        return summarizeWorkflow({
+            workflowId,
+            requestId: String(first.requestId || ''),
+            title: String(first.workflowTitle || first.title || 'Recovered delegated workflow'),
+            objective: String(first.workflowTitle || first.title || ''),
+            plan: 'Recovered from persistent job receipts after a runtime restart.',
+            conversationId: String(first.conversationId || ''),
+            status: 'running', stage: 'recovered', waitingOn: '', attentionReason: '', attentionMessage: '',
+            jobIds: members.map(item => item.jobId), artifacts: [], createdAt, updatedAt, completedAt: '',
+        }, jobs);
+    }).filter(item => !conversationId || item.conversationId === conversationId);
+    return [...live, ...recovered]
         .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 };
 

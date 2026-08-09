@@ -47,6 +47,7 @@ const safeId = value => {
     }
     return id;
 };
+const optionalId = value => String(value || '').trim() ? safeId(value) : '';
 
 const safeFilename = value => {
     const raw = path.basename(String(value || 'attachment'));
@@ -419,6 +420,10 @@ const job = value => ({
     qcScore: Math.max(0, Math.min(Number(value.qcScore || 0), 100)),
     qcFeedback: String(value.qcFeedback || ''),
     lastError: String(value.lastError || ''),
+    workflowId: optionalId(value.workflowId),
+    conversationId: optionalId(value.conversationId),
+    requestId: optionalId(value.requestId),
+    workflowTitle: String(value.workflowTitle || '').trim().slice(0, 140),
     createdAt: iso(value.createdAt),
     updatedAt: iso(value.updatedAt),
     path: String(value.path || ''),
@@ -448,6 +453,9 @@ const jobMarkdown = value => {
         maxIterations: value.maxIterations,
         qcVerdict: value.qcVerdict,
         qcScore: value.qcScore,
+        workflowId: value.workflowId,
+        conversationId: value.conversationId,
+        requestId: value.requestId,
         messageCount: value.messages.length,
         createdAt: value.createdAt,
         updatedAt: value.updatedAt,

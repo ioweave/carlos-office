@@ -9,9 +9,9 @@ process.env.JOB_TRACE_RETENTION_MS = '60000';
 process.env.RUNTIME_EVENT_RETENTION_MS = '60000';
 
 const { runWithExecutionContext } = await import('../src/lib/executionContext.mjs');
-const { createJob, listJobs, updateJob } = await import('../src/lib/jobLifecycle.mjs');
+const { createJob, listJobs, updateJob, clearJobTraces } = await import('../src/lib/jobLifecycle.mjs');
 const { firstIterationForRun, retryContinuation } = await import('../src/lib/jobRunner.mjs');
-const { emitRuntimeEvent, getRuntimeWorkflow, listRuntimeEvents } = await import('../src/lib/runtimeWorkflows.mjs');
+const { emitRuntimeEvent, getRuntimeWorkflow, listRuntimeEvents, listRuntimeWorkflows } = await import('../src/lib/runtimeWorkflows.mjs');
 
 const createInRequest = (requestId, value) => runWithExecutionContext({
     requestId,
@@ -44,6 +44,10 @@ try {
     assert.ok(job.workflowId, 'Nora-created job must attach to the originating runtime workflow.');
     assert.equal(job.workflowId, sibling.workflowId, 'Sibling jobs created by one Nora request must share a workflow.');
     assert.equal(job.waitingOn, 'iris');
+    clearJobTraces();
+    const recoveredJobs = await listJobs({ limit: 20 });
+    assert.equal(recoveredJobs.find(item => item.jobId === job.jobId)?.workflowId, job.workflowId, 'Persistent job receipts must retain workflow identity after volatile traces are cleared.');
+    assert.ok(listRuntimeWorkflows({ jobs: recoveredJobs }).some(item => item.workflowId === job.workflowId), 'Office Map must recover a workflow from persistent job receipts.');
 
     emitRuntimeEvent({
         workflowId: job.workflowId,
