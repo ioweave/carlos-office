@@ -191,6 +191,7 @@ export const listRuntimeWorkflows = ({ jobs = [], conversationId = '' } = {}) =>
         const first = members[0];
         const createdAt = members.map(item => item.createdAt).sort()[0] || now();
         const updatedAt = members.map(item => item.updatedAt).sort().at(-1) || createdAt;
+        const delivered = members.every(item => item.workflowStage === 'delivered');
         return summarizeWorkflow({
             workflowId,
             requestId: String(first.requestId || ''),
@@ -198,7 +199,7 @@ export const listRuntimeWorkflows = ({ jobs = [], conversationId = '' } = {}) =>
             objective: String(first.workflowTitle || first.title || ''),
             plan: 'Recovered from persistent job receipts after a runtime restart.',
             conversationId: String(first.conversationId || ''),
-            status: 'running', stage: 'recovered', waitingOn: '', attentionReason: '', attentionMessage: '',
+            status: 'running', stage: delivered ? 'delivered' : 'recovered', waitingOn: '', attentionReason: '', attentionMessage: '',
             jobIds: members.map(item => item.jobId), artifacts: [], createdAt, updatedAt, completedAt: '',
         }, jobs);
     }).filter(item => !conversationId || item.conversationId === conversationId);

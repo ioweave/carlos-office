@@ -109,6 +109,7 @@ export const createJob = async value => {
         conversationId: String(context.conversationId || ''),
         requestId: String(context.requestId || ''),
         workflowTitle: String(context.objective || stored.title),
+        workflowStage: 'delegating',
         waitingOn: stored.assignedAgent,
     };
     traces.set(stored.jobId, traceFrom(decorated));
@@ -135,6 +136,14 @@ export const updateJob = async (jobId, update = {}) => {
     traces.set(jobId, traceFrom(next));
     const receipt = await updateStoredJob(jobId, compactUpdate(next, update));
     return mergeTrace({ ...receipt, workflowId: next.workflowId, result: terminalStatuses.has(next.status) ? receipt.result : '' });
+};
+
+export const markWorkflowDelivered = async workflowId => {
+    const id = String(workflowId || '');
+    if (!id) return 0;
+    const members = (await listJobs({ limit: 500 })).filter(job => job.workflowId === id);
+    await Promise.all(members.map(job => updateJob(job.jobId, { workflowStage: 'delivered' })));
+    return members.length;
 };
 
 export const deleteJob = async jobId => {

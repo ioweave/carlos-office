@@ -26,7 +26,7 @@ import {
 import { temporaryConversationStatus } from '../lib/temporaryConversations.mjs';
 import { factMemoryStatus, listFacts } from '../lib/factMemory.mjs';
 import { knowledgeLifecycleStatus, listKnowledgeSources } from '../lib/knowledgeLifecycle.mjs';
-import { getJob as getLifecycleJob, listJobs as listLifecycleJobs } from '../lib/jobLifecycle.mjs';
+import { getJob as getLifecycleJob, listJobs as listLifecycleJobs, markWorkflowDelivered } from '../lib/jobLifecycle.mjs';
 import {
     cancelJob,
     clearJobs,
@@ -41,6 +41,7 @@ import {
     listRuntimeEvents,
     listRuntimeWorkflows,
     runtimeWorkflowStatus,
+    updateRuntimeWorkflow,
     waitForRuntimeWorkflow,
     workflowForRequest,
 } from '../lib/runtimeWorkflows.mjs';
@@ -197,6 +198,11 @@ export default class OfficeController {
                         ],
                         memoryRefs: [...new Set([...(result.memoryRefs || []), ...(synthesis.memoryRefs || [])])],
                     };
+                    if (workflow.status === 'completed') {
+                        await markWorkflowDelivered(workflowId);
+                        updateRuntimeWorkflow(workflowId, { status: 'completed', stage: 'delivered', waitingOn: '' });
+                        workflow = { ...workflow, status: 'completed', stage: 'delivered', waitingOn: '' };
+                    }
                 }
             }
         } catch (error) {

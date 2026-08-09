@@ -9,7 +9,7 @@ process.env.JOB_TRACE_RETENTION_MS = '60000';
 process.env.RUNTIME_EVENT_RETENTION_MS = '60000';
 
 const { runWithExecutionContext } = await import('../src/lib/executionContext.mjs');
-const { createJob, listJobs, updateJob, clearJobTraces } = await import('../src/lib/jobLifecycle.mjs');
+const { createJob, listJobs, updateJob, clearJobTraces, markWorkflowDelivered } = await import('../src/lib/jobLifecycle.mjs');
 const { firstIterationForRun, retryContinuation } = await import('../src/lib/jobRunner.mjs');
 const { emitRuntimeEvent, getRuntimeWorkflow, listRuntimeEvents, listRuntimeWorkflows } = await import('../src/lib/runtimeWorkflows.mjs');
 
@@ -48,6 +48,9 @@ try {
     const recoveredJobs = await listJobs({ limit: 20 });
     assert.equal(recoveredJobs.find(item => item.jobId === job.jobId)?.workflowId, job.workflowId, 'Persistent job receipts must retain workflow identity after volatile traces are cleared.');
     assert.ok(listRuntimeWorkflows({ jobs: recoveredJobs }).some(item => item.workflowId === job.workflowId), 'Office Map must recover a workflow from persistent job receipts.');
+    assert.equal(await markWorkflowDelivered(job.workflowId), 2, 'Final Nora synthesis must mark every workflow job receipt delivered.');
+    clearJobTraces();
+    assert.equal((await listJobs({ limit: 20 })).find(item => item.jobId === job.jobId)?.workflowStage, 'delivered', 'Delivered workflow state must survive volatile trace loss.');
 
     emitRuntimeEvent({
         workflowId: job.workflowId,
