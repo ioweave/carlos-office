@@ -638,7 +638,7 @@ export default function ChatPage({ agents, health, openRequest }) {
                             )}
                         </div>
                     </form>
-                    <p className="chat__composer-hint">Temporary until saved · Enter to send · Shift+Enter for a new line</p>
+                    <p className="chat__composer-hint">{persisted ? 'Saved to Obsidian' : 'Temporary until saved'} · Enter to send · Shift+Enter for a new line</p>
                 </div>
             </section>
 
