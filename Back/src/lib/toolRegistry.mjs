@@ -212,10 +212,10 @@ const toolDefinitions = [
     },
     {
         name: 'retry_agent_job',
-        description: 'Continue a failed, cancelled, or unaccepted job with up to two additional bounded iterations.',
+        description: 'Continue a failed, cancelled, or unaccepted job with up to two additional bounded iterations and optional corrective guidance.',
         allowedAgents: ['nora'],
-        inputSchema: { type: 'object', properties: { jobId: { type: 'string' } }, required: ['jobId'], additionalProperties: false },
-        execute: async ({ jobId }) => { const { retryJob } = await import('./jobRunner.mjs'); return retryJob(jobId); },
+        inputSchema: { type: 'object', properties: { jobId: { type: 'string' }, feedback: { type: 'string', maxLength: 12000, description: 'Concrete corrective instructions for the next worker attempt.' } }, required: ['jobId'], additionalProperties: false },
+        execute: async ({ jobId, feedback = '' }) => { const { retryJob } = await import('./jobRunner.mjs'); return retryJob(jobId, { feedback }); },
     },
     {
         name: 'cancel_agent_job',

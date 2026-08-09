@@ -10,7 +10,7 @@ process.env.RUNTIME_EVENT_RETENTION_MS = '60000';
 
 const { runWithExecutionContext } = await import('../src/lib/executionContext.mjs');
 const { createJob, listJobs, updateJob } = await import('../src/lib/jobLifecycle.mjs');
-const { firstIterationForRun } = await import('../src/lib/jobRunner.mjs');
+const { firstIterationForRun, retryContinuation } = await import('../src/lib/jobRunner.mjs');
 const { emitRuntimeEvent, getRuntimeWorkflow, listRuntimeEvents } = await import('../src/lib/runtimeWorkflows.mjs');
 
 const createInRequest = (requestId, value) => runWithExecutionContext({
@@ -24,6 +24,7 @@ try {
     assert.equal(firstIterationForRun({ attempts: [{ iteration: 1 }, { iteration: 2 }], currentIteration: 2, maxIterations: 4, traceRetention: 'memory' }), 3, 'Live jobs must continue after the last retained attempt.');
     assert.equal(firstIterationForRun({ attempts: [], currentIteration: 8, maxIterations: 8, traceRetention: 'receipt-only' }), 8, 'Recovered compact receipts must resume the recorded in-flight iteration, not reset to iteration 1.');
     assert.equal(firstIterationForRun({ attempts: [], currentIteration: 12, maxIterations: 8, traceRetention: 'receipt-only' }), 8, 'Recovered jobs must remain inside their bounded iteration budget.');
+    assert.match(retryContinuation({ extendedLimit: 6, feedback: 'Write the deliverable in bounded workspace chunks.' }), /Additional Nora guidance:[\s\S]*bounded workspace chunks/, 'Retries must carry concrete corrective guidance to the worker.');
 
     const job = await createInRequest('request-test-1', {
         assignedAgent: 'iris',

@@ -238,14 +238,21 @@ export const stopAllJobs = async () => {
     return { stopped: ids.length, jobIds: ids };
 };
 
-export const retryJob = async jobId => {
+export const retryContinuation = ({ extendedLimit, feedback = '' }) => {
+    const guidance = String(feedback || '').trim().slice(0, 12_000);
+    return guidance
+        ? `Continue the job for up to ${extendedLimit} total iterations.\n\nAdditional Nora guidance:\n${guidance}`
+        : `Continue the job for up to ${extendedLimit} total iterations using the latest Vera/Nora feedback.`;
+};
+
+export const retryJob = async (jobId, { feedback = '' } = {}) => {
     const job = await getJob(jobId);
     if (!job) throw Object.assign(new Error('Job not found.'), { statusCode: 404 });
     if (job.status === 'completed' && job.qcVerdict === 'pass') return { jobId, queued: false, completed: true };
     cancelled.delete(jobId);
     const extendedLimit = Math.min(Math.max(job.maxIterations, job.currentIteration) + 2, 8);
     traffic(job, { type: 'job.continued', from: 'nora', to: job.assignedAgent, fromNode: 'agent:nora', toNode: `job:${job.jobId}`, stage: 'continued', iteration: job.currentIteration, summary: `Carlos/Nora authorized up to ${extendedLimit} total iterations.`, tone: 'info' });
-    await updateJob(jobId, { status: 'queued', waitingOn: job.assignedAgent, attentionReason: '', attentionMessage: '', maxIterations: extendedLimit, lastError: '', messages: [...(job.messages || []), makeMessage({ from: 'nora', to: job.assignedAgent, type: 'continuation', content: `Continue the job for up to ${extendedLimit} total iterations using the latest Vera/Nora feedback.`, iteration: job.currentIteration })] });
+    await updateJob(jobId, { status: 'queued', waitingOn: job.assignedAgent, attentionReason: '', attentionMessage: '', maxIterations: extendedLimit, lastError: '', messages: [...(job.messages || []), makeMessage({ from: 'nora', to: job.assignedAgent, type: 'continuation', content: retryContinuation({ extendedLimit, feedback }), iteration: job.currentIteration })] });
     return enqueueJob(jobId);
 };
 

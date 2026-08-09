@@ -105,7 +105,10 @@ register('get_agent_job', 'Read one delegated job and its inter-agent history.',
 register('list_agent_jobs', 'List recent delegated jobs.', z.object({
     limit: z.number().int().min(1).max(100).default(20),
 }));
-register('retry_agent_job', 'Continue a failed, cancelled, or unaccepted job.', z.object({ jobId: z.string().min(1) }));
+register('retry_agent_job', 'Continue a failed, cancelled, or unaccepted job with optional corrective guidance.', z.object({
+    jobId: z.string().min(1),
+    feedback: z.string().max(12000).optional(),
+}));
 register('cancel_agent_job', 'Stop one queued or running job.', z.object({ jobId: z.string().min(1) }));
 register('stop_all_agent_jobs', 'Stop all queued and active jobs.', z.object({}));
 register('clear_agent_jobs', 'Delete selected Markdown job records.', z.object({

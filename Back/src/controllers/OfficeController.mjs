@@ -226,10 +226,10 @@ export default class OfficeController {
         if (!job) return { statusCode: 404, body: { error: 'Job not found' } };
         return { statusCode: 200, body: job };
     }
-    static async runJob({ params }) {
+    static async runJob({ params, body = {} }) {
         const job = await getLifecycleJob(params.jobId);
         if (!job) return { statusCode: 404, body: { error: 'Job not found' } };
-        const execution = ['failed', 'needs_attention', 'awaiting_approval', 'cancelled'].includes(job.status) ? await retryJob(job.jobId) : await enqueueJob(job.jobId);
+        const execution = ['failed', 'needs_attention', 'awaiting_approval', 'cancelled'].includes(job.status) ? await retryJob(job.jobId, { feedback: body.feedback || '' }) : await enqueueJob(job.jobId);
         return { statusCode: 202, body: execution };
     }
     static async stopJob({ params }) { return { statusCode: 202, body: await cancelJob(params.jobId) }; }
