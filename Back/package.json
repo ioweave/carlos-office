@@ -1,0 +1,32 @@
+{
+  "name": "carlos-office-back",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "main": "server.mjs",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "start": "node --env-file=.env server.mjs",
+    "predev": "kill-port 3002",
+    "dev": "nodemon --watch server.mjs --watch src --watch package.json --watch .env --watch mcp.config.json --watch mcp.monitors.json --ext mjs,json,env --delay 250ms --signal SIGTERM --exec \"kill-port 3002 && node --env-file=.env server.mjs\"",
+    "mcp": "node --env-file=.env src/mcp/server.mjs",
+    "playwright:install": "playwright install chromium",
+    "validate:capabilities": "node scripts/validate-agent-capabilities.mjs",
+    "validate:operational": "node scripts/validate-operational-runtime.mjs",
+    "validate:office-files": "node scripts/validate-office-files.mjs",
+    "validate:extensions": "node scripts/validate-skill-external-projects.mjs",
+    "validate:universal-skills": "node scripts/validate-skill-universal.mjs",
+    "validate:hermes": "node scripts/validate-hermes-capabilities.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "axios": "^1.13.6",
+    "cheerio": "^1.2.0",
+    "kill-port": "^2.0.1",
+    "nodemon": "^3.1.14",
+    "playwright": "^1.62.0",
+    "zod": "^4.0.0"
+  }
+}

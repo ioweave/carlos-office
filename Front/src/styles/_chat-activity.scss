@@ -1,0 +1,59 @@
+.chat__thinking {
+    &::after {
+        content: "Thinking…";
+        margin-left: 4px;
+        color: var(--color-text-muted);
+        font-size: 11px;
+        font-weight: 550;
+        letter-spacing: 0.01em;
+    }
+}
+
+.chat__ghost {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    max-width: min(720px, 88%);
+    margin: 2px 0 2px 12px;
+    padding: 8px 12px;
+    border: 1px dashed color-mix(in srgb, var(--color-border) 68%, transparent);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--color-surface) 72%, transparent);
+    color: var(--color-text-muted);
+    opacity: 0.78;
+    animation: chat-ghost-in 180ms ease-out;
+
+    strong {
+        display: block;
+        margin-bottom: 2px;
+        color: var(--color-text-muted);
+        font-size: 11px;
+        text-transform: capitalize;
+    }
+
+    p {
+        margin: 0;
+        font-size: 12px;
+        line-height: 1.45;
+    }
+}
+
+.chat__ghost-dot {
+    width: 7px;
+    height: 7px;
+    margin-top: 6px;
+    flex: 0 0 auto;
+    border-radius: 999px;
+    color: var(--color-accent);
+    background: currentColor;
+    box-shadow: 0 0 9px currentColor;
+}
+
+.chat__ghost-dot--success { color: var(--color-success); background: currentColor; }
+.chat__ghost-dot--warning { color: var(--color-warning); background: currentColor; }
+.chat__ghost-dot--danger { color: var(--color-danger); background: currentColor; }
+
+@keyframes chat-ghost-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 0.78; transform: translateY(0); }
+}

@@ -1,0 +1,74 @@
+:root {
+    color-scheme: light;
+
+    --color-bg: #f7f8fa;
+    --color-surface: #ffffff;
+    --color-surface-raised: #ffffff;
+    --color-surface-soft: #eef1f3;
+    --color-surface-muted: #f4f6f7;
+    --color-border: #e3e7ea;
+    --color-border-strong: #cfd6da;
+
+    --color-text: #152027;
+    --color-text-muted: #596870;
+    --color-text-faint: #89969d;
+    --color-text-inverse: #ffffff;
+
+    --color-accent: #00b4d8;
+    --color-accent-hover: #0095b5;
+    --color-accent-soft: rgba(0, 180, 216, 0.10);
+    --color-success: #43d17b;
+    --color-warning: #f0b74b;
+    --color-danger: #ef6b73;
+    --color-info: #76b7ff;
+
+    --map-bg: #07090d;
+
+    --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+    --radius-xs: 6px;
+    --radius-sm: 9px;
+    --radius-md: 14px;
+    --radius-lg: 20px;
+    --radius-xl: 26px;
+    --radius-round: 999px;
+
+    --shadow-popover: 0 18px 60px rgba(31, 50, 59, 0.16);
+    --shadow-sm: 0 4px 16px rgba(31, 50, 59, 0.08);
+    --shadow-composer: 0 10px 30px rgba(31, 50, 59, 0.10);
+
+    --content-chat: 760px;
+    --content-wide: 1180px;
+}
+
+:root[data-theme="light"] {
+    color-scheme: light;
+
+    --color-bg: #ffffff;
+    --color-surface: #f7f7f8;
+    --color-surface-raised: #ffffff;
+    --color-surface-soft: #ececec;
+    --color-surface-muted: #f2f2f2;
+    --color-border: rgba(0, 0, 0, 0.10);
+    --color-border-strong: rgba(0, 0, 0, 0.16);
+
+    --color-text: #0d0d0d;
+    --color-text-muted: #5f5f5f;
+    --color-text-faint: #8a8a8a;
+    --color-text-inverse: #ffffff;
+
+    --color-accent: #0aa7bd;
+    --color-accent-hover: #078da0;
+    --color-accent-soft: rgba(10, 167, 189, 0.10);
+    --color-success: #168744;
+    --color-warning: #a86400;
+    --color-danger: #c93e48;
+    --color-info: #286fca;
+
+    --map-bg: #0b1017;
+
+    --shadow-popover: 0 18px 60px rgba(0, 0, 0, 0.13);
+    --shadow-sm: 0 4px 16px rgba(15, 23, 42, 0.08);
+    --shadow-composer: 0 10px 30px rgba(0, 0, 0, 0.08);
+}

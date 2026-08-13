@@ -1,0 +1,39 @@
+.office-map__inspector {
+    scrollbar-width: thin;
+    scrollbar-color:
+        color-mix(in srgb, var(--color-text-faint) 62%, transparent)
+        transparent;
+
+    &::-webkit-scrollbar {
+        width: 10px;
+    }
+
+    &::-webkit-scrollbar-track {
+        margin-block: 9px;
+        background: transparent;
+    }
+
+    &::-webkit-scrollbar-thumb {
+        border: 3px solid transparent;
+        border-radius: var(--radius-round);
+        background:
+            color-mix(in srgb, var(--color-text-faint) 58%, transparent)
+            padding-box;
+    }
+
+    &::-webkit-scrollbar-thumb:hover {
+        background:
+            color-mix(in srgb, var(--color-accent) 58%, var(--color-text-muted))
+            padding-box;
+    }
+
+    &::-webkit-scrollbar-thumb:active {
+        background:
+            color-mix(in srgb, var(--color-accent) 78%, var(--color-text))
+            padding-box;
+    }
+
+    &::-webkit-scrollbar-corner {
+        background: transparent;
+    }
+}

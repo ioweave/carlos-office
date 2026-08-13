@@ -1,0 +1,53 @@
+{
+  "servers": {
+    "google-workspace": {
+      "enabled": true,
+      "enabledIfEnv": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@aaronsb/google-workspace-mcp"],
+      "env": {
+        "GOOGLE_CLIENT_ID": "${GOOGLE_CLIENT_ID}",
+        "GOOGLE_CLIENT_SECRET": "${GOOGLE_CLIENT_SECRET}"
+      },
+      "allowedAgents": ["nora", "marco", "luma", "dex", "iris", "vera"],
+      "writeAgents": ["nora", "marco", "luma", "dex"],
+      "description": "Gmail, Calendar and Drive/Workspace access through the Google Workspace MCP server."
+    },
+    "browsermcp": {
+      "enabled": true,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@browsermcp/mcp@latest"],
+      "env": {
+        "BROWSER_MCP_EXTENSION_KEY": "${BROWSER_MCP_EXTENSION_KEY}"
+      },
+      "allowedAgents": ["nora", "dex", "iris", "vera"],
+      "writeAgents": ["nora", "dex", "iris"],
+      "description": "Controls the real logged-in Chrome tab through the Browser MCP extension."
+    },
+    "filesystem": {
+      "enabled": false,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@latest", "${OFFICE_SCRATCH_ROOT}"],
+      "allowedAgents": ["nora", "marco", "luma", "dex", "iris", "vera"],
+      "writeAgents": ["nora", "marco", "luma", "dex", "iris"],
+      "description": "Optional official MCP filesystem server. Native scoped file tools are enabled by default, so this is disabled to avoid duplication."
+    },
+    "github": {
+      "enabled": false,
+      "enabledIfEnv": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
+      "transport": "stdio",
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "-e", "GITHUB_TOOLSETS", "ghcr.io/github/github-mcp-server"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}",
+        "GITHUB_TOOLSETS": "${GITHUB_TOOLSETS}"
+      },
+      "allowedAgents": ["nora", "dex", "iris", "vera"],
+      "writeAgents": ["nora", "dex"],
+      "description": "Official GitHub MCP server. Enable after Docker and a scoped PAT are configured."
+    }
+  }
+}

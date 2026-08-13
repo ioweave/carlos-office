@@ -1,0 +1,69 @@
+.chat-artifact {
+    &__body--audio,
+    &__body--video {
+        background: var(--color-surface-muted);
+    }
+
+    &__audio-shell {
+        display: grid;
+        width: min(100% - 28px, 680px);
+        gap: 14px;
+        margin: 28px auto;
+        padding: 18px;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        background: var(--color-surface);
+        box-shadow: var(--shadow-sm);
+    }
+
+    &__audio-title {
+        display: grid;
+        min-width: 0;
+        gap: 3px;
+
+        strong,
+        span {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        strong {
+            color: var(--color-text);
+            font-size: 0.82rem;
+            font-weight: 680;
+        }
+
+        span {
+            color: var(--color-text-faint);
+            font-size: 0.62rem;
+        }
+    }
+
+    &__audio {
+        display: block;
+        width: 100%;
+        min-width: 0;
+        accent-color: var(--color-accent);
+    }
+
+    &__video {
+        display: block;
+        width: 100%;
+        height: 100%;
+        max-height: 100%;
+        margin: 0 auto;
+        background: #000;
+        object-fit: contain;
+        accent-color: var(--color-accent);
+    }
+}
+
+@media (min-width: 900px) {
+    .chat-artifact {
+        &__audio-shell {
+            margin-top: 36px;
+            padding: 22px;
+        }
+    }
+}
