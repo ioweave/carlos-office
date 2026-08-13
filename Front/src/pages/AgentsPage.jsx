@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { IconActivity, IconAdjustments, IconCpu, IconPlus, IconTool, IconX } from '@tabler/icons-react';
+import { IconActivity, IconAdjustments, IconCpu, IconPlus, IconSearch, IconTool, IconX } from '@tabler/icons-react';
 import { toast } from 'sonner';
 import api from '../api';
 
@@ -7,18 +7,19 @@ const colors = { nora: '#22d3ee', marco: '#f59e0b', luma: '#e879f9', dex: '#60a5
 const newAgent = () => ({ name: '', role: '', description: '', system: '', parentAgentId: 'dex', permanent: false, maxInstances: 1, enabled: true, toolGrants: [], capabilities: [] });
 
 export default function AgentsPage({ agents, onAgentSaved }) {
-    const [selectedId, setSelectedId] = useState('nora');
+    const [selectedId, setSelectedId] = useState('');
     const [draft, setDraft] = useState(null);
     const [platform, setPlatform] = useState(null);
     const [toolCatalog, setToolCatalog] = useState([]);
     const [saving, setSaving] = useState(false);
     const [jobs, setJobs] = useState([]);
     const [filter, setFilter] = useState('all');
+    const [search, setSearch] = useState('');
     const [creating, setCreating] = useState(false);
     const [newDraft, setNewDraft] = useState(newAgent);
-    const selected = useMemo(() => agents.find(agent => agent.agentId === selectedId) || agents[0], [agents, selectedId]);
+    const selected = useMemo(() => agents.find(agent => agent.agentId === selectedId) || null, [agents, selectedId]);
     useEffect(() => { Promise.all([api.get('/platform-config'), api.get('/jobs?limit=300'), api.get('/tools')]).then(([config, work, tools]) => { setPlatform(config.data); setJobs(work.data || []); setToolCatalog(tools.data || []); }).catch(() => {}); }, []);
-    useEffect(() => { if (selected) setDraft(JSON.parse(JSON.stringify(selected))); }, [selected]);
+    useEffect(() => { setDraft(selected ? JSON.parse(JSON.stringify(selected)) : null); }, [selected]);
     const update = (field, value) => setDraft(current => ({ ...current, [field]: value }));
     const save = async () => {
         setSaving(true);
@@ -55,6 +56,8 @@ export default function AgentsPage({ agents, onAgentSaved }) {
     const allowedModels = draft?.modelPolicy?.allowedModelOptionIds || [];
     const updateModelPolicy = values => update('modelPolicy', { ...(draft.modelPolicy || {}), ...values });
     const visibleAgents = agents.filter(agent => {
+        const matchesSearch = !search.trim() || `${agent.name} ${agent.role}`.toLowerCase().includes(search.trim().toLowerCase());
+        if (!matchesSearch) return false;
         if (filter === 'all') return true;
         if (filter === 'permanent') return agent.permanent !== false;
         if (filter === 'temporary') return agent.permanent === false;
@@ -62,12 +65,17 @@ export default function AgentsPage({ agents, onAgentSaved }) {
         return filter === 'active' ? active : !active;
     });
     return <div className="redesign-page agents-page">
-        <header className="redesign-header"><div><span className="eyebrow">Workforce configuration</span><h1>Agents</h1><p>Permanent staff definitions, temporary specialists, runtime policies, exact tools, and bounded concurrency. Active workers appear as instances inside jobs.</p></div><button className="primary-button" onClick={() => setCreating(true)}><IconPlus size={16} /> Define agent</button></header>
-        <nav className="agents-filters">{['all', 'permanent', 'temporary', 'active', 'idle'].map(value => <button key={value} className={filter === value ? 'is-active' : ''} onClick={() => setFilter(value)}>{value}</button>)}</nav>
-        <div className="agents-workspace">
-            <aside className="agents-roster">{visibleAgents.map(agent => { const active = activeFor(agent.agentId); return <button key={agent.agentId} className={agent.agentId === selected?.agentId ? 'is-selected' : ''} onClick={() => setSelectedId(agent.agentId)}><i style={{ '--agent-color': agent.color || colors[agent.agentId] || '#64748b' }}><span>{agent.name?.[0]}</span></i><span><strong>{agent.name}</strong><small>{agent.role}{agent.permanent === false ? ' · temporary' : ''}</small>{active[0] && <small>{active[0].name}</small>}</span><em className={agent.enabled === false ? 'is-off' : active.length ? 'is-active' : ''}>{agent.enabled === false ? 'Off' : active.length ? `${active.length} active` : 'Ready'}</em></button>; })}</aside>
-            {draft && <main className="agent-editor">
-                <header><i style={{ '--agent-color': selected.color || colors[selected.agentId] || '#64748b' }}>{selected.name[0]}</i><div><span className="eyebrow">{selected.permanent === false ? 'Temporary specialist' : 'Agent definition'}</span><h2>{selected.name}</h2><p>{selected.role}</p></div><label className="switch-field"><input type="checkbox" checked={draft.enabled !== false} onChange={event => update('enabled', event.target.checked)} /><span /> Enabled</label></header>
+        <header className="agents-directory__header"><div><span className="eyebrow">Carlos Office</span><h1>Agents Directory</h1></div><label><IconSearch size={16} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search agents…" aria-label="Search agents" /></label></header>
+        <div className="agents-directory">
+            <aside className="agents-directory__filters">
+                <button className="primary-button" onClick={() => setCreating(true)}><IconPlus size={16} /> Define new agent</button>
+                <section><strong>Instance type</strong>{['all', 'permanent', 'temporary'].map(value => <button key={value} className={filter === value ? 'is-active' : ''} onClick={() => setFilter(value)}>{value}</button>)}</section>
+                <section><strong>Status</strong>{['active', 'idle'].map(value => <button key={value} className={filter === value ? 'is-active' : ''} onClick={() => setFilter(value)}>{value}</button>)}</section>
+            </aside>
+            <main className="agents-card-grid">{visibleAgents.map(agent => { const active = activeFor(agent.agentId); const color = agent.color || colors[agent.agentId] || '#64748b'; const quality = agent.qualityPolicy?.normalThreshold || 90; return <button key={agent.agentId} className="agent-card" style={{ '--agent-color': color }} onClick={() => setSelectedId(agent.agentId)}><header><i>{agent.name?.[0]}</i><span><strong>{agent.name}</strong><small>{agent.role}</small></span><em className={agent.enabled === false ? 'is-off' : active.length ? 'is-active' : ''}>{agent.enabled === false ? 'Off' : active.length ? `${active.length} active` : 'Idle'}</em></header><section><small>Current primary task</small><p>{active[0]?.name || 'Awaiting trigger event.'}</p></section><footer><span>Quality <b>{quality}%</b></span><span>Compute <b>{(agent.maxInstances || 1) > 2 ? 'High' : (agent.maxInstances || 1) > 1 ? 'Med' : 'Idle'}</b></span></footer></button>; })}</main>
+        </div>
+        {draft && <div className="dialog agent-editor-dialog" onMouseDown={event => event.target === event.currentTarget && setSelectedId('')}><main className="agent-editor">
+                <header><i style={{ '--agent-color': selected.color || colors[selected.agentId] || '#64748b' }}>{selected.name[0]}</i><div><span className="eyebrow">{selected.permanent === false ? 'Temporary specialist' : 'Agent definition'}</span><h2>{selected.name}</h2><p>{selected.role}</p></div><label className="switch-field"><input type="checkbox" checked={draft.enabled !== false} onChange={event => update('enabled', event.target.checked)} /><span /> Enabled</label><button className="agent-editor__close" onClick={() => setSelectedId('')} aria-label="Close agent configuration"><IconX size={18} /></button></header>
                 <section className="editor-section"><h3>Identity & instructions</h3><div className="field-grid"><label><span>Name</span><input value={draft.name || ''} onChange={event => update('name', event.target.value)} /></label><label><span>Role</span><input value={draft.role || ''} onChange={event => update('role', event.target.value)} /></label><label className="span-2"><span>System instructions</span><textarea rows="7" value={draft.system || ''} onChange={event => update('system', event.target.value)} /></label></div></section>
                 <section className="editor-section"><h3><IconActivity size={18} /> Runtime</h3><div className="field-grid">
                     <label><span>Maximum instances</span><input type="number" min="1" max="20" value={draft.maxInstances || 1} onChange={event => update('maxInstances', Number(event.target.value))} /><small>Each instance executes one task at a time.</small></label>
@@ -85,8 +93,7 @@ export default function AgentsPage({ agents, onAgentSaved }) {
                     <label><span>Final quality threshold</span><input type="number" min="0" max="100" value={draft.qualityPolicy?.finalThreshold || 95} onChange={event => update('qualityPolicy', { ...(draft.qualityPolicy || {}), finalThreshold: Number(event.target.value) })} /></label>
                 </div><div className="agent-tool-grants"><header><span>Executable tools</span>{draft.toolGrants?.length > 0 && implicitToolSet && <button type="button" onClick={() => update('toolGrants', [])}>Reset to inherited set</button>}</header><div>{availableTools.map(tool => <label key={tool.name}><input type="checkbox" checked={toolChecked(tool.name)} onChange={event => toggleTool(tool.name, event.target.checked)} /><span><strong>{tool.name}</strong><small>{tool.sideEffect === 'governed-write' ? 'Governed side effect' : 'Read / idempotent'}</small></span></label>)}{!availableTools.length && <p className="muted">No tools are inside this definition’s current permission boundary.</p>}</div></div><p className="muted">Effective tools are the intersection of this definition, its parent boundary, the process plan, provider availability, and Carlos’s authorization policy.</p></section>
                 <footer><span>Config v{draft.configVersion || 1} · created {draft.createdAt ? new Date(draft.createdAt).toLocaleDateString() : 'with office'} · updated {draft.updatedAt ? new Date(draft.updatedAt).toLocaleString() : 'not yet'}<br />Changes apply to the next task; running instances keep their execution binding.</span><div>{selected.permanent === false && <button className="secondary-button" disabled={saving} onClick={promote}>Promote to staff</button>}<button className="primary-button" disabled={saving} onClick={save}><IconAdjustments size={16} /> {saving ? 'Saving…' : 'Save agent'}</button></div></footer>
-            </main>}
-        </div>
+            </main></div>}
         {creating && <div className="dialog"><section className="dialog__panel agent-create"><header><div><span className="eyebrow">New workforce definition</span><h2>Define an agent</h2></div><button onClick={() => setCreating(false)}><IconX size={17} /></button></header><label><span>Name</span><input value={newDraft.name} onChange={event => setNewDraft({ ...newDraft, name: event.target.value })} /></label><label><span>Role</span><input value={newDraft.role} onChange={event => setNewDraft({ ...newDraft, role: event.target.value })} /></label><label><span>Type</span><select value={newDraft.permanent ? 'permanent' : 'temporary'} onChange={event => setNewDraft({ ...newDraft, permanent: event.target.value === 'permanent', parentAgentId: event.target.value === 'temporary' ? newDraft.parentAgentId || 'dex' : '' })}><option value="temporary">Temporary specialist</option><option value="permanent">Permanent staff</option></select></label>{!newDraft.permanent && <label><span>Permission parent</span><select value={newDraft.parentAgentId} onChange={event => setNewDraft({ ...newDraft, parentAgentId: event.target.value })}>{agents.filter(agent => agent.permanent !== false).map(agent => <option key={agent.agentId} value={agent.agentId}>{agent.name}</option>)}</select><small>Cannot gain tools or authority beyond this parent.</small></label>}<label><span>System instructions</span><textarea rows="8" value={newDraft.system} onChange={event => setNewDraft({ ...newDraft, system: event.target.value })} /></label><label><span>Maximum instances</span><input type="number" min="1" max="20" value={newDraft.maxInstances} onChange={event => setNewDraft({ ...newDraft, maxInstances: Number(event.target.value) })} /></label><footer><button className="secondary-button" onClick={() => setCreating(false)}>Cancel</button><button className="primary-button" onClick={create} disabled={saving}>Create definition</button></footer></section></div>}
     </div>;
 }
