@@ -82,7 +82,7 @@ export default function App() {
     }[active] || null;
 
     return (
-        <div className="office-shell">
+        <div className={`office-shell office-shell--${active}`}>
             <Sidebar active={active} setActive={setActive} health={health} theme={theme} setTheme={setTheme} />
             <main className="office-shell__main">
                 {loading ? (
