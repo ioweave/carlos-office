@@ -92,3 +92,63 @@
 
 @media (max-width:1100px){.process-body{grid-template-columns:150px minmax(620px,1fr) 310px}.tools-registry__workspace{grid-template-columns:260px 1fr}.tool-facts{grid-template-columns:1fr 1fr}.operations-grid{grid-template-columns:1fr}.operations-incidents{grid-row:auto}}
 @media (max-width:760px){.process-library__controls,.registry-toolbar{align-items:stretch;flex-direction:column}.tools-registry__workspace,.tool-contract{grid-template-columns:1fr}.tool-catalog{max-height:300px}.tool-facts{grid-template-columns:1fr}.tool-facts article{border-right:0;border-bottom:1px solid var(--color-border)}.process-validation{grid-template-columns:1fr}.office-map__header{top:78px;left:16px}.metric-grid{grid-template-columns:1fr 1fr}}
+
+/* Stitch screen parity: each primary surface uses the navigation density shown
+   in the reference while retaining the same application-wide navigation. */
+@media (min-width:900px) {
+  .office-shell--map,.office-shell--agents,.office-shell--tools,.office-shell--skills,.office-shell--authorizations,.office-shell--operations,.office-shell--settings { grid-template-columns:190px minmax(0,1fr); }
+  .office-shell--map .office-nav,.office-shell--agents .office-nav,.office-shell--tools .office-nav,.office-shell--skills .office-nav,.office-shell--authorizations .office-nav,.office-shell--operations .office-nav,.office-shell--settings .office-nav {
+    .office-nav__brand { justify-content:flex-start; gap:10px; padding-inline:14px; }
+    .office-nav__brand strong { display:block; white-space:nowrap; }
+    .office-nav__item { justify-content:flex-start; gap:10px; padding:0 12px; }
+    .office-nav__item span { display:block; }
+    .office-nav__status { justify-content:flex-start; }
+    .office-nav__status div { display:block; min-width:0; }
+    .office-nav__theme { justify-content:flex-start; gap:9px; padding:0 10px; }
+    .office-nav__theme span { display:block; }
+  }
+  .office-shell--processes { grid-template-columns:minmax(0,1fr); }
+  .office-shell--processes .office-nav { display:none; }
+  .office-shell--processes .office-shell__main { grid-column:1; }
+}
+
+/* Stitch Agents Directory. Configuration remains available as a focused dialog. */
+.agents-page { padding:0; background:#f6f9fb; }
+.agents-directory__header { min-height:62px; display:flex; align-items:center; justify-content:space-between; gap:18px; padding:10px 18px; border-bottom:1px solid var(--color-border); background:var(--color-surface-raised); }
+.agents-directory__header h1 { margin:2px 0 0; font-size:18px; letter-spacing:-.025em; }
+.agents-directory__header > label { width:min(320px,40vw); display:grid; grid-template-columns:18px minmax(0,1fr); align-items:center; gap:7px; padding:0 11px; border:1px solid var(--color-border); border-radius:999px; color:var(--color-text-faint); background:var(--color-bg); }
+.agents-directory__header input { min-height:36px; border:0; outline:0; color:var(--color-text); background:transparent; }
+.agents-directory { min-height:calc(100vh - 62px); display:grid; grid-template-columns:190px minmax(0,1fr); }
+.agents-directory__filters { padding:18px; border-right:1px solid var(--color-border); background:var(--color-surface-raised); }
+.agents-directory__filters > .primary-button { width:100%; justify-content:center; margin-bottom:20px; }
+.agents-directory__filters section { display:grid; gap:5px; padding:14px 0; border-top:1px solid var(--color-border); }
+.agents-directory__filters section strong { margin-bottom:3px; color:var(--color-text-muted); font-size:9px; letter-spacing:.06em; text-transform:uppercase; }
+.agents-directory__filters section button { min-height:30px; padding:0 8px; border:0; border-radius:6px; color:var(--color-text-muted); background:transparent; text-align:left; text-transform:capitalize; cursor:pointer; }
+.agents-directory__filters section button::before { content:""; display:inline-block; width:12px; height:12px; margin-right:7px; border:1px solid var(--color-border-strong); border-radius:3px; vertical-align:-2px; background:var(--color-surface); }
+.agents-directory__filters section button.is-active { color:var(--color-text); }
+.agents-directory__filters section button.is-active::before { border-color:var(--color-accent); background:var(--color-accent); box-shadow:inset 0 0 0 2px white; }
+.agents-card-grid { align-content:start; display:grid; grid-template-columns:repeat(3,minmax(210px,1fr)); gap:18px; padding:18px; }
+.agent-card { min-width:0; min-height:205px; display:grid; grid-template-rows:auto 1fr auto; gap:15px; padding:17px; border:1px solid var(--color-border); border-top:3px solid var(--agent-color); border-radius:11px; color:var(--color-text); background:var(--color-surface-raised); box-shadow:0 8px 26px rgba(31,50,59,.05); text-align:left; cursor:pointer; }
+.agent-card:hover { transform:translateY(-1px); border-color:color-mix(in srgb,var(--agent-color) 55%,var(--color-border)); box-shadow:0 12px 30px rgba(31,50,59,.1); }
+.agent-card > header { display:grid; grid-template-columns:42px minmax(0,1fr) auto; gap:10px; align-items:center; }
+.agent-card > header i { width:40px; height:40px; display:grid; place-items:center; border:1px solid color-mix(in srgb,var(--agent-color) 45%,transparent); border-radius:9px; color:var(--agent-color); background:color-mix(in srgb,var(--agent-color) 13%,white); font-style:normal; font-weight:800; }
+.agent-card > header span { min-width:0; display:grid; gap:2px; }.agent-card > header strong{font-size:16px}.agent-card > header small{overflow:hidden;color:var(--color-text-muted);font-size:11px;text-overflow:ellipsis;white-space:nowrap}
+.agent-card > header em { align-self:start; padding:4px 7px; border-radius:999px; color:var(--color-text-faint); background:var(--color-surface-soft); font-size:8px; font-style:normal; text-transform:uppercase; }.agent-card > header em.is-active{color:#087f5b;background:#dcfce7}.agent-card > header em.is-off{color:var(--color-danger)}
+.agent-card > section { display:grid; gap:6px; }.agent-card > section small{color:var(--color-text-muted);font-size:9px;letter-spacing:.05em;text-transform:uppercase}.agent-card > section p{min-height:48px;margin:0;padding:9px;border:1px solid var(--color-border);border-radius:6px;color:var(--color-text-muted);background:var(--color-bg);font-size:11px;line-height:1.4}
+.agent-card > footer { display:flex; justify-content:space-between; padding-top:11px; border-top:1px solid var(--color-border); }.agent-card > footer span{display:grid;color:var(--color-text-muted);font-size:8px;letter-spacing:.05em;text-transform:uppercase}.agent-card > footer b{margin-top:2px;color:var(--color-text);font-size:11px}
+.agent-editor-dialog { padding:32px; }.agent-editor-dialog .agent-editor{width:min(980px,calc(100vw - 48px));max-height:90vh;overflow:auto}.agent-editor__close{display:grid;width:34px;height:34px;place-items:center;margin-left:4px;border:0;border-radius:7px;color:var(--color-text-muted);background:transparent}.agent-editor__close:hover{background:var(--color-surface-soft)}
+
+/* Stitch Process Designer: full-width light canvas and a persistent inspector. */
+.office-shell--processes .process-studio { position:relative; height:100vh; grid-template-rows:58px minmax(0,1fr); }
+.office-shell--processes .process-toolbar { min-height:58px; padding:7px 16px; }
+.office-shell--processes .process-toolbar > div:first-of-type .eyebrow,.office-shell--processes .process-toolbar > div:first-of-type p { display:none; }
+.office-shell--processes .process-toolbar h1 { margin:0; font-size:15px; }
+.office-shell--processes .process-body { min-height:0; grid-template-columns:minmax(700px,1fr) 320px; }
+.office-shell--processes .process-left { display:none; }
+.office-shell--processes .process-inspector { max-height:calc(100vh - 58px); }
+.office-shell--processes .process-job-strip { display:none; }
+.office-shell--processes .process-validation { position:absolute; z-index:12; left:18px; bottom:18px; width:min(470px,calc(100vw - 390px)); grid-template-columns:1fr; gap:4px; border:1px solid var(--color-border); border-radius:8px; box-shadow:var(--shadow-sm); }
+.office-shell--processes .process-validation em { display:none; }
+
+@media (max-width:1100px) { .agents-card-grid{grid-template-columns:repeat(2,minmax(210px,1fr))}.office-shell--processes .process-body{grid-template-columns:minmax(620px,1fr) 300px} }
+@media (max-width:760px) { .agents-directory{grid-template-columns:1fr}.agents-directory__filters{border-right:0;border-bottom:1px solid var(--color-border)}.agents-card-grid{grid-template-columns:1fr}.agents-directory__header{align-items:stretch;flex-direction:column}.agents-directory__header>label{width:100%}.agent-editor-dialog{padding:12px} }
