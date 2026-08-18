@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Carlos Office - Chat</title>
+<!-- Material Symbols -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Google Fonts (Inter & Hanken Grotesk from config) -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "error-container": "#ffdad6",
+                      "error": "#ba1a1a",
+                      "on-surface": "#181a2b",
+                      "tertiary-container": "#008471",
+                      "on-tertiary-fixed-variant": "#005145",
+                      "on-primary": "#ffffff",
+                      "tertiary": "#006859",
+                      "on-tertiary-container": "#f4fffa",
+                      "surface-container-high": "#e6e6fe",
+                      "secondary-fixed-dim": "#bfc6e0",
+                      "surface-container-highest": "#e0e1f8",
+                      "tertiary-fixed": "#59fbdd",
+                      "primary-fixed": "#dce1ff",
+                      "on-secondary-container": "#5b6278",
+                      "on-primary-fixed": "#00164e",
+                      "on-error-container": "#93000a",
+                      "surface-container-lowest": "#ffffff",
+                      "surface-variant": "#e0e1f8",
+                      "on-surface-variant": "#424655",
+                      "primary-fixed-dim": "#b5c4ff",
+                      "surface-bright": "#fbf8ff",
+                      "outline": "#737686",
+                      "on-background": "#181a2b",
+                      "surface-container-low": "#f4f2ff",
+                      "on-primary-fixed-variant": "#003cae",
+                      "surface": "#fbf8ff",
+                      "secondary-container": "#d9dff9",
+                      "outline-variant": "#c3c6d7",
+                      "on-primary-container": "#fffbff",
+                      "on-tertiary-fixed": "#00201a",
+                      "surface-dim": "#d7d8f0",
+                      "surface-container": "#edecff",
+                      "inverse-surface": "#2d2f41",
+                      "background": "#fbf8ff",
+                      "primary": "#004edd",
+                      "primary-container": "#2c68ff",
+                      "on-tertiary": "#ffffff",
+                      "surface-tint": "#0050e2",
+                      "on-secondary-fixed-variant": "#3f465b",
+                      "on-secondary": "#ffffff",
+                      "inverse-primary": "#b5c4ff",
+                      "on-secondary-fixed": "#141b2e",
+                      "secondary-fixed": "#dbe2fc",
+                      "on-error": "#ffffff",
+                      "secondary": "#575e74",
+                      "inverse-on-surface": "#f0efff",
+                      "tertiary-fixed-dim": "#2ddec1"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.125rem",
+                      "lg": "0.25rem",
+                      "xl": "0.5rem",
+                      "full": "0.75rem"
+              },
+              "spacing": {
+                      "xl": "48px",
+                      "container-max": "1280px",
+                      "gutter": "16px",
+                      "lg": "24px",
+                      "base": "4px",
+                      "sm": "8px",
+                      "margin-desktop": "32px",
+                      "margin-mobile": "16px",
+                      "md": "16px",
+                      "xs": "4px"
+              },
+              "fontFamily": {
+                      "headline-md": ["Hanken Grotesk"],
+                      "label-caps": ["JetBrains Mono"],
+                      "body-lg": ["Inter"],
+                      "body-md": ["Inter"],
+                      "headline-lg-mobile": ["Hanken Grotesk"],
+                      "headline-sm": ["Hanken Grotesk"],
+                      "headline-lg": ["Hanken Grotesk"],
+                      "label-sm": ["Inter"]
+              },
+              "fontSize": {
+                      "headline-md": ["24px", { "lineHeight": "1.3", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                      "label-caps": ["12px", { "lineHeight": "1.2", "letterSpacing": "0.05em", "fontWeight": "500" }],
+                      "body-lg": ["16px", { "lineHeight": "1.6", "fontWeight": "400" }],
+                      "body-md": ["14px", { "lineHeight": "1.5", "fontWeight": "400" }],
+                      "headline-lg-mobile": ["26px", { "lineHeight": "1.2", "fontWeight": "600" }],
+                      "headline-sm": ["18px", { "lineHeight": "1.4", "fontWeight": "600" }],
+                      "headline-lg": ["32px", { "lineHeight": "1.2", "letterSpacing": "-0.02em", "fontWeight": "600" }],
+                      "label-sm": ["12px", { "lineHeight": "1.2", "fontWeight": "500" }]
+              }
+            },
+          },
+        }
+    </script>
+<style>
+        /* Custom scrollbar for webkit */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #c3c6d7; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #737686; }
+        
+        /* Hide number input spinners */
+        input[type=number]::-webkit-inner-spin-button, 
+        input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+</head>
+<body class="bg-surface text-on-surface antialiased flex flex-col min-h-[884px] w-full max-w-[390px] mx-auto relative overflow-hidden">
+<!-- Drawer Overlay (Hidden by default) -->
+<div class="fixed inset-0 bg-on-surface/20 z-50 opacity-0 pointer-events-none transition-opacity duration-200" id="drawer-overlay"></div>
+<!-- NavigationDrawer (Shared Component) -->
+<aside class="h-full w-72 fixed left-0 top-0 bg-surface dark:bg-surface border-r border-outline-variant dark:border-outline-variant flex flex-col gap-base p-md z-50 -translate-x-full transition-all duration-200 ease-in-out" id="nav-drawer">
+<div class="flex items-center justify-between mb-lg">
+<h2 class="font-headline-sm text-headline-sm text-primary">CARLOS OFFICE</h2>
+<button class="material-symbols-outlined text-on-surface-variant cursor-pointer p-1" id="close-drawer">close</button>
+</div>
+<!-- Profile Header -->
+<div class="flex items-center gap-md mb-lg p-sm border border-outline-variant rounded-xl bg-surface-container-lowest">
+<div class="w-10 h-10 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center font-headline-sm font-semibold">C</div>
+<div class="flex flex-col">
+<span class="font-body-md text-body-md font-semibold text-on-surface">Carlos Operator</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">Lead Architect</span>
+</div>
+</div>
+<nav class="flex flex-col gap-xs flex-1">
+<!-- Settings is assumed active if we were on that page, but this is a deep link. No tab is active. -->
+<a class="flex items-center gap-md px-md py-sm rounded-lg text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-highest dark:hover:bg-surface-container-highest transition-all duration-200 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined">architecture</span> Blueprints
+            </a>
+<a class="flex items-center gap-md px-md py-sm rounded-lg text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-highest dark:hover:bg-surface-container-highest transition-all duration-200 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined">memory</span> Runtime
+            </a>
+<a class="flex items-center gap-md px-md py-sm rounded-lg text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-highest dark:hover:bg-surface-container-highest transition-all duration-200 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined">description</span> Artifacts
+            </a>
+<a class="flex items-center gap-md px-md py-sm rounded-lg text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-highest dark:hover:bg-surface-container-highest transition-all duration-200 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined">account_tree</span> Workflow
+            </a>
+<a class="flex items-center gap-md px-md py-sm rounded-lg text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-highest dark:hover:bg-surface-container-highest transition-all duration-200 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined">settings</span> Settings
+            </a>
+</nav>
+</aside>
+<!-- TopAppBar (Shared Component) -->
+<header class="w-full top-0 sticky border-b border-outline-variant dark:border-outline-variant bg-surface dark:bg-surface flex items-center justify-between px-margin-mobile md:px-margin-desktop h-16 z-40">
+<button class="material-symbols-outlined text-primary dark:text-primary-fixed cursor-pointer active:opacity-80 p-2 -ml-2" id="menu-btn">menu</button>
+<h1 class="font-headline-sm text-headline-sm font-semibold tracking-tight text-primary dark:text-primary-fixed text-center flex-1">CARLOS OFFICE</h1>
+<button class="material-symbols-outlined text-primary dark:text-primary-fixed cursor-pointer active:opacity-80 p-2 -mr-2">search</button>
+</header>
+<!-- Conversation Header Context -->
+<div class="px-margin-mobile py-md border-b border-outline-variant bg-surface-bright flex flex-col gap-xs z-30 relative shadow-[0_4px_16px_rgba(0,0,0,0.02)]">
+<h2 class="font-headline-sm text-headline-sm text-on-surface">AI Vendor Research</h2>
+<div class="flex items-center gap-sm font-label-sm text-label-sm text-on-surface-variant">
+<span>Anthropic</span>
+<span class="w-1 h-1 rounded-full bg-outline-variant"></span>
+<span>Claude 3.5 Sonnet</span>
+</div>
+</div>
+<!-- Chat Canvas -->
+<main class="flex-1 overflow-y-auto px-margin-mobile py-lg flex flex-col gap-xl bg-surface-container-low">
+<!-- Carlos: Request -->
+<div class="flex flex-col items-end w-full gap-xs">
+<span class="font-label-sm text-label-sm text-on-surface-variant px-1">Carlos</span>
+<div class="max-w-[85%] bg-primary-container text-on-primary-container rounded-2xl rounded-tr-sm p-md font-body-md text-body-md shadow-sm border border-primary/10">
+                Nora, please research the top 3 AI voice vendors right now: ElevenLabs, Deepgram, and Play.ht. I need a solid comparison focusing heavily on latency and quality.
+            </div>
+</div>
+<!-- Nora: Acknowledgment -->
+<div class="flex flex-col items-start w-full gap-xs">
+<div class="flex items-center gap-sm px-1">
+<span class="material-symbols-outlined text-tertiary text-base" style="font-variation-settings: 'FILL' 1;">smart_toy</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">Nora</span>
+</div>
+<div class="max-w-[95%] text-on-surface font-body-md text-body-md leading-relaxed bg-surface-container-lowest p-md rounded-2xl rounded-tl-sm border border-outline-variant/20 shadow-sm">
+                Understood, Carlos. I am initiating an Ad-hoc Workflow to research and evaluate ElevenLabs, Deepgram, and Play.ht against your criteria.
+            </div>
+</div>
+<!-- Inline Component: Workflow Summary (Active/Interrupted State) -->
+<div class="flex flex-col items-start w-full gap-xs pl-8">
+<div class="w-full border border-outline-variant rounded-xl overflow-hidden bg-surface-container-lowest shadow-sm"><!-- Header -->
+<div class="p-sm px-md border-b border-outline-variant flex items-center justify-between bg-surface-container-low">
+<div class="flex items-center gap-sm">
+<span class="material-symbols-outlined text-primary text-sm">account_tree</span>
+<span class="font-label-sm text-label-sm font-semibold text-on-surface uppercase tracking-wider">AI Voice Research</span>
+</div>
+<div class="flex items-center gap-xs text-primary">
+<span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+<span class="font-label-caps text-label-caps tracking-widest text-[10px]">RUNNING</span>
+</div>
+</div>
+<!-- Body / Logs -->
+<div class="p-md flex flex-col gap-3">
+<div class="flex items-center justify-between">
+<div class="flex gap-sm items-center">
+<span class="material-symbols-outlined text-[16px] text-tertiary">check_circle</span>
+<span class="font-body-md text-body-md text-on-surface">Task defined</span>
+</div>
+<span class="font-label-sm text-label-sm text-on-surface-variant/60">10:02 AM</span>
+</div>
+<div class="flex items-center justify-between">
+<div class="flex gap-sm items-center">
+<span class="material-symbols-outlined text-[16px] text-tertiary">check_circle</span>
+<span class="font-body-md text-body-md text-on-surface">ElevenLabs Research</span>
+</div>
+<span class="font-label-sm text-label-sm text-on-surface-variant/60">10:04 AM</span>
+</div>
+<div class="flex items-center justify-between">
+<div class="flex gap-sm items-center">
+<span class="material-symbols-outlined text-[16px] text-primary animate-spin">progress_activity</span>
+<span class="font-body-md text-body-md text-on-surface font-medium">Deepgram Research</span>
+</div>
+<span class="font-label-sm text-label-sm text-primary">Active</span>
+</div>
+<!-- Nested Action: Authorization -->
+<div class="mt-sm p-md border border-error/20 bg-error-container/10 rounded-lg flex flex-col gap-sm relative overflow-hidden">
+<div class="absolute left-0 top-0 bottom-0 w-1 bg-error"></div>
+<div class="flex items-center gap-sm text-error font-semibold font-sans text-sm">
+<span class="material-symbols-outlined text-base">lock</span>
+            Authorization Required
+        </div>
+<p class="font-body-md text-body-md text-on-surface-variant">Deepgram API requires explicit tool approval.</p>
+<button class="self-start bg-surface text-on-surface border border-outline-variant font-label-sm text-label-sm px-4 py-2 rounded-lg hover:bg-surface-container-low transition-colors shadow-sm flex items-center gap-sm">
+<span class="material-symbols-outlined text-sm text-primary">verified_user</span>
+            Approve Access
+        </button>
+</div>
+</div></div>
+</div>
+<!-- Carlos: Action (Simulated click) -->
+<div class="flex flex-col items-end w-full gap-xs">
+<span class="font-label-sm text-label-sm text-on-surface-variant px-1">Carlos</span>
+<div class="max-w-[85%] bg-surface-container-highest text-on-surface rounded-2xl rounded-tr-sm py-xs px-md font-body-md text-body-md italic border border-outline-variant/30">
+                Action: Approved Access
+            </div>
+</div>
+<!-- Inline Component: Workflow Summary (Completed State) -->
+<div class="flex flex-col items-start w-full gap-xs pl-8">
+<div class="w-full border border-outline-variant rounded-xl overflow-hidden bg-surface-container-lowest shadow-sm opacity-80">
+<div class="p-sm px-md border-b border-outline-variant flex items-center justify-between bg-surface-container-low">
+<div class="flex items-center gap-sm">
+<span class="material-symbols-outlined text-primary text-sm">account_tree</span>
+<span class="font-label-sm text-label-sm font-semibold text-on-surface uppercase tracking-wider">AI Voice Research</span>
+</div>
+<div class="flex items-center gap-xs text-tertiary">
+<span class="material-symbols-outlined text-[14px]">check_circle</span>
+<span class="font-label-caps text-label-caps tracking-widest text-[10px]">COMPLETED</span>
+</div>
+</div>
+<div class="p-md flex flex-col gap-2 font-label-sm text-label-sm text-on-surface-variant font-mono">
+<div class="flex gap-sm items-start"><span class="material-symbols-outlined text-[14px] text-tertiary mt-0.5">check_circle</span> <span>Validation complete.</span></div>
+<div class="flex gap-sm items-start"><span class="material-symbols-outlined text-[14px] text-tertiary mt-0.5">check_circle</span> <span>Report generated.</span></div>
+</div>
+<!-- Artifacts Attachment -->
+<div class="p-md border-t border-outline-variant bg-surface-bright flex flex-col gap-sm">
+<span class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wide text-[10px] font-sans">Generated Artifacts</span>
+<div class="flex flex-col gap-sm">
+<div class="flex items-center justify-between border border-outline-variant rounded-lg p-sm bg-surface cursor-pointer hover:border-primary transition-colors group">
+<div class="flex items-center gap-sm">
+<div class="w-8 h-8 rounded bg-surface-container-low flex items-center justify-center">
+<span class="material-symbols-outlined text-base text-primary">description</span>
+</div>
+<div class="flex flex-col font-sans">
+<span class="font-label-sm text-label-sm text-on-surface font-semibold group-hover:text-primary transition-colors">ai-voice-comparison.md</span>
+<span class="text-[10px] text-on-surface-variant">12 KB • Markdown</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-sm text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity">open_in_new</span>
+</div>
+<div class="flex items-center justify-between border border-outline-variant rounded-lg p-sm bg-surface cursor-pointer hover:border-primary transition-colors group">
+<div class="flex items-center gap-sm">
+<div class="w-8 h-8 rounded bg-surface-container-low flex items-center justify-center">
+<span class="material-symbols-outlined text-base text-tertiary">data_object</span>
+</div>
+<div class="flex flex-col font-sans">
+<span class="font-label-sm text-label-sm text-on-surface font-semibold group-hover:text-tertiary transition-colors">performance-matrix.json</span>
+<span class="text-[10px] text-on-surface-variant">4 KB • JSON</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-sm text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity">open_in_new</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Nora: Final Summary -->
+<div class="flex flex-col items-start w-full gap-xs">
+<div class="flex items-center gap-sm px-1">
+<span class="material-symbols-outlined text-tertiary text-base" style="font-variation-settings: 'FILL' 1;">smart_toy</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">Nora</span>
+</div>
+<div class="max-w-[95%] text-on-surface font-body-md text-body-md leading-relaxed flex flex-col gap-sm bg-surface-container-lowest p-md rounded-2xl rounded-tl-sm border border-outline-variant/20 shadow-sm">
+<p>The research workflow is complete. I have generated a detailed markdown comparison and a raw JSON performance matrix for your review.</p>
+<p><strong>Recommendation:</strong> Based on your strict requirement for low latency, <strong>Deepgram</strong> currently outperforms the others significantly in real-time streaming contexts, averaging ~300ms time-to-first-byte (TTFB). ElevenLabs provides superior emotional prosody but carries a heavier latency cost (~600ms+).</p>
+<p>Shall I proceed to integrate the Deepgram SDK blueprint into the runtime environment?</p>
+</div>
+</div>
+<!-- Spacer for bottom composer -->
+<div class="h-4"></div>
+</main>
+<!-- Sticky Composer -->
+<div class="px-margin-mobile py-sm border-t border-outline-variant bg-surface/90 backdrop-blur-md sticky bottom-0 z-40 shadow-[0_-4px_16px_rgba(0,0,0,0.04)]">
+<div class="flex items-end gap-sm bg-surface-container-lowest border border-outline-variant rounded-[20px] p-1 shadow-sm focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/20 transition-all">
+<button class="p-2 text-on-surface-variant hover:text-primary transition-colors rounded-full flex items-center justify-center shrink-0 mb-0.5">
+<span class="material-symbols-outlined text-[20px]">attach_file</span>
+</button>
+<textarea class="flex-1 bg-transparent border-none focus:ring-0 resize-none py-2.5 px-1 font-body-md text-body-md text-on-surface max-h-[120px] min-h-[44px] overflow-y-auto w-full placeholder:text-on-surface-variant/50" oninput="this.style.height = ''; this.style.height = this.scrollHeight + 'px'" placeholder="Reply to Nora..." rows="1"></textarea>
+<button class="p-2 bg-primary text-on-primary rounded-full hover:bg-primary-container-high transition-colors flex items-center justify-center h-8 w-8 mb-1.5 mr-1 shrink-0 shadow-sm">
+<span class="material-symbols-outlined text-[18px]">arrow_upward</span>
+</button>
+</div>
+<div class="text-center mt-2">
+<span class="font-label-caps text-[9px] text-on-surface-variant/60 tracking-widest">CLAUDE 3.5 SONNET RUNTIME</span>
+</div>
+</div>
+<!-- Interactive Logic -->
+<script>
+        const menuBtn = document.getElementById('menu-btn');
+        const closeBtn = document.getElementById('close-drawer');
+        const drawer = document.getElementById('nav-drawer');
+        const overlay = document.getElementById('drawer-overlay');
+
+        function toggleDrawer() {
+            const isClosed = drawer.classList.contains('-translate-x-full');
+            if (isClosed) {
+                drawer.classList.remove('-translate-x-full');
+                overlay.classList.remove('opacity-0', 'pointer-events-none');
+            } else {
+                drawer.classList.add('-translate-x-full');
+                overlay.classList.add('opacity-0', 'pointer-events-none');
+            }
+        }
+
+        menuBtn.addEventListener('click', toggleDrawer);
+        closeBtn.addEventListener('click', toggleDrawer);
+        overlay.addEventListener('click', toggleDrawer);
+    </script>
+</body></html>

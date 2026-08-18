@@ -1,0 +1,177 @@
+// Settings page — supported subset (appearance, providers, backend, local data).
+// Mobile-first; desktop single column widened at 900px. Independent atomic BEM.
+
+@use "./config" as config;
+
+.settings-page__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  gap: 24px;
+  padding: 16px;
+  background: var(--color-bg);
+}
+
+.settings-page__section {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.settings-page__section-head {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-page__section-title {
+  margin: 0;
+  font-family: var(--font-headline);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.settings-page__theme {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-page__meta-list {
+  display: grid;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+  gap: 8px;
+  list-style: none;
+}
+
+.settings-page__meta-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+}
+
+.settings-page__meta-text {
+  flex: 1 1 auto;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.settings-page__provider-list {
+  display: grid;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+  gap: 10px;
+  list-style: none;
+}
+
+.settings-page__provider {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+}
+
+.settings-page__provider-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text);
+}
+
+.settings-page__provider-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.settings-page__provider-meta {
+  color: var(--color-text-faint);
+  font-size: 11px;
+}
+
+.settings-page__model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 0;
+  gap: 6px;
+  list-style: none;
+}
+
+.settings-page__model-chip {
+  padding: 3px 8px;
+  border-radius: var(--radius-xl);
+  background: var(--color-surface-soft);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.settings-page__category-list {
+  display: grid;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+  gap: 8px;
+  list-style: none;
+}
+
+.settings-page__category {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+}
+
+.settings-page__category-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-page__category-meta {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.settings-page__note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+@media (min-width: config.$screen-desktop) {
+  .settings-page__body {
+    padding: 24px 32px;
+  }
+
+  .settings-page__section {
+    padding: 20px 24px;
+  }
+}

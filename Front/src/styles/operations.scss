@@ -1,0 +1,207 @@
+// Operations page — workflow runtime list, studio graph + task inspector, promote dialog.
+// Mobile-first; desktop split at 900px. Independent atomic BEM.
+
+@use "./config" as config;
+
+.operations-page {
+  overflow: auto;
+}
+
+.operations-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+.workflow-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 6px;
+  list-style: none;
+}
+
+.workflow-list__item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  text-align: left;
+}
+
+.workflow-list__item:hover {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-soft);
+}
+
+.workflow-list__body {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 2px;
+}
+
+.workflow-list__title {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-list__meta {
+  color: var(--color-text-faint);
+  font-size: 11px;
+}
+
+.operations-studio {
+  overflow: hidden;
+}
+
+.operations-studio__header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.operations-studio__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.operations-studio__graph {
+  flex: 1 1 auto;
+  min-height: 320px;
+  overflow: auto;
+  padding: 16px;
+  background: var(--color-surface-soft);
+}
+
+.operations-studio__inspector {
+  flex: 0 0 auto;
+  padding: 16px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+  display: grid;
+  gap: 16px;
+  overflow: auto;
+}
+
+.operations-studio__inspector-title {
+  margin: 0;
+  font-family: var(--font-headline);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.operations-studio__inspector-section {
+  display: grid;
+  gap: 8px;
+}
+
+.operations-approvals {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 6px;
+  list-style: none;
+}
+
+.operations-approvals__item {
+  display: grid;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+  gap: 2px;
+}
+
+.operations-approvals__title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.operations-approvals__meta {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.operations-attempts {
+  display: grid;
+  gap: 8px;
+}
+
+.operations-attempts__item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+}
+
+.operations-attempts__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.operations-attempts__head-meta {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.operations-attempts__time {
+  margin-left: auto;
+  color: var(--color-text-faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.operations-task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.operations-result {
+  overflow: auto;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.operations-promote__field {
+  display: grid;
+  margin-top: 12px;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+@media (min-width: config.$screen-desktop) {
+  .operations-studio__body {
+    flex-direction: row;
+  }
+
+  .operations-studio__inspector {
+    flex: 0 0 360px;
+    border-top: 0;
+    border-left: 1px solid var(--color-border);
+  }
+}

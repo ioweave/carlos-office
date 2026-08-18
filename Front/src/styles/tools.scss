@@ -1,0 +1,185 @@
+// Tools page — read-only capability registry + detail.
+// Mobile-first; desktop split at 900px. Independent atomic BEM.
+
+@use "./config" as config;
+
+.tools-page__header-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.tools-page__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.tools-page__catalog {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  max-height: 40vh;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.tools-page__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-faint);
+}
+
+.tools-page__search-input {
+  width: 100%;
+  min-height: 30px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+}
+
+.tools-page__list {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  gap: 2px;
+  list-style: none;
+}
+
+.tools-page__item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  text-align: left;
+}
+
+.tools-page__item:hover {
+  background: var(--color-surface-soft);
+  color: var(--color-text);
+}
+
+.tools-page__item--active {
+  background: var(--color-surface-soft);
+  color: var(--color-text);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+.tools-page__item-body {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 2px;
+}
+
+.tools-page__item-name {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tools-page__item-meta {
+  color: var(--color-text-faint);
+  font-size: 10px;
+}
+
+.tools-page__detail {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  padding: 16px;
+  background: var(--color-bg);
+  gap: 16px;
+}
+
+.tools-page__detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tools-page__detail-title {
+  margin: 2px 0 4px;
+  font-family: var(--font-headline);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.tools-page__detail-meta {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.tools-page__contract {
+  display: grid;
+  gap: 8px;
+}
+
+.tools-page__contract-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-family: var(--font-headline);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tools-page__code {
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.tools-page__content {
+  max-width: var(--content-chat);
+}
+
+@media (min-width: config.$screen-desktop) {
+  .tools-page__body {
+    flex-direction: row;
+  }
+
+  .tools-page__catalog {
+    flex: 0 0 300px;
+    max-height: none;
+    border-bottom: 0;
+    border-right: 1px solid var(--color-border);
+  }
+
+  .tools-page__detail {
+    padding: 24px 32px;
+  }
+
+  .tools-page__detail-meta {
+    flex-direction: row;
+    align-items: center;
+  }
+}
