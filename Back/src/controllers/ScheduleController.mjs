@@ -1,10 +1,10 @@
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createWorkflow } from "./ProcessController.mjs";
 import { recordEvent } from "./EventController.mjs";
+import { createWorkflow, getProcess } from "./ProcessController.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const schedulesDir = resolve(here, "../../ObsidianVault/90-System/Schedules");
@@ -13,36 +13,36 @@ const schedules = new Map();
 let schedulerTimer = null;
 let ticking = false;
 
-const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 
 const validateFileName = (value, label) => {
   if (
-    typeof value !== "string" ||
-    !value.trim() ||
-    value.trim() !== value ||
-    value === "." ||
-    value === ".." ||
-    /[<>:"/\\|?*\u0000-\u001F]/.test(value)
+    typeof value !== "string"
+    || !value.trim()
+    || value.trim() !== value
+    || value === "."
+    || value === ".."
+    || /[<>:"/\\|?*\u0000-\u001F]/.test(value)
   ) {
     throw new Error(`Invalid ${label}: ${value}`);
   }
-}
+};
 
-const schedulePath = (id) => {
+const schedulePath = id => {
   validateFileName(id, "schedule ID");
   return resolve(schedulesDir, `${id}.json`);
-}
+};
 
-const requireSchedule = (id) => {
+const requireSchedule = id => {
   const schedule = schedules.get(id);
   if (!schedule) throw new Error(`Unknown schedule: ${id}`);
   return schedule;
-}
+};
 
-const persistSchedule = async (schedule) => {
+const persistSchedule = async schedule => {
   await mkdir(schedulesDir, { recursive: true });
   await writeFile(schedulePath(schedule.id), JSON.stringify(schedule, null, 2), "utf8");
-}
+};
 
 const parseNumber = (value, min, max, label) => {
   const number = Number(value);
@@ -50,9 +50,9 @@ const parseNumber = (value, min, max, label) => {
     throw new Error(`Invalid cron ${label}: ${value}`);
   }
   return number;
-}
+};
 
-const parseCronField = (field, min, max, label, normalize = (value) => value) => {
+const parseCronField = (field, min, max, label, normalize = value => value) => {
   if (typeof field !== "string" || !field.trim()) throw new Error(`Invalid cron ${label}`);
 
   const values = new Set();
@@ -62,10 +62,7 @@ const parseCronField = (field, min, max, label, normalize = (value) => value) =>
     if (pieces.length > 2) throw new Error(`Invalid cron ${label}: ${field}`);
 
     const base = pieces[0];
-    const step = pieces.length === 2
-      ? parseNumber(pieces[1], 1, max - min + 1, `${label} step`)
-      : 1;
-
+    const step = pieces.length === 2 ? parseNumber(pieces[1], 1, max - min + 1, `${label} step`) : 1;
     let start;
     let end;
 
@@ -88,9 +85,9 @@ const parseCronField = (field, min, max, label, normalize = (value) => value) =>
   }
 
   return { values, wildcard: field === "*" };
-}
+};
 
-const parseCron = (expression) => {
+const parseCron = expression => {
   if (typeof expression !== "string" || !expression.trim()) {
     throw new Error("Cron expression must be a non-empty string");
   }
@@ -103,9 +100,9 @@ const parseCron = (expression) => {
     hour: parseCronField(fields[1], 0, 23, "hour"),
     dayOfMonth: parseCronField(fields[2], 1, 31, "day-of-month"),
     month: parseCronField(fields[3], 1, 12, "month"),
-    dayOfWeek: parseCronField(fields[4], 0, 7, "day-of-week", (value) => value === 7 ? 0 : value),
+    dayOfWeek: parseCronField(fields[4], 0, 7, "day-of-week", value => value === 7 ? 0 : value),
   };
-}
+};
 
 const cronMatches = (date, cron) => {
   if (!cron.minute.values.has(date.getMinutes())) return false;
@@ -115,33 +112,28 @@ const cronMatches = (date, cron) => {
   const dayOfMonthMatches = cron.dayOfMonth.values.has(date.getDate());
   const dayOfWeekMatches = cron.dayOfWeek.values.has(date.getDay());
 
-  if (!cron.dayOfMonth.wildcard && !cron.dayOfWeek.wildcard) {
-    return dayOfMonthMatches || dayOfWeekMatches;
-  }
-
+  if (!cron.dayOfMonth.wildcard && !cron.dayOfWeek.wildcard) return dayOfMonthMatches || dayOfWeekMatches;
   if (!cron.dayOfMonth.wildcard && !dayOfMonthMatches) return false;
   if (!cron.dayOfWeek.wildcard && !dayOfWeekMatches) return false;
   return true;
-}
+};
 
 const nextCronDate = (expression, after = new Date()) => {
   const cron = parseCron(expression);
   const candidate = new Date(after.getTime());
-
   candidate.setSeconds(0, 0);
   candidate.setMinutes(candidate.getMinutes() + 1);
 
   const maxMinutes = 60 * 24 * 366 * 2;
-
   for (let i = 0; i < maxMinutes; i += 1) {
     if (cronMatches(candidate, cron)) return candidate;
     candidate.setMinutes(candidate.getMinutes() + 1);
   }
 
   throw new Error(`Could not find next cron occurrence: ${expression}`);
-}
+};
 
-const validateTiming = (timing) => {
+const validateTiming = timing => {
   if (!isObject(timing)) throw new Error("Schedule timing must be an object");
 
   if (timing.type === "at") {
@@ -158,23 +150,22 @@ const validateTiming = (timing) => {
   }
 
   throw new Error(`Unsupported schedule type: ${timing.type}`);
-}
+};
 
-const validateSchedule = (schedule) => {
+const validateSchedule = schedule => {
   if (!isObject(schedule)) throw new Error("Schedule must be an object");
-
   validateFileName(schedule.id, "schedule ID");
 
   if (!schedule.process || typeof schedule.process !== "string") {
     throw new Error("Schedule process must be a non-empty string");
   }
-
+  if (!getProcess(schedule.process)) throw new Error(`Schedule references unknown Process: ${schedule.process}`);
   if (typeof schedule.enabled !== "boolean") throw new Error("Schedule enabled must be a boolean");
   if (!isObject(schedule.inputs)) throw new Error("Schedule inputs must be an object");
   if (!isObject(schedule.config)) throw new Error("Schedule config must be an object");
 
   validateTiming(schedule.timing);
-}
+};
 
 const calculateNextRun = (schedule, after = new Date()) => {
   if (!schedule.enabled) return null;
@@ -185,15 +176,14 @@ const calculateNextRun = (schedule, after = new Date()) => {
   }
 
   return nextCronDate(schedule.timing.value, after).toISOString();
-}
+};
 
 export const loadSchedules = async () => {
   await mkdir(schedulesDir, { recursive: true });
   schedules.clear();
 
   const files = await readdir(schedulesDir);
-
-  for (const filename of files.filter((file) => file.endsWith(".json"))) {
+  for (const filename of files.filter(file => file.endsWith(".json"))) {
     const stored = JSON.parse(await readFile(resolve(schedulesDir, filename), "utf8"));
     const schedule = {
       inputs: {},
@@ -215,14 +205,14 @@ export const loadSchedules = async () => {
   }
 
   return listSchedules();
-}
+};
 
-export const getSchedule = (id) => {
+export const getSchedule = id => {
   const schedule = schedules.get(id);
   return schedule ? structuredClone(schedule) : null;
-}
+};
 
-export const listSchedules = () => [...schedules.values()].map((schedule) => structuredClone(schedule));
+export const listSchedules = () => [...schedules.values()].map(schedule => structuredClone(schedule));
 
 export const createSchedule = async ({
   id = `schedule-${randomUUID()}`,
@@ -252,9 +242,9 @@ export const createSchedule = async ({
   await persistSchedule(schedule);
   await recordEvent("schedule.created", { scheduleId: id, process });
   return structuredClone(schedule);
-}
+};
 
-export const saveSchedule = async (schedule) => {
+export const saveSchedule = async schedule => {
   const stored = {
     inputs: {},
     config: {},
@@ -270,7 +260,7 @@ export const saveSchedule = async (schedule) => {
   await persistSchedule(stored);
   await recordEvent("schedule.saved", { scheduleId: stored.id, process: stored.process });
   return structuredClone(stored);
-}
+};
 
 export const updateSchedule = async (id, changes) => {
   if (!isObject(changes)) throw new Error("Schedule changes must be an object");
@@ -283,13 +273,14 @@ export const updateSchedule = async (id, changes) => {
 
   const timingChanged = Object.prototype.hasOwnProperty.call(changes, "timing");
   const enabledChanged = Object.prototype.hasOwnProperty.call(changes, "enabled");
-  if (timingChanged || enabledChanged) updated.nextRunAt = calculateNextRun(updated, new Date());
+  const processChanged = Object.prototype.hasOwnProperty.call(changes, "process");
+  if (timingChanged || enabledChanged || processChanged) updated.nextRunAt = calculateNextRun(updated, new Date());
 
   schedules.set(id, updated);
   await persistSchedule(updated);
   await recordEvent("schedule.updated", { scheduleId: id });
   return structuredClone(updated);
-}
+};
 
 export const setScheduleEnabled = async (id, enabled) => {
   if (typeof enabled !== "boolean") throw new Error("Schedule enabled must be a boolean");
@@ -301,9 +292,9 @@ export const setScheduleEnabled = async (id, enabled) => {
   await persistSchedule(schedule);
   await recordEvent(enabled ? "schedule.enabled" : "schedule.disabled", { scheduleId: id });
   return structuredClone(schedule);
-}
+};
 
-export const triggerSchedule = async (id) => {
+export const triggerSchedule = async id => {
   const schedule = requireSchedule(id);
   if (!schedule.enabled) throw new Error(`Schedule ${id} is disabled`);
 
@@ -331,7 +322,7 @@ export const triggerSchedule = async (id) => {
   });
 
   return workflow;
-}
+};
 
 export const tickSchedules = async (now = new Date()) => {
   if (ticking) return [];
@@ -344,7 +335,6 @@ export const tickSchedules = async (now = new Date()) => {
       if (!schedule.enabled || !schedule.nextRunAt) continue;
 
       const due = new Date(schedule.nextRunAt);
-
       if (Number.isNaN(due.getTime())) {
         await recordEvent("schedule.failed", {
           scheduleId: schedule.id,
@@ -353,7 +343,6 @@ export const tickSchedules = async (now = new Date()) => {
         });
         continue;
       }
-
       if (due.getTime() > now.getTime()) continue;
 
       try {
@@ -371,32 +360,29 @@ export const tickSchedules = async (now = new Date()) => {
   } finally {
     ticking = false;
   }
-}
+};
 
 export const startScheduler = (onWorkflow, intervalMs = 30_000) => {
   if (schedulerTimer) return;
   if (typeof onWorkflow !== "function") throw new Error("Scheduler requires a Workflow runner");
-
   if (!Number.isInteger(intervalMs) || intervalMs < 1000) {
     throw new Error("Scheduler interval must be at least 1000ms");
   }
 
   const check = async () => {
     const workflows = await tickSchedules();
-    await Promise.all(workflows.map((workflow) => onWorkflow(workflow)));
+    await Promise.all(workflows.map(workflow => onWorkflow(workflow)));
   };
 
-  void check().catch((error) => console.error("Schedule check failed:", error));
-
+  void check().catch(error => console.error("Schedule check failed:", error));
   schedulerTimer = setInterval(() => {
-    void check().catch((error) => console.error("Schedule check failed:", error));
+    void check().catch(error => console.error("Schedule check failed:", error));
   }, intervalMs);
-
   schedulerTimer.unref?.();
-}
+};
 
 export const stopScheduler = () => {
   if (!schedulerTimer) return;
   clearInterval(schedulerTimer);
   schedulerTimer = null;
-}
+};

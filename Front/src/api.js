@@ -6,11 +6,11 @@ const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
-// Centralized endpoint surface. Mirrors Back/src/Router.mjs exactly — no invented routes.
 export const endpoints = {
   health: () => "/health",
   models: () => "/models",
   nora: () => "/nora",
+  events: () => "/events",
 
   conversations: () => "/conversations",
   conversation: id => `/conversations/${id}`,

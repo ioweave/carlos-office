@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { IconHistory, IconPlus } from "@tabler/icons-react";
 import { toast } from "sonner";
+
 import api, { endpoints } from "../api";
 import ArtifactPreview from "../components/ArtifactPreview";
 import ChatComposer from "../components/ChatComposer";
@@ -31,7 +32,12 @@ const filePayload = file => new Promise((resolve, reject) => {
   reader.onload = () => {
     const dataUrl = String(reader.result || "");
     const comma = dataUrl.indexOf(",");
-    resolve({ name: file.name, type: file.type || "application/octet-stream", content: comma >= 0 ? dataUrl.slice(comma + 1) : "", encoding: "base64" });
+    resolve({
+      name: file.name,
+      type: file.type || "application/octet-stream",
+      content: comma >= 0 ? dataUrl.slice(comma + 1) : "",
+      encoding: "base64",
+    });
   };
   reader.onerror = () => reject(reader.error || new Error(`Could not read ${file.name}.`));
   reader.readAsDataURL(file);
@@ -73,8 +79,9 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
 
   const agentName = useMemo(() => agents.find(item => item.isNora)?.name || "Nora", [agents]);
   const providerNames = useMemo(() => models.map(entry => entry.provider), [models]);
-  const modelsFor = provider => (models.find(entry => entry.provider === provider)?.models) || [];
-  const modelDirty = conversationModel.provider !== modelDraft.provider || conversationModel.model !== modelDraft.model;
+  const modelsFor = provider => models.find(entry => entry.provider === provider)?.models || [];
+  const modelDirty = conversationModel.provider !== modelDraft.provider
+    || conversationModel.model !== modelDraft.model;
 
   const loadCatalog = useCallback(async () => {
     try {
@@ -98,15 +105,18 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
 
   const loadConversation = useCallback(async (id, { quiet = false } = {}) => {
     if (!id) return;
+
     try {
       const record = (await api.get(endpoints.conversation(id))).data;
       setConversationId(record.id);
       sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, record.id);
       setMessages(record.messages?.length ? record.messages.map(mapMessage) : []);
       setActiveWorkflowId(record.workflows?.length ? record.workflows[record.workflows.length - 1] : null);
-      const nora = record.nora || { provider: "", model: "" };
-      setConversationModel(nora);
-      setModelDraft(nora);
+
+      const selection = record.nora || { provider: "", model: "" };
+      setConversationModel(selection);
+      setModelDraft(selection);
+
       const artifactList = (await api.get(endpoints.conversationArtifacts(record.id))).data || [];
       setArtifacts(artifactList);
       setActiveArtifactId("");
@@ -141,7 +151,6 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
     clearTimeout(copyTimerRef.current);
   }, []);
 
-  // When starting a new conversation with no selection yet, default the draft to the App-owned Nora selection.
   useEffect(() => {
     if (conversationId || !nora?.provider) return;
     if (!modelDraft.provider) setModelDraft(nora);
@@ -149,6 +158,7 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
 
   const startNew = () => {
     if (sending) return;
+
     sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
     setConversationId(null);
     setMessages([]);
@@ -158,15 +168,26 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
     setActiveWorkflowId(null);
     setActiveArtifactId("");
     setHistoryOpen(false);
-    const defaults = nora?.provider ? nora : (providerNames.length ? { provider: providerNames[0], model: "" } : { provider: "", model: "" });
+
+    const defaults = nora?.provider
+      ? nora
+      : providerNames.length
+        ? { provider: providerNames[0], model: "" }
+        : { provider: "", model: "" };
+
     setConversationModel(defaults);
     setModelDraft(defaults);
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
-  const stopSpeech = () => { window.speechSynthesis?.cancel?.(); setSpeaking(null); };
+  const stopSpeech = () => {
+    window.speechSynthesis?.cancel?.();
+    setSpeaking(null);
+  };
+
   const speak = (text, index) => {
     if (!window.speechSynthesis) return toast.error("Speech output is unavailable in this browser.");
+
     stopSpeech();
     const utterance = new SpeechSynthesisUtterance(readable(text));
     utterance.lang = language.current;
@@ -191,6 +212,7 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Recognition) return toast.error("Speech recognition is unavailable. Chrome or Edge is recommended.");
     if (listening) return recognitionRef.current?.stop?.();
+
     const recognition = new Recognition();
     const existing = input.trim();
     recognition.lang = language.current;
@@ -200,8 +222,13 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
       const transcript = [...event.results].map(result => result[0]?.transcript || "").join("");
       setInput([existing, transcript.trim()].filter(Boolean).join(" "));
     };
-    recognition.onerror = event => { if (!["aborted", "no-speech"].includes(event.error)) toast.error(`Speech recognition failed: ${event.error}`); };
-    recognition.onend = () => { setListening(false); recognitionRef.current = null; };
+    recognition.onerror = event => {
+      if (!["aborted", "no-speech"].includes(event.error)) toast.error(`Speech recognition failed: ${event.error}`);
+    };
+    recognition.onend = () => {
+      setListening(false);
+      recognitionRef.current = null;
+    };
     recognitionRef.current = recognition;
     recognition.start();
   };
@@ -212,9 +239,15 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
   const saveModel = async () => {
     if (!conversationId) return;
     if (!modelDraft.provider || !modelDraft.model) return toast.error("Select a provider and model.");
+
     setSavingModel(true);
     try {
-      const record = (await api.patch(endpoints.conversationModel(conversationId), { provider: modelDraft.provider, model: modelDraft.model })).data;
+      const record = (
+        await api.patch(endpoints.conversationModel(conversationId), {
+          provider: modelDraft.provider,
+          model: modelDraft.model,
+        })
+      ).data;
       const next = record.nora || modelDraft;
       setConversationModel(next);
       setModelDraft(next);
@@ -230,12 +263,15 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
 
   const ensureConversation = async () => {
     if (conversationId) return conversationId;
+
     const provider = modelDraft.provider || nora?.provider || providerNames[0];
     const model = modelDraft.model || modelsFor(provider)[0] || "";
     if (!provider || !model) throw new Error("Select a provider and model before sending.");
+
     const created = (await api.post(endpoints.conversations(), { provider, model })).data;
     setConversationId(created.id);
     sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, created.id);
+
     const next = created.nora || { provider, model };
     setConversationModel(next);
     setModelDraft(next);
@@ -250,37 +286,49 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
     if (sending || (!message && !files.length)) return;
 
     const requestContent = message || "Review the attached files.";
+    const pendingFiles = [...files];
+    let requestConversationId = conversationId;
+    let watchingWorkflow = false;
+    let workflowWatcher = null;
+
     setActiveWorkflowId(null);
     setSending(true);
     setHistoryOpen(false);
+
     const controller = new AbortController();
     requestRef.current = controller;
-
-    const optimistic = { id: `pending-${Date.now()}`, role: "user", at: new Date().toISOString(), content: requestContent };
+    const optimistic = {
+      id: `pending-${Date.now()}`,
+      role: "user",
+      at: new Date().toISOString(),
+      content: requestContent,
+    };
     setMessages(current => [...current, optimistic]);
     setInput("");
     setFiles([]);
 
-    let watchingWorkflow = false;
-    let workflowWatcher = null;
-
     try {
       const id = await ensureConversation();
+      requestConversationId = id;
       const artifactIds = [];
-      for (const item of files) {
+
+      for (const item of pendingFiles) {
         const payload = await filePayload(item.file);
-        const created = (await api.post(endpoints.conversationArtifacts(id), { name: payload.name, type: payload.type, createdBy: "Carlos", content: payload.content, encoding: "base64" })).data;
+        const created = (
+          await api.post(endpoints.conversationArtifacts(id), {
+            name: payload.name,
+            type: payload.type,
+            createdBy: "Carlos",
+            content: payload.content,
+            encoding: "base64",
+          })
+        ).data;
         artifactIds.push(created.id);
       }
 
-      // Establish the Workflow IDs that already existed before this request so the
-      // watcher only surfaces the Workflow Nora creates for this request.
       const beforeRequest = (await api.get(endpoints.conversation(id))).data;
       const knownWorkflowIds = new Set(beforeRequest.workflows || []);
 
-      // Best-effort: discover the in-flight Workflow by polling the Conversation
-      // while POST /requests is still awaiting runWorkflow. POST /requests resolves
-      // only after execution returns, so the Workflow is observable mid-run.
       watchingWorkflow = true;
       workflowWatcher = (async () => {
         while (watchingWorkflow) {
@@ -293,22 +341,33 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
               setActiveWorkflowId(discovered);
             }
           } catch {
-            // Workflow discovery is best-effort; the main request owns user-visible errors.
+            // Workflow discovery is best-effort. The request result owns user-visible failure handling.
           }
           if (watchingWorkflow) await wait(750);
         }
       })();
 
-      const result = (await api.post(endpoints.conversationRequest(id), { content: requestContent, artifacts: artifactIds }, { signal: controller.signal })).data;
+      const result = (
+        await api.post(
+          endpoints.conversationRequest(id),
+          { content: requestContent, artifacts: artifactIds },
+          { signal: controller.signal },
+        )
+      ).data;
+
       if (result.workflow?.id) setActiveWorkflowId(result.workflow.id);
 
       const record = (await api.get(endpoints.conversation(id))).data;
       setMessages(record.messages?.map(mapMessage) || []);
-      const artifactList = (await api.get(endpoints.conversationArtifacts(id))).data || [];
-      setArtifacts(artifactList);
+      setArtifacts((await api.get(endpoints.conversationArtifacts(id))).data || []);
 
       if (result.action === "tool") toast.success(`Tool ${result.tool?.name} saved.`);
       if (result.action === "skill") toast.success(`Skill ${result.skill?.name} saved.`);
+      if (result.action === "create_process") toast.success(`Process ${result.process?.name} saved.`);
+      if (result.action === "create_schedule") toast.success(`Schedule ${result.schedule?.id} created.`);
+      if (result.action === "plan") toast.success("Creation plan completed.");
+      if (result.action === "failed") toast.error(result.error?.message || "Nora could not complete the request.");
+
       await loadHistory({ quiet: true });
     } catch (error) {
       if (error?.code === "ERR_CANCELED" || error?.name === "CanceledError") {
@@ -316,7 +375,7 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
       } else {
         toast.error(error.response?.data?.error || error.message || "Request failed.");
       }
-      if (conversationId) loadConversation(conversationId, { quiet: true });
+      if (requestConversationId) await loadConversation(requestConversationId, { quiet: true });
     } finally {
       watchingWorkflow = false;
       if (workflowWatcher) await workflowWatcher;
@@ -327,7 +386,6 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
 
   const stopResponse = async () => {
     requestRef.current?.abort();
-
     if (!activeWorkflowId) return;
 
     try {
@@ -341,7 +399,16 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
   };
 
   const activeArtifact = artifacts.find(item => item.id === activeArtifactId) || null;
-  const title = conversationId ? deriveTitle({ id: conversationId, messages: messages.map(m => ({ actor: m.role === "user" ? "Carlos" : "Nora", content: m.content, at: m.at })) }) : "New conversation";
+  const title = conversationId
+    ? deriveTitle({
+      id: conversationId,
+      messages: messages.map(item => ({
+        actor: item.role === "user" ? "Carlos" : "Nora",
+        content: item.content,
+        at: item.at,
+      })),
+    })
+    : "New conversation";
   const connected = health?.ok === true;
 
   return (
@@ -349,43 +416,71 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
       <section className="chat__main">
         <header className="chat__header">
           <div className="chat__header-leading">
-            <button type="button" className="icon-button chat__history-toggle" onClick={() => setHistoryOpen(current => !current)} aria-label="Open conversation history"><IconHistory size={19} /></button>
+            <button
+              type="button"
+              className="icon-button chat__history-toggle"
+              onClick={() => setHistoryOpen(current => !current)}
+              aria-label="Open conversation history"
+            >
+              <IconHistory size={19} />
+            </button>
             <div className="chat__identity">
               <span className="chat__agent-label">{agentName} · Chief of Staff</span>
-              <div className="chat__title"><h1 className="chat__title-text">{title}</h1></div>
+              <div className="chat__title">
+                <h1 className="chat__title-text">{title}</h1>
+              </div>
             </div>
           </div>
+
           <div className="chat__header-actions">
-            <StatusBadge tone={connected ? "success" : "warning"}>{connected ? "Backend online" : "Backend offline"}</StatusBadge>
-            <button type="button" className="secondary-button" onClick={startNew} disabled={sending}><IconPlus size={16} /><span>New</span></button>
+            <div className="chat__model-controls" aria-label="Conversation model">
+              <label className="chat__model-field">
+                <span className="chat__model-field-label">Provider</span>
+                <select
+                  className="chat__model-select"
+                  value={modelDraft.provider}
+                  onChange={event => changeProvider(event.target.value)}
+                >
+                  {!providerNames.includes(modelDraft.provider) && modelDraft.provider && (
+                    <option value={modelDraft.provider}>{modelDraft.provider} · current</option>
+                  )}
+                  {providerNames.map(name => <option key={name} value={name}>{name}</option>)}
+                </select>
+              </label>
+              <label className="chat__model-field chat__model-field--model">
+                <span className="chat__model-field-label">Model</span>
+                <select
+                  className="chat__model-select"
+                  value={modelDraft.model}
+                  onChange={event => changeModel(event.target.value)}
+                >
+                  <option value="">Select model</option>
+                  {modelsFor(modelDraft.provider).map(model => <option key={model} value={model}>{model}</option>)}
+                  {!modelsFor(modelDraft.provider).includes(modelDraft.model) && modelDraft.model && (
+                    <option value={modelDraft.model}>{modelDraft.model} · current</option>
+                  )}
+                </select>
+              </label>
+              {conversationId && modelDirty && (
+                <button
+                  type="button"
+                  className="secondary-button chat__model-save"
+                  onClick={saveModel}
+                  disabled={savingModel || !modelDraft.provider || !modelDraft.model}
+                >
+                  {savingModel ? "Saving…" : "Save"}
+                </button>
+              )}
+            </div>
+            <StatusBadge tone={connected ? "success" : "warning"}>
+              {connected ? "Backend online" : "Backend offline"}
+            </StatusBadge>
+            <button type="button" className="secondary-button" onClick={startNew} disabled={sending}>
+              <IconPlus size={16} />
+              <span>New</span>
+            </button>
           </div>
         </header>
-
-        <div className="chat__model-bar">
-          <div className="chat__model-selectors">
-            <label className="chat__model-field">
-              <span className="chat__model-field-label">Provider</span>
-              <select className="chat__model-select" value={modelDraft.provider} onChange={event => changeProvider(event.target.value)}>
-                {!providerNames.includes(modelDraft.provider) && modelDraft.provider && <option value={modelDraft.provider}>{modelDraft.provider} · current</option>}
-                {providerNames.map(name => <option key={name} value={name}>{name}</option>)}
-              </select>
-            </label>
-            <label className="chat__model-field">
-              <span className="chat__model-field-label">Model</span>
-              <select className="chat__model-select" value={modelDraft.model} onChange={event => changeModel(event.target.value)}>
-                <option value="">Select model</option>
-                {modelsFor(modelDraft.provider).map(model => <option key={model} value={model}>{model}</option>)}
-                {!modelsFor(modelDraft.provider).includes(modelDraft.model) && modelDraft.model && <option value={modelDraft.model}>{modelDraft.model} · current</option>}
-              </select>
-            </label>
-          </div>
-          {conversationId && modelDirty && (
-            <button type="button" className="secondary-button" onClick={saveModel} disabled={savingModel || !modelDraft.provider || !modelDraft.model}>
-              {savingModel ? "Saving…" : "Save model"}
-            </button>
-          )}
-          {!conversationId && <span className="chat__model-hint">Used when creating this conversation.</span>}
-        </div>
 
         <div className="chat__workspace">
           <ChatThread
@@ -433,19 +528,23 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
         />
       </aside>
 
-      {historyOpen && <button type="button" className="chat__history-backdrop" onClick={() => setHistoryOpen(false)} aria-label="Close conversation history" />}
+      {historyOpen && (
+        <button
+          type="button"
+          className="chat__history-backdrop"
+          onClick={() => setHistoryOpen(false)}
+          aria-label="Close conversation history"
+        />
+      )}
 
       {activeArtifact && (
-        <>
-          <div className="chat__artifact-splitter" aria-hidden="true" />
-          <ArtifactPreview
-            conversationId={conversationId}
-            artifact={activeArtifact}
-            artifacts={artifacts}
-            onSelect={setActiveArtifactId}
-            onClose={() => setActiveArtifactId("")}
-          />
-        </>
+        <ArtifactPreview
+          conversationId={conversationId}
+          artifact={activeArtifact}
+          artifacts={artifacts}
+          onSelect={setActiveArtifactId}
+          onClose={() => setActiveArtifactId("")}
+        />
       )}
     </div>
   );

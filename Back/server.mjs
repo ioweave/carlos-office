@@ -38,10 +38,10 @@ tasks.setProviders(providers);
 nora.setProviders(providers);
 nora.initializeNora();
 
-const runScheduledWorkflow = async (workflow) => {
+const runScheduledWorkflow = async workflow => {
   const execution = await nora.runWorkflow(workflow.id);
   if (execution.workflow.status === "completed") await nora.summarizeWorkflow(workflow.id);
-}
+};
 
 const router = createRouter({
   nora,
@@ -50,6 +50,7 @@ const router = createRouter({
   artifacts,
   authorization,
   schedules,
+  events,
   agents,
   tools,
   skills,
@@ -67,11 +68,8 @@ schedules.startScheduler(runScheduledWorkflow);
 
 const shutdown = () => {
   schedules.stopScheduler();
-
-  server.close(() => {
-    process.exit(0);
-  });
-}
+  server.close(() => process.exit(0));
+};
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

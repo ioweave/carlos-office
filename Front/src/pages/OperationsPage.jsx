@@ -1,12 +1,36 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { IconArrowLeft, IconBolt, IconCircleCheck, IconRefresh, IconReload, IconRoute, IconPlayerSkipForward, IconX } from "@tabler/icons-react";
+import {
+  IconAlertTriangle,
+  IconArrowLeft,
+  IconBolt,
+  IconCircleCheck,
+  IconPlayerSkipForward,
+  IconRefresh,
+  IconReload,
+  IconRoute,
+  IconX,
+} from "@tabler/icons-react";
 import { toast } from "sonner";
+
 import api, { endpoints } from "../api";
 import ProcessGraph from "../components/ProcessGraph";
 import StateView from "../components/StateView";
 import StatusBadge from "../components/StatusBadge";
 
 const STATUS_FILTERS = ["all", "running", "blocked", "failed", "completed", "cancelled"];
+const OPERATIONS_EVENT_TYPES = new Set([
+  "nora.request_failed",
+  "nora.workflow_started",
+  "workflow.created",
+  "workflow.completed",
+  "workflow.stalled",
+  "attempt.failed",
+  "task.failed",
+  "task.blocked",
+  "schedule.created",
+  "schedule.triggered",
+  "schedule.failed",
+]);
 
 const statusTone = {
   running: "info",
@@ -16,10 +40,45 @@ const statusTone = {
   cancelled: "neutral",
 };
 
+const eventTone = event => {
+  if (event.type.endsWith(".failed") || event.type === "workflow.stalled") return "danger";
+  if (event.type.endsWith(".blocked")) return "warning";
+  if (event.type.endsWith(".completed") || event.type.endsWith(".created")) return "success";
+  return "info";
+};
+
 const formatTime = value => {
   if (!value) return "—";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
+};
+
+const eventTitle = event => {
+  if (event.type === "nora.request_failed") return "Nora request failed";
+  if (event.type === "workflow.stalled") return "Workflow stalled";
+  if (event.type === "attempt.failed") return "Task attempt failed";
+  if (event.type === "task.failed") return "Task failed";
+  if (event.type === "task.blocked") return "Task blocked";
+  if (event.type === "schedule.failed") return "Schedule failed";
+  if (event.type === "schedule.triggered") return "Schedule triggered";
+  if (event.type === "schedule.created") return "Schedule created";
+  if (event.type === "workflow.completed") return "Workflow completed";
+  if (event.type === "workflow.created") return "Workflow created";
+  if (event.type === "nora.workflow_started") return "Nora started workflow";
+  return event.type;
+};
+
+const eventDetail = event => {
+  if (event.error) return event.error;
+  if (event.taskId) return `${event.taskId}${event.workflowId ? ` · ${event.workflowId}` : ""}`;
+  if (event.workflowId) return event.workflowId;
+  if (event.scheduleId) return `${event.scheduleId}${event.process ? ` · ${event.process}` : ""}`;
+  if (event.conversationId) {
+    const phase = event.phase ? ` · ${event.phase}` : "";
+    const action = event.action ? ` · ${event.action}` : "";
+    return `${event.conversationId}${phase}${action}`;
+  }
+  return event.process || "Carlos Office runtime";
 };
 
 const AttemptDetail = ({ attempt }) => {
@@ -42,13 +101,20 @@ const AttemptDetail = ({ attempt }) => {
     skills: attempt.skills,
     output: attempt.output,
   };
+
   return (
     <div className="operations-attempts__item">
       <header className="operations-attempts__head">
-        <StatusBadge tone={statusTone[attempt.status] || "neutral"}>#{attempt.attempt} {attempt.status}</StatusBadge>
+        <StatusBadge tone={statusTone[attempt.status] || "neutral"}>
+          #{attempt.attempt} {attempt.status}
+        </StatusBadge>
         <small className="operations-attempts__head-meta">{attempt.agent || "—"}</small>
-        <small className="operations-attempts__head-meta">{attempt.provider && attempt.model ? `${attempt.provider} · ${attempt.model}` : "—"}</small>
-        <small className="operations-attempts__time">{formatTime(attempt.startedAt)} → {formatTime(attempt.endedAt)}</small>
+        <small className="operations-attempts__head-meta">
+          {attempt.provider && attempt.model ? `${attempt.provider} · ${attempt.model}` : "—"}
+        </small>
+        <small className="operations-attempts__time">
+          {formatTime(attempt.startedAt)} → {formatTime(attempt.endedAt)}
+        </small>
       </header>
       <pre className="operations-result">{JSON.stringify(fields, null, 2)}</pre>
     </div>
@@ -57,6 +123,7 @@ const AttemptDetail = ({ attempt }) => {
 
 export default function OperationsPage({ onAskNora, openRequest }) {
   const [workflows, setWorkflows] = useState([]);
+  const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("all");
@@ -67,30 +134,41 @@ export default function OperationsPage({ onAskNora, openRequest }) {
   const [promoteOpen, setPromoteOpen] = useState(false);
   const [promoteDraft, setPromoteDraft] = useState({ name: "", purpose: "" });
 
-  const loadList = useCallback(async () => {
+  const loadOverview = useCallback(async () => {
     try {
-      const list = (await api.get(endpoints.workflows())).data || [];
-      setWorkflows(list);
+      const [workflowResponse, eventResponse] = await Promise.all([
+        api.get(endpoints.workflows()),
+        api.get(endpoints.events(), { params: { limit: 100 } }),
+      ]);
+      setWorkflows(workflowResponse.data || []);
+      setEvents((eventResponse.data || []).filter(event => OPERATIONS_EVENT_TYPES.has(event.type)).slice(0, 20));
       setError("");
     } catch (fetchError) {
-      setError(fetchError.response?.data?.error || "Could not load workflows.");
+      setError(fetchError.response?.data?.error || "Could not load Operations.");
     } finally {
       setLoading(false);
     }
   }, []);
 
   const loadInspect = useCallback(async id => {
-    if (!id) return setInspect(null);
+    if (!id) {
+      setInspect(null);
+      return;
+    }
+
     try {
-      const res = await api.get(endpoints.workflowInspect(id));
-      setInspect(res.data);
+      setInspect((await api.get(endpoints.workflowInspect(id))).data);
     } catch (fetchError) {
       setInspect(null);
       toast.error(fetchError.response?.data?.error || "Could not inspect workflow.");
     }
   }, []);
 
-  useEffect(() => { loadList(); const timer = setInterval(loadList, 5000); return () => clearInterval(timer); }, [loadList]);
+  useEffect(() => {
+    loadOverview();
+    const timer = setInterval(loadOverview, 5000);
+    return () => clearInterval(timer);
+  }, [loadOverview]);
 
   useEffect(() => {
     if (!selectedId) return undefined;
@@ -99,25 +177,36 @@ export default function OperationsPage({ onAskNora, openRequest }) {
     return () => clearInterval(timer);
   }, [selectedId, loadInspect]);
 
-  // Auto-select workflow when navigated here from Chat (request-token pattern).
   useEffect(() => {
     if (!openRequest?.workflowId) return;
     setSelectedId(openRequest.workflowId);
     setSelectedTaskId("");
     setLoading(false);
-  }, [openRequest?.token, openRequest?.workflowId]);  
+  }, [openRequest?.token, openRequest?.workflowId]);
 
-  const filtered = useMemo(() => workflows.filter(item => filter === "all" || item.status === filter), [workflows, filter]);
-  const workflow = useMemo(() => inspect?.workflow || workflows.find(item => item.id === selectedId) || null, [inspect, workflows, selectedId]);
+  const filtered = useMemo(
+    () => workflows.filter(item => filter === "all" || item.status === filter),
+    [workflows, filter],
+  );
+  const workflow = useMemo(
+    () => inspect?.workflow || workflows.find(item => item.id === selectedId) || null,
+    [inspect, workflows, selectedId],
+  );
   const task = useMemo(() => workflow?.tasks?.[selectedTaskId] || null, [workflow, selectedTaskId]);
+
+  const openWorkflow = id => {
+    setSelectedId(id);
+    setSelectedTaskId("");
+  };
 
   const act = async (label, action) => {
     if (!workflow) return;
     setBusy(label);
+
     try {
       await action();
       await loadInspect(workflow.id);
-      await loadList();
+      await loadOverview();
       toast.success(`${label} complete.`);
     } catch (fetchError) {
       toast.error(fetchError.response?.data?.error || `${label} failed.`);
@@ -128,37 +217,24 @@ export default function OperationsPage({ onAskNora, openRequest }) {
 
   const reviewTask = async () => {
     if (!workflow || !selectedTaskId) return;
-
     setBusy("Review");
 
     try {
       const review = (
-        await api.post(
-          endpoints.workflowTaskReview(
-            workflow.id,
-            selectedTaskId,
-          ),
-        )
+        await api.post(endpoints.workflowTaskReview(workflow.id, selectedTaskId))
       ).data;
 
       if (review?.action === "retry") {
         await api.post(endpoints.workflowRun(workflow.id));
         toast.success("Task reviewed and retry started.");
       } else {
-        toast.message(
-          review?.reason
-            ? `Task escalated: ${review.reason}`
-            : "Task requires Carlos's attention.",
-        );
+        toast.message(review?.reason ? `Task escalated: ${review.reason}` : "Task requires Carlos's attention.");
       }
 
       await loadInspect(workflow.id);
-      await loadList();
-    } catch (error) {
-      toast.error(
-        error.response?.data?.error
-        || "Task review failed.",
-      );
+      await loadOverview();
+    } catch (reviewError) {
+      toast.error(reviewError.response?.data?.error || "Task review failed.");
     } finally {
       setBusy("");
     }
@@ -167,13 +243,17 @@ export default function OperationsPage({ onAskNora, openRequest }) {
   const promote = async event => {
     event.preventDefault();
     if (!promoteDraft.name.trim()) return toast.error("Name the new Process.");
+
     setBusy("promote");
     try {
-      await api.post(endpoints.workflowPromote(workflow.id), { name: promoteDraft.name.trim(), purpose: promoteDraft.purpose.trim() || null });
+      await api.post(endpoints.workflowPromote(workflow.id), {
+        name: promoteDraft.name.trim(),
+        purpose: promoteDraft.purpose.trim() || null,
+      });
       toast.success("Workflow promoted to Process.");
       setPromoteOpen(false);
       setPromoteDraft({ name: "", purpose: "" });
-      await loadList();
+      await loadOverview();
     } catch (fetchError) {
       toast.error(fetchError.response?.data?.error || "Promotion failed.");
     } finally {
@@ -181,11 +261,28 @@ export default function OperationsPage({ onAskNora, openRequest }) {
     }
   };
 
-  if (loading) return <div className="operations-page redesign-page"><StateView variant="loading" /></div>;
-  if (error && !workflows.length) return <div className="operations-page redesign-page"><StateView variant="error" message={error} actions={<button className="secondary-button" onClick={loadList}><IconRefresh size={15} /> Retry</button>} /></div>;
+  if (loading) {
+    return <div className="operations-page redesign-page"><StateView variant="loading" /></div>;
+  }
+
+  if (error && !workflows.length && !events.length) {
+    return (
+      <div className="operations-page redesign-page">
+        <StateView
+          variant="error"
+          message={error}
+          actions={(
+            <button type="button" className="secondary-button" onClick={loadOverview}>
+              <IconRefresh size={15} /> Retry
+            </button>
+          )}
+        />
+      </div>
+    );
+  }
 
   if (workflow) {
-    const statuses = Object.fromEntries(Object.entries(workflow.tasks || {}).map(([id, t]) => [id, t.status]));
+    const statuses = Object.fromEntries(Object.entries(workflow.tasks || {}).map(([id, item]) => [id, item.status]));
     const approvals = inspect?.approvals || [];
     const resumable = workflow.status === "blocked";
     const attempts = task?.attempts || [];
@@ -194,16 +291,59 @@ export default function OperationsPage({ onAskNora, openRequest }) {
       <div className="operations-studio redesign-page">
         <header className="redesign-header">
           <div className="redesign-header__leading">
-            <button type="button" className="icon-button redesign-header__back" onClick={() => { setSelectedId(null); setInspect(null); }} aria-label="Back to workflow list"><IconArrowLeft size={18} /></button>
+            <button
+              type="button"
+              className="icon-button redesign-header__back"
+              onClick={() => {
+                setSelectedId(null);
+                setInspect(null);
+              }}
+              aria-label="Back to workflow list"
+            >
+              <IconArrowLeft size={18} />
+            </button>
             <span className="eyebrow">Workflow runtime</span>
             <h1 className="redesign-header__title">{workflow.process || "Ad-hoc workflow"}</h1>
-            <p className="redesign-header__subtitle">{workflow.id} · <StatusBadge tone={statusTone[workflow.status] || "neutral"}>{workflow.status}</StatusBadge></p>
+            <p className="redesign-header__subtitle">
+              {workflow.id} · {" "}
+              <StatusBadge tone={statusTone[workflow.status] || "neutral"}>{workflow.status}</StatusBadge>
+            </p>
           </div>
           <div className="operations-studio__header-actions">
-            {resumable && <button type="button" className="secondary-button" onClick={() => act("Resume", () => api.post(endpoints.workflowResume(workflow.id), {}))} disabled={!!busy}><IconReload size={15} /> Resume</button>}
-            <button type="button" className="secondary-button" onClick={() => act("Restart", () => api.post(endpoints.workflowRestart(workflow.id)))} disabled={!!busy || workflow.status === "running"}><IconRefresh size={15} /> Restart</button>
-            <button type="button" className="danger-button" onClick={() => act("Cancel", () => api.post(endpoints.workflowCancel(workflow.id)))} disabled={!!busy || workflow.status === "cancelled"}><IconX size={15} /> Cancel</button>
-            <button type="button" className="primary-button" onClick={() => setPromoteOpen(true)} disabled={!!busy || workflow.status !== "completed"}><IconRoute size={15} /> Promote</button>
+            {resumable && (
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => act("Resume", () => api.post(endpoints.workflowResume(workflow.id), {}))}
+                disabled={!!busy}
+              >
+                <IconReload size={15} /> Resume
+              </button>
+            )}
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => act("Restart", () => api.post(endpoints.workflowRestart(workflow.id)))}
+              disabled={!!busy || workflow.status === "running"}
+            >
+              <IconRefresh size={15} /> Restart
+            </button>
+            <button
+              type="button"
+              className="danger-button"
+              onClick={() => act("Cancel", () => api.post(endpoints.workflowCancel(workflow.id)))}
+              disabled={!!busy || workflow.status === "cancelled"}
+            >
+              <IconX size={15} /> Cancel
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => setPromoteOpen(true)}
+              disabled={!!busy || workflow.status !== "completed"}
+            >
+              <IconRoute size={15} /> Promote
+            </button>
           </div>
         </header>
 
@@ -219,6 +359,7 @@ export default function OperationsPage({ onAskNora, openRequest }) {
               onSelect={node => setSelectedTaskId(node.id)}
             />
           </div>
+
           <aside className="operations-studio__inspector">
             {!!approvals.length && (
               <section className="operations-studio__inspector-section">
@@ -227,41 +368,98 @@ export default function OperationsPage({ onAskNora, openRequest }) {
                   {approvals.map(approval => (
                     <li key={approval.id} className="operations-approvals__item">
                       <strong className="operations-approvals__title">{approval.tool || "Action"}</strong>
-                      <small className="operations-approvals__meta">{approval.reason || "Authorization required"}</small>
+                      <small className="operations-approvals__meta">
+                        {approval.reason || "Authorization required"}
+                      </small>
                     </li>
                   ))}
                 </ul>
               </section>
             )}
+
             {task && (
               <section className="operations-studio__inspector-section">
                 <span className="eyebrow">Task · {task.type}</span>
                 <h2 className="operations-studio__inspector-title">{task.objective || selectedTaskId}</h2>
                 <StatusBadge tone={statusTone[task.status] || "neutral"}>{task.status}</StatusBadge>
                 <dl className="meta-list">
-                  <div className="meta-list__row"><dt className="meta-list__term">Objective</dt><dd className="meta-list__value">{task.objective || "—"}</dd></div>
-                  <div className="meta-list__row"><dt className="meta-list__term">Inputs</dt><dd className="meta-list__value">{(task.inputs || []).join(", ") || "—"}</dd></div>
-                  <div className="meta-list__row"><dt className="meta-list__term">Output</dt><dd className="meta-list__value">{task.output || "—"}</dd></div>
-                  <div className="meta-list__row"><dt className="meta-list__term">Completion</dt><dd className="meta-list__value">{task.completion || "—"}</dd></div>
-                  <div className="meta-list__row"><dt className="meta-list__term">Tools</dt><dd className="meta-list__value">{(task.tools || []).join(", ") || "—"}</dd></div>
-                  <div className="meta-list__row"><dt className="meta-list__term">Skills</dt><dd className="meta-list__value">{(task.skills || []).join(", ") || "—"}</dd></div>
-                  <div className="meta-list__row"><dt className="meta-list__term">Agent</dt><dd className="meta-list__value">{task.agent || "—"}</dd></div>
-                  <div className="meta-list__row"><dt className="meta-list__term">Provider</dt><dd className="meta-list__value">{task.provider || "—"}</dd></div>
-                  <div className="meta-list__row"><dt className="meta-list__term">Model</dt><dd className="meta-list__value">{task.model || "—"}</dd></div>
+                  <div className="meta-list__row">
+                    <dt className="meta-list__term">Objective</dt>
+                    <dd className="meta-list__value">{task.objective || "—"}</dd>
+                  </div>
+                  <div className="meta-list__row">
+                    <dt className="meta-list__term">Inputs</dt>
+                    <dd className="meta-list__value">{(task.inputs || []).join(", ") || "—"}</dd>
+                  </div>
+                  <div className="meta-list__row">
+                    <dt className="meta-list__term">Output</dt>
+                    <dd className="meta-list__value">{task.output || "—"}</dd>
+                  </div>
+                  <div className="meta-list__row">
+                    <dt className="meta-list__term">Completion</dt>
+                    <dd className="meta-list__value">{task.completion || "—"}</dd>
+                  </div>
+                  <div className="meta-list__row">
+                    <dt className="meta-list__term">Tools</dt>
+                    <dd className="meta-list__value">{(task.tools || []).join(", ") || "—"}</dd>
+                  </div>
+                  <div className="meta-list__row">
+                    <dt className="meta-list__term">Skills</dt>
+                    <dd className="meta-list__value">{(task.skills || []).join(", ") || "—"}</dd>
+                  </div>
+                  <div className="meta-list__row">
+                    <dt className="meta-list__term">Agent</dt>
+                    <dd className="meta-list__value">{task.agent || "—"}</dd>
+                  </div>
+                  <div className="meta-list__row">
+                    <dt className="meta-list__term">Provider</dt>
+                    <dd className="meta-list__value">{task.provider || "—"}</dd>
+                  </div>
+                  <div className="meta-list__row">
+                    <dt className="meta-list__term">Model</dt>
+                    <dd className="meta-list__value">{task.model || "—"}</dd>
+                  </div>
                 </dl>
+
                 {!!attempts.length && (
                   <div className="operations-attempts">
                     <span className="eyebrow">Attempts · {attempts.length}</span>
                     {attempts.map(attempt => <AttemptDetail key={attempt.id} attempt={attempt} />)}
                   </div>
                 )}
+
                 <div className="operations-task-actions">
-                  {task.status === "blocked" && <button type="button" className="secondary-button" onClick={() => act("Skip", () => api.post(endpoints.workflowTaskSkip(workflow.id, selectedTaskId)))} disabled={!!busy}><IconPlayerSkipForward size={15} /> Skip</button>}
-                  {task.status === "failed" && <button type="button" className="secondary-button" onClick={reviewTask} disabled={!!busy}><IconRefresh size={15} /> Review</button>}
-                  <button type="button" className="secondary-button" onClick={() => onAskNora?.(`Workflow ${workflow.id} task ${task.objective || selectedTaskId} needs revision. Update it.`)}><IconBolt size={15} /> Ask Nora</button>
+                  {task.status === "blocked" && (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => act(
+                        "Skip",
+                        () => api.post(endpoints.workflowTaskSkip(workflow.id, selectedTaskId)),
+                      )}
+                      disabled={!!busy}
+                    >
+                      <IconPlayerSkipForward size={15} /> Skip
+                    </button>
+                  )}
+                  {task.status === "failed" && (
+                    <button type="button" className="secondary-button" onClick={reviewTask} disabled={!!busy}>
+                      <IconRefresh size={15} /> Review
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => onAskNora?.(
+                      `Workflow ${workflow.id} task ${task.objective || selectedTaskId} needs revision. Update it.`,
+                    )}
+                  >
+                    <IconBolt size={15} /> Ask Nora
+                  </button>
                 </div>
               </section>
             )}
+
             {workflow.result != null && (
               <section className="operations-studio__inspector-section">
                 <span className="eyebrow">Result</span>
@@ -275,12 +473,32 @@ export default function OperationsPage({ onAskNora, openRequest }) {
           <div className="dialog" onClick={() => setPromoteOpen(false)} role="dialog" aria-modal="true">
             <form className="dialog__panel" onClick={event => event.stopPropagation()} onSubmit={promote}>
               <h2 className="dialog__title">Promote to Process</h2>
-              <p className="dialog__body">Save this workflow as a reusable Process definition. Nora will clean runtime state.</p>
-              <label className="operations-promote__field"><span>Name</span><input value={promoteDraft.name} onChange={event => setPromoteDraft({ ...promoteDraft, name: event.target.value })} required /></label>
-              <label className="operations-promote__field"><span>Purpose (optional)</span><textarea rows={3} value={promoteDraft.purpose} onChange={event => setPromoteDraft({ ...promoteDraft, purpose: event.target.value })} /></label>
+              <p className="dialog__body">
+                Save this workflow as a reusable Process definition. Nora will clean runtime state.
+              </p>
+              <label className="operations-promote__field">
+                <span>Name</span>
+                <input
+                  value={promoteDraft.name}
+                  onChange={event => setPromoteDraft({ ...promoteDraft, name: event.target.value })}
+                  required
+                />
+              </label>
+              <label className="operations-promote__field">
+                <span>Purpose (optional)</span>
+                <textarea
+                  rows={3}
+                  value={promoteDraft.purpose}
+                  onChange={event => setPromoteDraft({ ...promoteDraft, purpose: event.target.value })}
+                />
+              </label>
               <div className="dialog__actions">
-                <button type="button" className="secondary-button" onClick={() => setPromoteOpen(false)}>Cancel</button>
-                <button type="submit" className="primary-button" disabled={!!busy}><IconCircleCheck size={15} /> Promote</button>
+                <button type="button" className="secondary-button" onClick={() => setPromoteOpen(false)}>
+                  Cancel
+                </button>
+                <button type="submit" className="primary-button" disabled={!!busy}>
+                  <IconCircleCheck size={15} /> Promote
+                </button>
               </div>
             </form>
           </div>
@@ -295,27 +513,80 @@ export default function OperationsPage({ onAskNora, openRequest }) {
         <div className="redesign-header__leading">
           <span className="eyebrow">Live workflow runtime</span>
           <h1 className="redesign-header__title">Operations</h1>
-          <p className="redesign-header__subtitle">Monitor and control running Workflows. Promote completed Workflows into Processes.</p>
+          <p className="redesign-header__subtitle">
+            Monitor Workflows and durable runtime failures. Promote completed Workflows into Processes.
+          </p>
         </div>
+        <button type="button" className="secondary-button" onClick={loadOverview}>
+          <IconRefresh size={15} /> Refresh
+        </button>
       </header>
+
+      {!!events.length && (
+        <section className="operations-activity" aria-labelledby="operations-activity-title">
+          <header className="operations-activity__header">
+            <div>
+              <span className="eyebrow">Durable runtime log</span>
+              <h2 id="operations-activity-title" className="operations-activity__title">Recent activity</h2>
+            </div>
+            <small className="operations-activity__meta">Latest {events.length} significant events</small>
+          </header>
+          <ul className="operations-activity__list">
+            {events.map((event, index) => {
+              const canOpen = Boolean(event.workflowId && workflows.some(item => item.id === event.workflowId));
+              return (
+                <li key={`${event.at}-${event.type}-${index}`} className="operations-activity__item">
+                  <button
+                    type="button"
+                    className={`operations-activity__button operations-activity__button--${eventTone(event)}`}
+                    onClick={() => canOpen && openWorkflow(event.workflowId)}
+                    disabled={!canOpen}
+                  >
+                    <IconAlertTriangle size={15} className="operations-activity__icon" />
+                    <span className="operations-activity__body">
+                      <strong className="operations-activity__event">{eventTitle(event)}</strong>
+                      <small className="operations-activity__detail">{eventDetail(event)}</small>
+                    </span>
+                    <time className="operations-activity__time" dateTime={event.at}>{formatTime(event.at)}</time>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       <nav className="redesign-tabs">
         {STATUS_FILTERS.map(value => (
-          <button key={value} type="button" className={filter === value ? "redesign-tabs__tab redesign-tabs__tab--active" : "redesign-tabs__tab"} onClick={() => setFilter(value)}>{value}</button>
+          <button
+            key={value}
+            type="button"
+            className={filter === value ? "redesign-tabs__tab redesign-tabs__tab--active" : "redesign-tabs__tab"}
+            onClick={() => setFilter(value)}
+          >
+            {value}
+          </button>
         ))}
       </nav>
 
       <section className="operations-list">
         {!filtered.length ? (
-          <StateView variant="empty" icon={IconBolt} title="No workflows" message="Start a workflow from Chat or trigger a Schedule. Workflows appear here in real time." />
+          <StateView
+            variant="empty"
+            icon={IconBolt}
+            title="No workflows"
+            message="Start a workflow from Chat or trigger a Schedule. Workflows appear here in real time."
+          />
         ) : (
           <ul className="workflow-list">
             {filtered.map(item => (
               <li key={item.id}>
-                <button type="button" className="workflow-list__item" onClick={() => { setSelectedId(item.id); setSelectedTaskId(""); }}>
+                <button type="button" className="workflow-list__item" onClick={() => openWorkflow(item.id)}>
                   <span className="workflow-list__body">
                     <strong className="workflow-list__title">{item.process || "Ad-hoc workflow"}</strong>
-                    <small className="workflow-list__meta">{item.id} · {Object.keys(item.tasks || {}).length} tasks · {formatTime(item.updatedAt)}</small>
+                    <small className="workflow-list__meta">
+                      {item.id} · {Object.keys(item.tasks || {}).length} tasks · {formatTime(item.updatedAt)}
+                    </small>
                   </span>
                   <StatusBadge tone={statusTone[item.status] || "neutral"}>{item.status}</StatusBadge>
                 </button>
