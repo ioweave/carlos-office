@@ -125,7 +125,7 @@ const nextCronDate = (expression, after = new Date()) => {
   candidate.setMinutes(candidate.getMinutes() + 1);
 
   const maxMinutes = 60 * 24 * 366 * 2;
-  for (let i = 0; i < maxMinutes; i += 1) {
+  for (let index = 0; index < maxMinutes; index += 1) {
     if (cronMatches(candidate, cron)) return candidate;
     candidate.setMinutes(candidate.getMinutes() + 1);
   }
@@ -150,6 +150,11 @@ const validateTiming = timing => {
   }
 
   throw new Error(`Unsupported schedule type: ${timing.type}`);
+};
+
+export const validateScheduleTiming = timing => {
+  validateTiming(timing);
+  return true;
 };
 
 const validateSchedule = schedule => {
@@ -178,30 +183,48 @@ const calculateNextRun = (schedule, after = new Date()) => {
   return nextCronDate(schedule.timing.value, after).toISOString();
 };
 
+const recordLoadFailure = async (filename, error) => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error("[schedules] Could not load Schedule.", { filename, message });
+
+  try {
+    await recordEvent("schedule.load_failed", { filename, error: message });
+  } catch (eventError) {
+    console.error("[schedules] Could not record Schedule load failure.", {
+      filename,
+      message: eventError instanceof Error ? eventError.message : String(eventError),
+    });
+  }
+};
+
 export const loadSchedules = async () => {
   await mkdir(schedulesDir, { recursive: true });
   schedules.clear();
 
   const files = await readdir(schedulesDir);
   for (const filename of files.filter(file => file.endsWith(".json"))) {
-    const stored = JSON.parse(await readFile(resolve(schedulesDir, filename), "utf8"));
-    const schedule = {
-      inputs: {},
-      config: {},
-      lastRunAt: null,
-      nextRunAt: null,
-      ...stored,
-    };
+    try {
+      const stored = JSON.parse(await readFile(resolve(schedulesDir, filename), "utf8"));
+      const schedule = {
+        inputs: {},
+        config: {},
+        lastRunAt: null,
+        nextRunAt: null,
+        ...stored,
+      };
 
-    validateSchedule(schedule);
-    if (schedules.has(schedule.id)) throw new Error(`Duplicate schedule ID: ${schedule.id}`);
+      validateSchedule(schedule);
+      if (schedules.has(schedule.id)) throw new Error(`Duplicate schedule ID: ${schedule.id}`);
 
-    if (schedule.enabled && !schedule.nextRunAt) {
-      schedule.nextRunAt = calculateNextRun(schedule);
-      await persistSchedule(schedule);
+      if (schedule.enabled && !schedule.nextRunAt) {
+        schedule.nextRunAt = calculateNextRun(schedule);
+        await persistSchedule(schedule);
+      }
+
+      schedules.set(schedule.id, schedule);
+    } catch (error) {
+      await recordLoadFailure(filename, error);
     }
-
-    schedules.set(schedule.id, schedule);
   }
 
   return listSchedules();
@@ -237,9 +260,9 @@ export const createSchedule = async ({
 
   validateSchedule(schedule);
   schedule.nextRunAt = calculateNextRun(schedule);
+  await persistSchedule(schedule);
   schedules.set(id, schedule);
 
-  await persistSchedule(schedule);
   await recordEvent("schedule.created", { scheduleId: id, process });
   return structuredClone(schedule);
 };
@@ -255,9 +278,9 @@ export const saveSchedule = async schedule => {
 
   validateSchedule(stored);
   stored.nextRunAt = calculateNextRun(stored, new Date());
+  await persistSchedule(stored);
   schedules.set(stored.id, stored);
 
-  await persistSchedule(stored);
   await recordEvent("schedule.saved", { scheduleId: stored.id, process: stored.process });
   return structuredClone(stored);
 };
@@ -274,10 +297,12 @@ export const updateSchedule = async (id, changes) => {
   const timingChanged = Object.prototype.hasOwnProperty.call(changes, "timing");
   const enabledChanged = Object.prototype.hasOwnProperty.call(changes, "enabled");
   const processChanged = Object.prototype.hasOwnProperty.call(changes, "process");
-  if (timingChanged || enabledChanged || processChanged) updated.nextRunAt = calculateNextRun(updated, new Date());
+  if (timingChanged || enabledChanged || processChanged) {
+    updated.nextRunAt = calculateNextRun(updated, new Date());
+  }
 
-  schedules.set(id, updated);
   await persistSchedule(updated);
+  schedules.set(id, updated);
   await recordEvent("schedule.updated", { scheduleId: id });
   return structuredClone(updated);
 };
@@ -285,39 +310,42 @@ export const updateSchedule = async (id, changes) => {
 export const setScheduleEnabled = async (id, enabled) => {
   if (typeof enabled !== "boolean") throw new Error("Schedule enabled must be a boolean");
 
-  const schedule = requireSchedule(id);
-  schedule.enabled = enabled;
-  schedule.nextRunAt = calculateNextRun(schedule, new Date());
+  const current = requireSchedule(id);
+  const updated = { ...current, enabled };
+  updated.nextRunAt = calculateNextRun(updated, new Date());
 
-  await persistSchedule(schedule);
+  await persistSchedule(updated);
+  schedules.set(id, updated);
   await recordEvent(enabled ? "schedule.enabled" : "schedule.disabled", { scheduleId: id });
-  return structuredClone(schedule);
+  return structuredClone(updated);
 };
 
 export const triggerSchedule = async id => {
-  const schedule = requireSchedule(id);
-  if (!schedule.enabled) throw new Error(`Schedule ${id} is disabled`);
+  const current = requireSchedule(id);
+  if (!current.enabled) throw new Error(`Schedule ${id} is disabled`);
 
   const workflow = await createWorkflow(
-    schedule.process,
-    structuredClone(schedule.inputs),
-    structuredClone(schedule.config),
+    current.process,
+    structuredClone(current.inputs),
+    structuredClone(current.config),
   );
 
   const now = new Date();
-  schedule.lastRunAt = now.toISOString();
+  const updated = structuredClone(current);
+  updated.lastRunAt = now.toISOString();
 
-  if (schedule.timing.type === "at") {
-    schedule.enabled = false;
-    schedule.nextRunAt = null;
+  if (updated.timing.type === "at") {
+    updated.enabled = false;
+    updated.nextRunAt = null;
   } else {
-    schedule.nextRunAt = calculateNextRun(schedule, now);
+    updated.nextRunAt = calculateNextRun(updated, now);
   }
 
-  await persistSchedule(schedule);
+  await persistSchedule(updated);
+  schedules.set(id, updated);
   await recordEvent("schedule.triggered", {
     scheduleId: id,
-    process: schedule.process,
+    process: updated.process,
     workflowId: workflow.id,
   });
 

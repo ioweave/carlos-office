@@ -50,7 +50,14 @@ const deriveTitle = conversation => {
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-export default function ChatPage({ agents, health, nora, onNoraChange, openRequest, onOpenOperations }) {
+export default function ChatPage({
+  agents,
+  health,
+  nora,
+  onNoraChange,
+  openRequest,
+  onOpenOperations,
+}) {
   const [conversations, setConversations] = useState([]);
   const [conversationId, setConversationId] = useState(null);
   const [conversationModel, setConversationModel] = useState({ provider: "", model: "" });
@@ -94,6 +101,7 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
 
   const loadHistory = useCallback(async ({ quiet = false } = {}) => {
     if (!quiet) setLoadingHistory(true);
+
     try {
       setConversations((await api.get(endpoints.conversations())).data || []);
     } catch (error) {
@@ -223,7 +231,9 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
       setInput([existing, transcript.trim()].filter(Boolean).join(" "));
     };
     recognition.onerror = event => {
-      if (!["aborted", "no-speech"].includes(event.error)) toast.error(`Speech recognition failed: ${event.error}`);
+      if (!["aborted", "no-speech"].includes(event.error)) {
+        toast.error(`Speech recognition failed: ${event.error}`);
+      }
     };
     recognition.onend = () => {
       setListening(false);
@@ -297,13 +307,12 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
 
     const controller = new AbortController();
     requestRef.current = controller;
-    const optimistic = {
+    setMessages(current => [...current, {
       id: `pending-${Date.now()}`,
       role: "user",
       at: new Date().toISOString(),
       content: requestContent,
-    };
-    setMessages(current => [...current, optimistic]);
+    }]);
     setInput("");
     setFiles([]);
 
@@ -366,7 +375,9 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
       if (result.action === "create_process") toast.success(`Process ${result.process?.name} saved.`);
       if (result.action === "create_schedule") toast.success(`Schedule ${result.schedule?.id} created.`);
       if (result.action === "plan") toast.success("Creation plan completed.");
-      if (result.action === "failed") toast.error(result.error?.message || "Nora could not complete the request.");
+      if (result.action === "failed") {
+        toast.error(result.error?.message || "Nora could not complete the request.");
+      }
 
       await loadHistory({ quiet: true });
     } catch (error) {
@@ -412,7 +423,9 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
   const connected = health?.ok === true;
 
   return (
-    <div className={`chat ${historyOpen ? "chat--history-open" : ""} ${activeArtifact ? "chat--artifact-open" : ""}`}>
+    <div
+      className={`chat ${historyOpen ? "chat--history-open" : ""} ${activeArtifact ? "chat--artifact-open" : ""}`}
+    >
       <section className="chat__main">
         <header className="chat__header">
           <div className="chat__header-leading">
@@ -450,12 +463,14 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
               <label className="chat__model-field chat__model-field--model">
                 <span className="chat__model-field-label">Model</span>
                 <select
-                  className="chat__model-select"
+                  className="chat__model-select chat__model-select--model"
                   value={modelDraft.model}
                   onChange={event => changeModel(event.target.value)}
                 >
                   <option value="">Select model</option>
-                  {modelsFor(modelDraft.provider).map(model => <option key={model} value={model}>{model}</option>)}
+                  {modelsFor(modelDraft.provider).map(model => (
+                    <option key={model} value={model}>{model}</option>
+                  ))}
                   {!modelsFor(modelDraft.provider).includes(modelDraft.model) && modelDraft.model && (
                     <option value={modelDraft.model}>{modelDraft.model} · current</option>
                   )}
@@ -472,7 +487,10 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
                 </button>
               )}
             </div>
-            <StatusBadge tone={connected ? "success" : "warning"}>
+            <StatusBadge
+              className="chat__backend-status"
+              tone={connected ? "success" : "warning"}
+            >
               {connected ? "Backend online" : "Backend offline"}
             </StatusBadge>
             <button type="button" className="secondary-button" onClick={startNew} disabled={sending}>
@@ -514,7 +532,10 @@ export default function ChatPage({ agents, health, nora, onNoraChange, openReque
         </div>
       </section>
 
-      <aside className={`chat__history ${historyOpen ? "chat__history--open" : ""}`} aria-label="Conversation history">
+      <aside
+        className={`chat__history ${historyOpen ? "chat__history--open" : ""}`}
+        aria-label="Conversation history"
+      >
         <ConversationList
           conversations={conversations}
           conversationId={conversationId}

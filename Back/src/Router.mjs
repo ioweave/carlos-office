@@ -1,3 +1,9 @@
+const requestError = (message, statusCode = 400) => {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+};
+
 export const createRouter = ({
   nora,
   processes,
@@ -31,7 +37,7 @@ export const createRouter = ({
     try {
       return JSON.parse(Buffer.concat(chunks).toString("utf8"));
     } catch {
-      throw new Error("Invalid JSON request body");
+      throw requestError("Invalid JSON request body");
     }
   };
 
@@ -49,15 +55,19 @@ export const createRouter = ({
     return { ...execution, workflow: processes.getWorkflow(workflowId), review };
   };
 
-  const recentEvents = url => {
+  const listRecentEvents = url => {
     const filters = {};
     for (const key of ["type", "workflowId", "conversationId", "scheduleId", "taskId"]) {
       const value = url.searchParams.get(key);
       if (value) filters[key] = value;
     }
 
-    const rawLimit = Number(url.searchParams.get("limit") ?? 100);
-    const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : 100;
+    const rawLimit = url.searchParams.get("limit");
+    if (rawLimit === null) return events.listEvents(filters).slice(-100).reverse();
+    if (!/^\d+$/.test(rawLimit)) throw requestError("Event limit must be an integer from 1 to 200");
+
+    const limit = Number(rawLimit);
+    if (limit < 1 || limit > 200) throw requestError("Event limit must be an integer from 1 to 200");
     return events.listEvents(filters).slice(-limit).reverse();
   };
 
@@ -85,7 +95,7 @@ export const createRouter = ({
       }
 
       if (method === "GET" && parts[0] === "events" && parts.length === 1) {
-        return sendJson(res, 200, recentEvents(url));
+        return sendJson(res, 200, listRecentEvents(url));
       }
 
       if (method === "GET" && parts[0] === "conversations" && parts.length === 1) {
@@ -312,7 +322,11 @@ export const createRouter = ({
         && parts.length === 4
       ) {
         const body = await readJson(req);
-        return sendJson(res, 200, await processes.addTask(parts[1], parts[3], body.task, body.edges ?? []));
+        return sendJson(
+          res,
+          200,
+          await processes.addTask(parts[1], parts[3], body.task, body.edges ?? []),
+        );
       }
 
       if (
@@ -430,7 +444,8 @@ export const createRouter = ({
     } catch (error) {
       console.error(error);
       const message = error instanceof Error ? error.message : String(error);
-      return sendError(res, message === "Invalid JSON request body" ? 400 : 500, message);
+      const status = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
+      return sendError(res, status, message);
     }
   };
 };

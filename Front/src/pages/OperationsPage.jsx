@@ -20,7 +20,20 @@ import StatusBadge from "../components/StatusBadge";
 const STATUS_FILTERS = ["all", "running", "blocked", "failed", "completed", "cancelled"];
 const OPERATIONS_EVENT_TYPES = new Set([
   "nora.request_failed",
+  "nora.task_execution_failed",
+  "nora.workflow_review_failed",
   "nora.workflow_started",
+  "nora.tool_saved",
+  "nora.skill_saved",
+  "nora.process_saved",
+  "nora.schedule_created",
+  "nora.plan_completed",
+  "process.load_failed",
+  "workflow.load_failed",
+  "tool.load_failed",
+  "schedule.load_failed",
+  "event.load_failed",
+  "schedule.workflow_failed",
   "workflow.created",
   "workflow.completed",
   "workflow.stalled",
@@ -41,9 +54,10 @@ const statusTone = {
 };
 
 const eventTone = event => {
-  if (event.type.endsWith(".failed") || event.type === "workflow.stalled") return "danger";
-  if (event.type.endsWith(".blocked")) return "warning";
-  if (event.type.endsWith(".completed") || event.type.endsWith(".created")) return "success";
+  if (event.type.endsWith("failed") || event.type === "workflow.stalled") return "danger";
+  if (event.type.endsWith("blocked")) return "warning";
+  if (event.type.endsWith("completed") || event.type.endsWith("created")) return "success";
+  if (event.type.endsWith("saved") || event.type === "nora.plan_completed") return "success";
   return "info";
 };
 
@@ -54,18 +68,34 @@ const formatTime = value => {
 };
 
 const eventTitle = event => {
-  if (event.type === "nora.request_failed") return "Nora request failed";
-  if (event.type === "workflow.stalled") return "Workflow stalled";
-  if (event.type === "attempt.failed") return "Task attempt failed";
-  if (event.type === "task.failed") return "Task failed";
-  if (event.type === "task.blocked") return "Task blocked";
-  if (event.type === "schedule.failed") return "Schedule failed";
-  if (event.type === "schedule.triggered") return "Schedule triggered";
-  if (event.type === "schedule.created") return "Schedule created";
-  if (event.type === "workflow.completed") return "Workflow completed";
-  if (event.type === "workflow.created") return "Workflow created";
-  if (event.type === "nora.workflow_started") return "Nora started workflow";
-  return event.type;
+  const titles = {
+    "nora.request_failed": "Nora request failed",
+    "nora.task_execution_failed": "Task setup failed",
+    "nora.workflow_review_failed": "Workflow review failed",
+    "nora.workflow_started": "Nora started workflow",
+    "nora.tool_saved": "Tool saved",
+    "nora.skill_saved": "Skill saved",
+    "nora.process_saved": "Process saved",
+    "nora.schedule_created": "Nora created schedule",
+    "nora.plan_completed": "Creation plan completed",
+    "process.load_failed": "Process load failed",
+    "workflow.load_failed": "Workflow load failed",
+    "tool.load_failed": "Tool load failed",
+    "schedule.load_failed": "Schedule load failed",
+    "event.load_failed": "Event load failed",
+    "schedule.workflow_failed": "Scheduled workflow failed",
+    "workflow.created": "Workflow created",
+    "workflow.completed": "Workflow completed",
+    "workflow.stalled": "Workflow stalled",
+    "attempt.failed": "Task attempt failed",
+    "task.failed": "Task failed",
+    "task.blocked": "Task blocked",
+    "schedule.created": "Schedule created",
+    "schedule.triggered": "Schedule triggered",
+    "schedule.failed": "Schedule failed",
+  };
+
+  return titles[event.type] || event.type;
 };
 
 const eventDetail = event => {
@@ -73,12 +103,17 @@ const eventDetail = event => {
   if (event.taskId) return `${event.taskId}${event.workflowId ? ` · ${event.workflowId}` : ""}`;
   if (event.workflowId) return event.workflowId;
   if (event.scheduleId) return `${event.scheduleId}${event.process ? ` · ${event.process}` : ""}`;
+  if (event.tool) return event.tool;
+  if (event.skill) return event.skill;
+  if (event.process) return event.process;
+  if (event.filename) return event.filename;
+  if (Array.isArray(event.steps)) return event.steps.map(step => step.name || step.id || step.type).join(", ");
   if (event.conversationId) {
     const phase = event.phase ? ` · ${event.phase}` : "";
     const action = event.action ? ` · ${event.action}` : "";
     return `${event.conversationId}${phase}${action}`;
   }
-  return event.process || "Carlos Office runtime";
+  return "Carlos Office runtime";
 };
 
 const AttemptDetail = ({ attempt }) => {
@@ -228,7 +263,11 @@ export default function OperationsPage({ onAskNora, openRequest }) {
         await api.post(endpoints.workflowRun(workflow.id));
         toast.success("Task reviewed and retry started.");
       } else {
-        toast.message(review?.reason ? `Task escalated: ${review.reason}` : "Task requires Carlos's attention.");
+        toast.message(
+          review?.reason
+            ? `Task escalated: ${review.reason}`
+            : "Task requires Carlos's attention.",
+        );
       }
 
       await loadInspect(workflow.id);
@@ -282,7 +321,9 @@ export default function OperationsPage({ onAskNora, openRequest }) {
   }
 
   if (workflow) {
-    const statuses = Object.fromEntries(Object.entries(workflow.tasks || {}).map(([id, item]) => [id, item.status]));
+    const statuses = Object.fromEntries(
+      Object.entries(workflow.tasks || {}).map(([id, item]) => [id, item.status]),
+    );
     const approvals = inspect?.approvals || [];
     const resumable = workflow.status === "blocked";
     const attempts = task?.attempts || [];
@@ -443,7 +484,12 @@ export default function OperationsPage({ onAskNora, openRequest }) {
                     </button>
                   )}
                   {task.status === "failed" && (
-                    <button type="button" className="secondary-button" onClick={reviewTask} disabled={!!busy}>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={reviewTask}
+                      disabled={!!busy}
+                    >
                       <IconRefresh size={15} /> Review
                     </button>
                   )}
@@ -470,8 +516,17 @@ export default function OperationsPage({ onAskNora, openRequest }) {
         </div>
 
         {promoteOpen && (
-          <div className="dialog" onClick={() => setPromoteOpen(false)} role="dialog" aria-modal="true">
-            <form className="dialog__panel" onClick={event => event.stopPropagation()} onSubmit={promote}>
+          <div
+            className="dialog"
+            onClick={() => setPromoteOpen(false)}
+            role="dialog"
+            aria-modal="true"
+          >
+            <form
+              className="dialog__panel"
+              onClick={event => event.stopPropagation()}
+              onSubmit={promote}
+            >
               <h2 className="dialog__title">Promote to Process</h2>
               <p className="dialog__body">
                 Save this workflow as a reusable Process definition. Nora will clean runtime state.
@@ -527,27 +582,43 @@ export default function OperationsPage({ onAskNora, openRequest }) {
           <header className="operations-activity__header">
             <div>
               <span className="eyebrow">Durable runtime log</span>
-              <h2 id="operations-activity-title" className="operations-activity__title">Recent activity</h2>
+              <h2 id="operations-activity-title" className="operations-activity__title">
+                Recent activity
+              </h2>
             </div>
-            <small className="operations-activity__meta">Latest {events.length} significant events</small>
+            <small className="operations-activity__meta">
+              Latest {events.length} significant events
+            </small>
           </header>
           <ul className="operations-activity__list">
             {events.map((event, index) => {
-              const canOpen = Boolean(event.workflowId && workflows.some(item => item.id === event.workflowId));
+              const canOpen = Boolean(
+                event.workflowId && workflows.some(item => item.id === event.workflowId),
+              );
+              const tone = eventTone(event);
+              const itemClass = index === 0
+                ? "operations-activity__item"
+                : "operations-activity__item operations-activity__item--separated";
+
               return (
-                <li key={`${event.at}-${event.type}-${index}`} className="operations-activity__item">
+                <li key={`${event.at}-${event.type}-${index}`} className={itemClass}>
                   <button
                     type="button"
-                    className={`operations-activity__button operations-activity__button--${eventTone(event)}`}
+                    className="operations-activity__button"
                     onClick={() => canOpen && openWorkflow(event.workflowId)}
                     disabled={!canOpen}
                   >
-                    <IconAlertTriangle size={15} className="operations-activity__icon" />
+                    <IconAlertTriangle
+                      size={15}
+                      className={`operations-activity__icon operations-activity__icon--${tone}`}
+                    />
                     <span className="operations-activity__body">
                       <strong className="operations-activity__event">{eventTitle(event)}</strong>
                       <small className="operations-activity__detail">{eventDetail(event)}</small>
                     </span>
-                    <time className="operations-activity__time" dateTime={event.at}>{formatTime(event.at)}</time>
+                    <time className="operations-activity__time" dateTime={event.at}>
+                      {formatTime(event.at)}
+                    </time>
                   </button>
                 </li>
               );
@@ -561,7 +632,11 @@ export default function OperationsPage({ onAskNora, openRequest }) {
           <button
             key={value}
             type="button"
-            className={filter === value ? "redesign-tabs__tab redesign-tabs__tab--active" : "redesign-tabs__tab"}
+            className={
+              filter === value
+                ? "redesign-tabs__tab redesign-tabs__tab--active"
+                : "redesign-tabs__tab"
+            }
             onClick={() => setFilter(value)}
           >
             {value}
@@ -581,7 +656,11 @@ export default function OperationsPage({ onAskNora, openRequest }) {
           <ul className="workflow-list">
             {filtered.map(item => (
               <li key={item.id}>
-                <button type="button" className="workflow-list__item" onClick={() => openWorkflow(item.id)}>
+                <button
+                  type="button"
+                  className="workflow-list__item"
+                  onClick={() => openWorkflow(item.id)}
+                >
                   <span className="workflow-list__body">
                     <strong className="workflow-list__title">{item.process || "Ad-hoc workflow"}</strong>
                     <small className="workflow-list__meta">

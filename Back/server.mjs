@@ -39,8 +39,28 @@ nora.setProviders(providers);
 nora.initializeNora();
 
 const runScheduledWorkflow = async workflow => {
-  const execution = await nora.runWorkflow(workflow.id);
-  if (execution.workflow.status === "completed") await nora.summarizeWorkflow(workflow.id);
+  try {
+    const execution = await nora.runWorkflow(workflow.id);
+    if (execution.workflow.status === "completed") await nora.summarizeWorkflow(workflow.id);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[schedules] Scheduled Workflow execution failed.", {
+      workflowId: workflow.id,
+      message,
+    });
+
+    try {
+      await events.recordEvent("schedule.workflow_failed", {
+        workflowId: workflow.id,
+        error: message,
+      });
+    } catch (eventError) {
+      console.error("[schedules] Could not record scheduled Workflow failure.", {
+        workflowId: workflow.id,
+        message: eventError instanceof Error ? eventError.message : String(eventError),
+      });
+    }
+  }
 };
 
 const router = createRouter({

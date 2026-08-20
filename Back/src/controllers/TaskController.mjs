@@ -1,64 +1,64 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  addTaskAttempt,
   getWorkflow,
   listTaskAttempts,
-  addTaskAttempt,
-  updateTaskAttempt,
   setTaskStatus,
+  updateTaskAttempt,
 } from "./ProcessController.mjs";
 import { getAgent, getBlueprint, setAgentStatus } from "./AgentController.mjs";
-import { authorize, listApprovals, clearApproval } from "./AuthorizationController.mjs";
+import { authorize, clearApproval, listApprovals } from "./AuthorizationController.mjs";
 import { recordEvent } from "./EventController.mjs";
 import { getTool } from "../registry/Tools.mjs";
 import { getSkill } from "../registry/Skills.mjs";
 
+const MAX_TOOL_ROUNDS = 12;
 let providers = new Map();
 
-export const setProviders = (providerMap) => {
+export const setProviders = providerMap => {
   if (!(providerMap instanceof Map)) throw new Error("Providers must be supplied as a Map");
   providers = providerMap;
-}
+};
 
-const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 
-const requireWorkflow = (workflowId) => {
+const requireWorkflow = workflowId => {
   const workflow = getWorkflow(workflowId);
   if (!workflow) throw new Error(`Unknown workflow: ${workflowId}`);
   return workflow;
-}
+};
 
 const requireTask = (workflow, taskId) => {
   const task = workflow.tasks?.[taskId];
   if (!task || task.type !== "task") throw new Error(`Unknown executable Task: ${taskId}`);
   return task;
-}
+};
 
-const requireAgent = (agentId) => {
+const requireAgent = agentId => {
   const agent = getAgent(agentId);
   if (!agent) throw new Error(`Unknown agent: ${agentId}`);
 
   const blueprint = getBlueprint(agent.blueprint);
   if (!blueprint) throw new Error(`Unknown Agent Blueprint: ${agent.blueprint}`);
-
   return { agent, blueprint };
-}
+};
 
-const requireProvider = (name) => {
+const requireProvider = name => {
   const provider = providers.get(name);
   if (!provider) throw new Error(`Unknown model provider: ${name}`);
   if (typeof provider.generate !== "function") throw new Error(`Model provider ${name} does not expose generate()`);
   return provider;
-}
+};
 
 const getUpstreamTaskIds = (workflow, taskId) => workflow.edges
   .filter(([, to]) => to === taskId)
   .map(([from]) => from)
-  .filter((id) => workflow.tasks[id]?.type === "task");
+  .filter(id => workflow.tasks[id]?.type === "task");
 
-const latestCompletedAttempt = (task) => [...(task.attempts ?? [])]
+const latestCompletedAttempt = task => [...(task.attempts ?? [])]
   .reverse()
-  .find((attempt) => attempt.status === "completed") ?? null;
+  .find(attempt => attempt.status === "completed") ?? null;
 
 const resolveTaskInput = (workflow, taskId, task) => {
   const available = structuredClone(workflow.inputs ?? {});
@@ -76,32 +76,32 @@ const resolveTaskInput = (workflow, taskId, task) => {
 
   return Object.fromEntries(
     task.inputs
-      .filter((name) => Object.prototype.hasOwnProperty.call(available, name))
-      .map((name) => [name, available[name]]),
+      .filter(name => Object.prototype.hasOwnProperty.call(available, name))
+      .map(name => [name, available[name]]),
   );
-}
+};
 
-const loadTools = (names) => {
+const loadTools = names => {
   if (!Array.isArray(names)) throw new Error("Tools must be an array");
 
-  return names.map((name) => {
+  return names.map(name => {
     const tool = getTool(name);
     if (!tool) throw new Error(`Unknown tool: ${name}`);
     return tool;
   });
-}
+};
 
-const loadSkills = (names) => {
+const loadSkills = names => {
   if (!Array.isArray(names)) throw new Error("Skills must be an array");
 
-  return names.map((name) => {
+  return names.map(name => {
     const skill = getSkill(name);
     if (!skill) throw new Error(`Unknown skill: ${name}`);
     return skill;
   });
-}
+};
 
-const describeTools = (tools) => tools.map((tool) => ({
+const describeTools = tools => tools.map(tool => ({
   name: tool.name,
   description: tool.description ?? "",
   input: tool.input ?? {},
@@ -112,13 +112,12 @@ const buildMessages = ({ blueprint, workflow, taskId, task, input, skills }) => 
   const messages = [];
 
   if (blueprint.instructions) messages.push({ role: "system", content: blueprint.instructions });
-
   if (skills.length) {
     messages.push({
       role: "system",
       content: [
         "The following Skills are available for this Task:",
-        ...skills.map((skill) => `\n# Skill: ${skill.name}\n${skill.content}`),
+        ...skills.map(skill => `\n# Skill: ${skill.name}\n${skill.content}`),
       ].join("\n"),
     });
   }
@@ -134,36 +133,36 @@ const buildMessages = ({ blueprint, workflow, taskId, task, input, skills }) => 
       `Resolved input:\n${JSON.stringify(input, null, 2)}`,
     ].join("\n\n"),
   });
-
   messages.push({
     role: "user",
     content: "Perform the Task. Use available Tools when needed. Return the completed Task output when finished.",
   });
 
   return messages;
-}
+};
 
-const resultToText = (result) => {
+const resultToText = result => {
   if (typeof result === "string") return result;
   if (Buffer.isBuffer(result)) return result.toString("utf8");
   if (result === undefined) return "";
   return JSON.stringify(result, null, 2);
-}
+};
 
-const sameInput = (a, b) => {
+const sameInput = (left, right) => {
   try {
-    return JSON.stringify(a) === JSON.stringify(b);
+    return JSON.stringify(left) === JSON.stringify(right);
   } catch {
     return false;
   }
-}
+};
 
 const findApprovedToolAction = ({ workflowId, taskId, toolName, input }) => listApprovals("approved").find(
-  (approval) =>
-    approval.action === `tool:${toolName}` &&
-    approval.context?.workflowId === workflowId &&
-    approval.context?.taskId === taskId &&
-    sameInput(approval.context?.input, input),
+  approval => (
+    approval.action === `tool:${toolName}`
+    && approval.context?.workflowId === workflowId
+    && approval.context?.taskId === taskId
+    && sameInput(approval.context?.input, input)
+  ),
 ) ?? null;
 
 const finishAttempt = async ({
@@ -184,6 +183,13 @@ const finishAttempt = async ({
   ...extra,
 });
 
+const logSecondaryFailure = (stage, context, error) => {
+  console.error(`[tasks] ${stage} failed while handling another Task failure.`, {
+    ...context,
+    message: error instanceof Error ? error.message : String(error),
+  });
+};
+
 export const runTask = async ({
   workflowId,
   taskId,
@@ -203,7 +209,7 @@ export const runTask = async ({
   if (!model || typeof model !== "string") throw new Error("Model must be a non-empty string");
 
   const previousAttempts = listTaskAttempts(workflowId, taskId);
-  if (previousAttempts.some((attempt) => attempt.status === "running")) {
+  if (previousAttempts.some(attempt => attempt.status === "running")) {
     throw new Error(`Task ${taskId} already has an active Attempt`);
   }
 
@@ -229,23 +235,35 @@ export const runTask = async ({
     blockedReason: null,
   };
 
-  await addTaskAttempt(workflowId, taskId, attempt);
-  await setTaskStatus(workflowId, taskId, "running");
-  setAgentStatus(agent.id, "working");
-  await recordEvent("attempt.started", {
-    workflowId,
-    taskId,
-    attemptId: attempt.id,
-    agentId: agent.id,
-    provider: providerName,
-    model,
-  });
+  let attemptStored = false;
 
   try {
+    await addTaskAttempt(workflowId, taskId, attempt);
+    attemptStored = true;
+    await setTaskStatus(workflowId, taskId, "running");
+    setAgentStatus(agent.id, "working");
+    await recordEvent("attempt.started", {
+      workflowId,
+      taskId,
+      attemptId: attempt.id,
+      agentId: agent.id,
+      provider: providerName,
+      model,
+    });
+
     const availableTools = loadTools(toolNames);
     const availableSkills = loadSkills(skillNames);
-    const messages = buildMessages({ blueprint, workflow, taskId, task, input: actualInput, skills: availableSkills });
+    const messages = buildMessages({
+      blueprint,
+      workflow,
+      taskId,
+      task,
+      input: actualInput,
+      skills: availableSkills,
+    });
     const modelTools = describeTools(availableTools);
+
+    let toolRounds = 0;
 
     while (true) {
       const response = await provider.generate({ model, messages, tools: modelTools });
@@ -255,6 +273,8 @@ export const runTask = async ({
       const toolCalls = Array.isArray(response.toolCalls) ? response.toolCalls : [];
 
       if (!toolCalls.length) {
+        if (!content.trim()) throw new Error(`Provider ${providerName} returned no usable Task output`);
+
         const completed = await finishAttempt({
           workflowId,
           taskId,
@@ -262,7 +282,6 @@ export const runTask = async ({
           status: "completed",
           output: content,
         });
-
         await setTaskStatus(workflowId, taskId, "completed");
         setAgentStatus(agent.id, "idle");
         await recordEvent("attempt.completed", {
@@ -274,18 +293,31 @@ export const runTask = async ({
         return completed;
       }
 
+      if (toolRounds >= MAX_TOOL_ROUNDS) {
+        throw new Error(`Task exceeded the ${MAX_TOOL_ROUNDS}-round Tool limit`);
+      }
+      toolRounds += 1;
       messages.push({ role: "assistant", content, toolCalls: structuredClone(toolCalls) });
 
       for (const toolCall of toolCalls) {
-        if (!toolCall || typeof toolCall.name !== "string") throw new Error("Provider returned an invalid Tool call");
+        if (!toolCall || typeof toolCall.name !== "string") {
+          throw new Error("Provider returned an invalid Tool call");
+        }
+        if (toolCall.input != null && !isObject(toolCall.input)) {
+          throw new Error(`Provider returned invalid input for Tool: ${toolCall.name}`);
+        }
 
-        const tool = availableTools.find((item) => item.name === toolCall.name);
+        const tool = availableTools.find(item => item.name === toolCall.name);
         if (!tool) throw new Error(`Agent requested unavailable Tool: ${toolCall.name}`);
 
-        const toolInput = isObject(toolCall.input) ? toolCall.input : {};
-
+        const toolInput = toolCall.input ?? {};
         if (tool.requiresApproval) {
-          const approved = findApprovedToolAction({ workflowId, taskId, toolName: tool.name, input: toolInput });
+          const approved = findApprovedToolAction({
+            workflowId,
+            taskId,
+            toolName: tool.name,
+            input: toolInput,
+          });
 
           if (!approved) {
             const authorization = await authorize({
@@ -300,7 +332,6 @@ export const runTask = async ({
                 input: structuredClone(toolInput),
               },
             });
-
             const blocked = await finishAttempt({
               workflowId,
               taskId,
@@ -334,7 +365,6 @@ export const runTask = async ({
           provider: tool.provider ?? null,
           model: tool.model ?? null,
         });
-
         await recordEvent("tool.executed", {
           workflowId,
           taskId,
@@ -344,7 +374,6 @@ export const runTask = async ({
           provider: tool.provider ?? null,
           model: tool.model ?? null,
         });
-
         messages.push({
           role: "tool",
           toolCallId: toolCall.id ?? null,
@@ -355,23 +384,52 @@ export const runTask = async ({
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const failed = await finishAttempt({
-      workflowId,
-      taskId,
-      attemptId: attempt.id,
-      status: "failed",
-      error: message,
-    });
+    let failed = null;
 
-    await setTaskStatus(workflowId, taskId, "failed");
-    setAgentStatus(agent.id, "failed");
-    await recordEvent("attempt.failed", {
-      workflowId,
-      taskId,
-      attemptId: attempt.id,
-      agentId: agent.id,
+    if (attemptStored) {
+      try {
+        failed = await finishAttempt({
+          workflowId,
+          taskId,
+          attemptId: attempt.id,
+          status: "failed",
+          error: message,
+        });
+      } catch (finishError) {
+        logSecondaryFailure("Attempt finalization", { workflowId, taskId, attemptId: attempt.id }, finishError);
+      }
+    }
+
+    try {
+      await setTaskStatus(workflowId, taskId, "failed");
+    } catch (statusError) {
+      logSecondaryFailure("Task failure persistence", { workflowId, taskId }, statusError);
+      throw new Error(`Task ${taskId} failed and its failure state could not be persisted`, { cause: error });
+    }
+
+    try {
+      setAgentStatus(agent.id, "failed");
+    } catch (agentError) {
+      logSecondaryFailure("Agent failure state", { workflowId, taskId, agentId: agent.id }, agentError);
+    }
+
+    try {
+      await recordEvent("attempt.failed", {
+        workflowId,
+        taskId,
+        attemptId: attempt.id,
+        agentId: agent.id,
+        error: message,
+      });
+    } catch (eventError) {
+      logSecondaryFailure("Attempt failure event", { workflowId, taskId, attemptId: attempt.id }, eventError);
+    }
+
+    return failed ?? {
+      ...structuredClone(attempt),
+      status: "failed",
+      endedAt: new Date().toISOString(),
       error: message,
-    });
-    return failed;
+    };
   }
-}
+};
