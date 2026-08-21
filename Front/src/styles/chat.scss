@@ -24,7 +24,7 @@
 }
 
 .chat-history__header h1 {
-  margin: 2px 0 0;
+  margin: 0;
   font-family: var(--font-headline);
   font-size: 20px;
   letter-spacing: -0.02em;
@@ -44,12 +44,9 @@
 .conversation-row {
   display: flex;
   width: 100%;
-  flex-direction: column;
-  gap: 3px;
-  padding: 10px 9px;
+  align-items: center;
   border-radius: 7px;
   background: transparent;
-  text-align: left;
 }
 
 .conversation-row:hover,
@@ -59,6 +56,17 @@
 
 .conversation-row--active {
   box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+.conversation-row__open {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 9px;
+  background: transparent;
+  text-align: left;
 }
 
 .conversation-row strong {
@@ -73,6 +81,41 @@
 .conversation-row small {
   color: var(--color-text-faint);
   font-size: 9px;
+}
+
+.conversation-row__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding-right: 5px;
+  opacity: 0;
+  transition: opacity var(--motion-fast);
+}
+
+.conversation-row:hover .conversation-row__actions,
+.conversation-row:focus-within .conversation-row__actions {
+  opacity: 1;
+}
+
+.conversation-row__action {
+  display: flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-faint);
+}
+
+.conversation-row__action:hover {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+
+.conversation-row__action--danger:hover {
+  color: var(--color-danger);
 }
 
 .chat-workspace {
