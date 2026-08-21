@@ -11,10 +11,9 @@
 }
 
 .workflow-row {
-  display: grid;
+  display: flex;
   width: 100%;
   min-height: 62px;
-  grid-template-columns: 7px minmax(0, 1fr) 90px 90px auto;
   align-items: center;
   gap: 12px;
   padding: 8px 14px;
@@ -34,6 +33,7 @@
 .workflow-row__status {
   width: 7px;
   height: 28px;
+  flex: 0 0 7px;
   border-radius: 999px;
   background: var(--color-border-strong);
 }
@@ -47,6 +47,7 @@
 .workflow-row__copy {
   display: flex;
   min-width: 0;
+  flex: 1 1 auto;
   flex-direction: column;
 }
 
@@ -57,6 +58,12 @@
   white-space: nowrap;
 }
 
+.workflow-row__progress,
+.workflow-row__agents {
+  width: 90px;
+  flex: 0 0 90px;
+}
+
 .workflow-row__copy small,
 .workflow-row__progress,
 .workflow-row__agents {
@@ -65,13 +72,15 @@
 }
 
 .operations-studio {
-  overflow-y: auto;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .operations-summary {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 0;
+  display: flex;
+  flex: 0 0 auto;
   margin: 18px 32px 0;
   border: 1px solid var(--color-border);
   border-radius: 9px;
@@ -81,6 +90,8 @@
 
 .operations-summary > div {
   display: flex;
+  min-width: 0;
+  flex: 1 1 0;
   flex-direction: column;
   gap: 2px;
   padding: 12px 14px;
@@ -102,9 +113,14 @@
   font-size: 12px;
 }
 
+.operations-studio > .page-tabs {
+  flex: 0 0 auto;
+  align-self: flex-start;
+}
+
 .operations-studio__tasks {
-  height: calc(100vh - 235px);
-  min-height: 480px;
+  min-height: 0;
+  flex: 1 1 auto;
   margin-top: 18px;
   border-top: 1px solid var(--color-border);
 }
@@ -124,8 +140,7 @@
 }
 
 .attempt-card summary {
-  display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
   gap: 6px;
   padding: 9px 0;
@@ -133,6 +148,16 @@
   color: var(--color-text-muted);
   font-size: 10px;
   list-style: none;
+}
+
+.attempt-card summary > span:first-child {
+  width: 30px;
+  flex: 0 0 30px;
+}
+
+.attempt-card summary > strong {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .attempt-card summary::-webkit-details-marker {
@@ -165,14 +190,19 @@
   margin: 18px 32px 36px;
 }
 
+.operations-activity {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+}
+
 .event-list {
   display: flex;
   flex-direction: column;
 }
 
 .event-row {
-  display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
   gap: 10px;
   padding: 11px 16px;
@@ -186,6 +216,7 @@
 .event-row__dot {
   width: 7px;
   height: 7px;
+  flex: 0 0 7px;
   border-radius: 50%;
   background: var(--color-accent);
 }
@@ -193,6 +224,7 @@
 .event-row > div {
   display: flex;
   min-width: 0;
+  flex: 1 1 auto;
   flex-direction: column;
 }
 
@@ -206,30 +238,39 @@
   font-size: 9px;
 }
 
+.event-row small {
+  flex: 0 0 auto;
+}
+
 .operations-data {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  align-items: start;
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
+.operations-data > .panel {
+  min-width: 280px;
+  flex: 1 1 320px;
+}
+
 .operations-data > .button {
-  grid-column: 1 / -1;
-  justify-self: start;
+  flex: 0 0 auto;
 }
 
 @media (max-width: 900px) {
-  .workflow-row {
-    grid-template-columns: 7px minmax(0, 1fr) auto;
-  }
-
   .workflow-row__progress,
   .workflow-row__agents {
     display: none;
   }
 
   .operations-summary {
-    grid-template-columns: 1fr 1fr;
+    flex-wrap: wrap;
+  }
+
+  .operations-summary > div {
+    min-width: 50%;
+    flex-basis: 50%;
   }
 
   .operations-summary > div:nth-child(2) {
@@ -241,6 +282,12 @@
   }
 
   .operations-data {
-    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+
+  .operations-data > .panel {
+    width: 100%;
+    min-width: 0;
+    flex-basis: auto;
   }
 }
