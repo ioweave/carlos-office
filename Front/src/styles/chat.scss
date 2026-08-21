@@ -286,10 +286,9 @@
 .chat-composer {
   position: relative;
   display: flex;
-  min-height: 118px;
   flex-direction: column;
   gap: 8px;
-  padding: 14px 16px 10px;
+  padding: 12px 16px 10px;
   border: 1px solid var(--color-border);
   border-radius: 24px;
   background: var(--color-surface);
@@ -297,13 +296,15 @@
 }
 
 .chat-composer textarea {
+  field-sizing: content;
   width: 100%;
   min-width: 0;
-  min-height: 54px;
+  min-height: 24px;
   max-height: 180px;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
+  overflow-y: auto;
   resize: none;
-  padding: 4px 2px;
+  padding: 2px;
   border: 0;
   outline: 0;
   background: transparent;
