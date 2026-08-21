@@ -224,33 +224,13 @@
   background: #94a3b8;
 }
 
-.office-map__legend-mark--agent {
-  background: #22d3ee;
-}
-
-.office-map__legend-mark--instance {
-  background: #60a5fa;
-}
-
-.office-map__legend-mark--conversation {
-  background: #a78bfa;
-}
-
-.office-map__legend-mark--workflow {
-  background: #f59e0b;
-}
-
-.office-map__legend-mark--live {
-  background: #67e8f9;
-}
-
-.office-map__legend-mark--awaiting {
-  background: #fb7185;
-}
-
-.office-map__legend-mark--failed {
-  background: #f87171;
-}
+.office-map__legend-mark--agent { background: #22d3ee; }
+.office-map__legend-mark--instance { background: #60a5fa; }
+.office-map__legend-mark--conversation { background: #a78bfa; }
+.office-map__legend-mark--workflow { background: #f59e0b; }
+.office-map__legend-mark--live { background: #67e8f9; }
+.office-map__legend-mark--awaiting { background: #fb7185; }
+.office-map__legend-mark--failed { background: #f87171; }
 
 .office-map__tooltip {
   position: absolute;
@@ -349,9 +329,7 @@
   color: rgba(148, 163, 184, 0.86);
 }
 
-.office-map__inspector-close:hover {
-  color: #f8fafc;
-}
+.office-map__inspector-close:hover { color: #f8fafc; }
 
 .office-map__inspector-loading {
   padding: 8px 14px;
@@ -391,7 +369,8 @@
   background: #f59e0b;
 }
 
-.office-map__story {
+.office-map__story,
+.office-map__trace {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -399,7 +378,8 @@
   overflow: auto;
 }
 
-.office-map__story-heading {
+.office-map__story-heading,
+.office-map__trace-heading {
   margin: 6px 0 2px;
   color: rgba(226, 232, 240, 0.92);
   font-family: var(--font-headline);
@@ -426,22 +406,33 @@
   border-radius: 9999px;
 }
 
-.office-map__story-title {
+.office-map__story-title,
+.office-map__approval-title {
   display: block;
   color: #f8fafc;
   font-size: 12px;
 }
 
-.office-map__story-meta {
+.office-map__story-meta,
+.office-map__workflow-link-meta,
+.office-map__trace-meta,
+.office-map__task-meta,
+.office-map__approval-meta {
   color: rgba(148, 163, 184, 0.86);
   font-family: var(--font-mono);
   font-size: 10px;
 }
 
-.office-map__story-copy {
+.office-map__story-copy,
+.office-map__trace-copy {
   margin: 2px 0 0;
   color: rgba(226, 232, 240, 0.86);
   font-size: 12px;
+}
+
+.office-map__trace-copy {
+  margin-top: 4px;
+  white-space: pre-wrap;
 }
 
 .office-map__workflow-link {
@@ -457,69 +448,33 @@
   text-align: left;
 }
 
-.office-map__workflow-link:hover {
-  border-color: rgba(103, 232, 249, 0.4);
-}
+.office-map__workflow-link:hover { border-color: rgba(103, 232, 249, 0.4); }
 
 .office-map__workflow-link-label {
   flex: 1 1 auto;
   font-size: 12px;
 }
 
-.office-map__workflow-link-meta {
-  color: rgba(148, 163, 184, 0.86);
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-
-.office-map__trace {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
-  overflow: auto;
-}
-
-.office-map__trace-heading {
-  margin: 6px 0 2px;
-  color: rgba(226, 232, 240, 0.92);
-  font-family: var(--font-headline);
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.office-map__trace-item {
+.office-map__trace-item,
+.office-map__task {
   padding: 8px;
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: var(--radius-sm);
   background: rgba(15, 23, 42, 0.5);
 }
 
-.office-map__trace-item-header {
+.office-map__trace-item-header,
+.office-map__task-header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
 }
 
-.office-map__trace-title {
+.office-map__trace-title,
+.office-map__task-title {
   color: #f8fafc;
   font-size: 12px;
-}
-
-.office-map__trace-meta {
-  color: rgba(148, 163, 184, 0.86);
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-
-.office-map__trace-copy {
-  margin: 4px 0 0;
-  color: rgba(226, 232, 240, 0.86);
-  font-size: 12px;
-  white-space: pre-wrap;
 }
 
 .office-map__workflow-status {
@@ -541,31 +496,6 @@
   font-size: 11px;
 }
 
-.office-map__task {
-  padding: 8px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  border-radius: var(--radius-sm);
-  background: rgba(15, 23, 42, 0.5);
-}
-
-.office-map__task-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.office-map__task-title {
-  color: #f8fafc;
-  font-size: 12px;
-}
-
-.office-map__task-meta {
-  color: rgba(148, 163, 184, 0.86);
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-
 .office-map__task-agent {
   margin: 4px 0 0;
   color: rgba(226, 232, 240, 0.7);
@@ -581,18 +511,6 @@
   border: 1px solid rgba(251, 113, 133, 0.32);
   border-radius: var(--radius-sm);
   background: rgba(251, 113, 133, 0.08);
-}
-
-.office-map__approval-title {
-  display: block;
-  color: #f8fafc;
-  font-size: 12px;
-}
-
-.office-map__approval-meta {
-  color: rgba(148, 163, 184, 0.86);
-  font-family: var(--font-mono);
-  font-size: 10px;
 }
 
 .office-map__approval-actions {
@@ -619,11 +537,8 @@
   font-size: 12px;
 }
 
-.office-map__continue:hover {
-  background: rgba(103, 232, 249, 0.22);
-}
+.office-map__continue:hover { background: rgba(103, 232, 249, 0.22); }
 
-// Agent configuration form (model binding only).
 .agent-config {
   display: flex;
   flex-direction: column;
@@ -669,12 +584,14 @@
 }
 
 .agent-config__grid {
-  display: grid;
+  display: flex;
   gap: 10px;
 }
 
 .agent-config__field {
   display: flex;
+  min-width: 0;
+  flex: 1 1 0;
   flex-direction: column;
   gap: 4px;
 }
