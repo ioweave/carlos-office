@@ -64,6 +64,68 @@ export const createRouter = ({
     return events.listEvents(filters).slice(-limit).reverse();
   };
 
+  const editCarlosMessage = async (conversationId, messageId, content) => {
+    const conversation = await conversations.getConversation(conversationId);
+    if (!conversation) throw requestError("Conversation not found", 404);
+
+    const messageIndex = conversation.messages.findIndex(message => message.id === messageId);
+    if (messageIndex === -1) throw requestError("Message not found", 404);
+    const message = conversation.messages[messageIndex];
+    if (message.actor !== "Carlos") throw requestError("Only Carlos messages can be edited");
+    if (typeof content !== "string" || !content.trim()) throw requestError("Message content cannot be empty");
+
+    const messagePositions = new Map(conversation.messages.map((item, index) => [item.id, index]));
+    const workflowEvents = events.listEvents({ type: "nora.workflow_started", conversationId });
+    const workflowStartedAt = new Map();
+    for (const event of workflowEvents) workflowStartedAt.set(event.workflowId, Date.parse(event.at));
+
+    const cutoff = Date.parse(message.at);
+    const workflowIds = conversation.workflows.filter(workflowId => {
+      const workflow = processes.getWorkflow(workflowId);
+      const sourceMessageId = workflow?.config?.sourceMessageId;
+      if (sourceMessageId && messagePositions.has(sourceMessageId)) {
+        return messagePositions.get(sourceMessageId) >= messageIndex;
+      }
+
+      const startedAt = workflowStartedAt.get(workflowId);
+      return Number.isFinite(startedAt) && Number.isFinite(cutoff) && startedAt >= cutoff;
+    });
+
+    const retainedMessages = conversation.messages.slice(0, messageIndex + 1);
+    const retainedArtifactIds = new Set(retainedMessages.flatMap(item => item.artifacts ?? []));
+    const conversationArtifacts = await artifacts.listArtifacts(conversationId);
+    const artifactIds = conversationArtifacts
+      .filter(artifact => {
+        if (retainedArtifactIds.has(artifact.id)) return false;
+        const createdAt = Date.parse(artifact.createdAt);
+        return Number.isFinite(createdAt) && Number.isFinite(cutoff) && createdAt >= cutoff;
+      })
+      .map(artifact => artifact.id);
+
+    const updated = await conversations.editCarlosMessage(conversationId, messageId, content, workflowIds);
+
+    for (const workflowId of workflowIds) {
+      const workflow = processes.getWorkflow(workflowId);
+      engine.cancelWorkflowExecution(workflowId, "Conversation history edited by Carlos");
+      if (workflow && !["completed", "cancelled", "failed"].includes(workflow.status)) {
+        await processes.cancelWorkflow(workflowId);
+      }
+      if (processes.getWorkflow(workflowId)) await processes.deleteWorkflow(workflowId);
+    }
+
+    await authorization.deleteApprovalsForWorkflows(workflowIds);
+    await artifacts.deleteArtifacts(conversationId, artifactIds);
+    await events.recordEvent("conversation.message_edited", {
+      conversationId,
+      messageId,
+      removedMessages: conversation.messages.length - messageIndex - 1,
+      removedWorkflows: workflowIds.length,
+      removedArtifacts: artifactIds.length,
+    });
+
+    return updated;
+  };
+
   return async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
     const parts = partsFrom(url.pathname);
@@ -138,6 +200,11 @@ export const createRouter = ({
         return deleted
           ? sendJson(200, { id: parts[1], deleted: true })
           : sendError(404, "Conversation not found");
+      }
+
+      if (method === "PATCH" && parts[0] === "conversations" && parts[2] === "messages" && parts.length === 4) {
+        const body = await readJson(req);
+        return sendJson(200, await editCarlosMessage(parts[1], parts[3], body.content));
       }
 
       if (method === "PATCH" && parts[0] === "conversations" && parts[2] === "model" && parts.length === 3) {
