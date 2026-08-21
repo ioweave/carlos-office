@@ -1,12 +1,5 @@
-import {
-  createAdHocWorkflow,
-  createWorkflow,
-  getProcess,
-  getWorkflow,
-  listProcesses,
-  setWorkflowConfig,
-} from "./ProcessController.mjs";
-import { getNoraBlueprint, setBlueprintModel } from "./AgentController.mjs";
+import { getArtifact, readArtifact } from "./ArtifactController.mjs";
+import { listApprovals } from "./AuthorizationController.mjs";
 import {
   addMessage,
   addWorkflow,
@@ -14,8 +7,19 @@ import {
   getConversation,
   setConversationNoraModel,
 } from "./ConversationController.mjs";
-import { getArtifact, readArtifact } from "./ArtifactController.mjs";
 import { recordEvent } from "./EventController.mjs";
+import {
+  createAdHocWorkflow,
+  createWorkflow,
+  editTask,
+  getProcess,
+  getWorkflow,
+  listProcesses,
+  setTaskStatus,
+  setWorkflowConfig,
+  setWorkflowResult,
+} from "./ProcessController.mjs";
+import { getNora, setAgentModel as persistAgentModel } from "../registry/Agents.mjs";
 import { listSkills } from "../registry/Skills.mjs";
 import { listTools } from "../registry/Tools.mjs";
 import {
@@ -28,16 +32,15 @@ import {
   getNoraRequestDecisionInstruction,
 } from "../services/NoraCreationService.mjs";
 import {
-  inspectWorkflow as inspectManagedWorkflow,
-  promoteWorkflow as promoteManagedWorkflow,
-  reviewFailedTask as reviewManagedTask,
-  runWorkflow as runManagedWorkflow,
-  selectTaskExecution as selectWorkflowTaskExecution,
-  summarizeWorkflow as summarizeManagedWorkflow,
-} from "../services/NoraWorkflowService.mjs";
-
-let providers = new Map();
-let noraDecisionQueue = Promise.resolve();
+  runWorkflow as runProcessWorkflow,
+  selectTaskExecution as selectProcessTaskExecution,
+} from "../services/ProcessEngine.mjs";
+import {
+  decide as decideInNoraProcess,
+  getNoraProcessState,
+  listModels as listProcessModels,
+  startNora,
+} from "../runtime/NoraProcess.mjs";
 
 const state = {
   name: "Nora",
@@ -54,52 +57,20 @@ const TEXT_ARTIFACT_TYPES = new Set([
   "text/typescript",
 ]);
 const TEXT_ARTIFACT_EXTENSIONS = [
-  ".c",
-  ".cpp",
-  ".css",
-  ".go",
-  ".h",
-  ".html",
-  ".ini",
-  ".java",
-  ".js",
-  ".json",
-  ".jsx",
-  ".kt",
-  ".lua",
-  ".md",
-  ".mjs",
-  ".php",
-  ".py",
-  ".rb",
-  ".rs",
-  ".scss",
-  ".sh",
-  ".sql",
-  ".swift",
-  ".toml",
-  ".ts",
-  ".tsx",
-  ".txt",
-  ".vue",
-  ".xml",
-  ".yaml",
-  ".yml",
+  ".c", ".cpp", ".css", ".go", ".h", ".html", ".ini", ".java", ".js", ".json", ".jsx",
+  ".kt", ".lua", ".md", ".mjs", ".php", ".py", ".rb", ".rs", ".scss", ".sh", ".sql",
+  ".swift", ".toml", ".ts", ".tsx", ".txt", ".vue", ".xml", ".yaml", ".yml",
 ];
 
 const errorMessage = error => error instanceof Error ? error.message : String(error);
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 
-export const setProviders = providerMap => {
-  if (!(providerMap instanceof Map)) throw new Error("Providers must be supplied as a Map");
-  providers = providerMap;
-};
-
 const validateSelection = ({ provider, model }) => {
   if (!provider || typeof provider !== "string") throw new Error("Provider must be a non-empty string");
   if (!model || typeof model !== "string") throw new Error("Model must be a non-empty string");
-  if (!providers.has(provider)) throw new Error(`Unknown model provider: ${provider}`);
 
+  const knownProviders = new Set(listProcessModels().map(item => item.provider));
+  if (!knownProviders.has(provider)) throw new Error(`Unknown model provider: ${provider}`);
   return { provider: provider.trim(), model: model.trim() };
 };
 
@@ -110,15 +81,15 @@ const selectionFrom = value => {
 };
 
 const getDefaultNoraSelection = () => {
-  const blueprint = getNoraBlueprint();
-  if (!blueprint) throw new Error("Nora.md was not found in ObsidianVault/90-System/Agents");
-  return selectionFrom(blueprint);
+  const definition = getNora();
+  if (!definition) throw new Error("Nora.md was not found in ObsidianVault/90-System/Agents");
+  return selectionFrom(definition);
 };
 
 const getWorkflowNoraSelection = workflow => selectionFrom(workflow.config?.nora) ?? getDefaultNoraSelection();
 
 const refreshNoraStatus = () => {
-  let working = false;
+  let working = getNoraProcessState().status === "working";
   let blocked = false;
 
   for (const workflowId of [...state.activeWorkflows]) {
@@ -136,35 +107,36 @@ const refreshNoraStatus = () => {
   return state.status;
 };
 
-export const initializeNora = () => {
+export const initializeNora = async () => {
+  await startNora();
   getDefaultNoraSelection();
   refreshNoraStatus();
   return getNoraState();
 };
 
 export const getNoraState = () => {
-  const blueprint = getNoraBlueprint();
+  refreshNoraStatus();
+  const definition = getNora();
+  const runtime = getNoraProcessState();
   return {
     name: state.name,
     status: state.status,
-    provider: blueprint?.provider ?? null,
-    model: blueprint?.model ?? null,
+    provider: definition?.provider ?? null,
+    model: definition?.model ?? null,
+    pid: runtime.pid,
+    processRunning: runtime.running,
     activeWorkflows: [...state.activeWorkflows],
   };
 };
 
-export const listModels = () => [...providers.entries()].map(([name, provider]) => ({
-  provider: name,
-  models: Array.isArray(provider.models) ? [...provider.models] : [],
-}));
+export const listModels = () => listProcessModels();
 
-export const setAgentModel = async (name, selection) => setBlueprintModel(name, validateSelection(selection));
+export const setAgentModel = async (name, selection) => persistAgentModel(name, validateSelection(selection));
 
 export const createConversation = async ({ id = null, provider = null, model = null } = {}) => {
   const selection = provider || model
     ? validateSelection({ provider, model })
     : getDefaultNoraSelection();
-
   return persistConversation({ id, nora: selection });
 };
 
@@ -181,62 +153,12 @@ export const setConversationModel = async (conversationId, selection) => {
   return conversation;
 };
 
-const requireProvider = selection => {
-  const selected = validateSelection(selection);
-  const provider = providers.get(selected.provider);
-  if (typeof provider?.generate !== "function") {
-    throw new Error(`Model provider ${selected.provider} does not expose generate()`);
-  }
-  return { provider, selection: selected };
-};
-
-const parseJson = content => {
-  if (typeof content !== "string" || !content.trim()) throw new Error("Nora returned an empty response");
-
-  const trimmed = content.trim();
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const source = fenced ? fenced[1].trim() : trimmed;
-
-  try {
-    return JSON.parse(source);
-  } catch {
-    const start = source.indexOf("{");
-    const end = source.lastIndexOf("}");
-    if (start === -1 || end <= start) throw new Error("Nora did not return valid JSON");
-    return JSON.parse(source.slice(start, end + 1));
-  }
-};
-
-const runNoraDecision = async (instruction, context, modelSelection) => {
-  const { provider, selection } = requireProvider(modelSelection);
-  const blueprint = getNoraBlueprint();
-  const messages = [];
-
-  if (blueprint.instructions) messages.push({ role: "system", content: blueprint.instructions });
-  messages.push({
-    role: "system",
-    content: [
-      "You are Nora, the Chief of Staff of Carlos Office.",
-      "Carlos is the final human authority.",
-      "Return only valid JSON for this decision.",
-      "Do not wrap the JSON in explanation.",
-    ].join("\n"),
-  });
-  messages.push({
-    role: "user",
-    content: [instruction, "", "Context:", JSON.stringify(context, null, 2)].join("\n"),
-  });
-
-  const response = await provider.generate({ model: selection.model, messages, tools: [] });
-  return parseJson(response?.content);
-};
-
-const askNoraForJson = async (instruction, context, modelSelection) => {
-  const previous = noraDecisionQueue.catch(() => {});
-  const next = previous.then(() => runNoraDecision(instruction, context, modelSelection));
-  noraDecisionQueue = next.then(() => undefined, () => undefined);
-  return next;
-};
+const askNoraForJson = (instruction, context, modelSelection) => decideInNoraProcess({
+  definition: getNora(),
+  selection: validateSelection(modelSelection),
+  instruction,
+  context,
+});
 
 const summarizeProcesses = () => listProcesses().map(({ name, purpose = "", inputs = [] }) => ({
   name,
@@ -287,12 +209,7 @@ const loadRequestArtifacts = async (conversationId, artifactIds) => Promise.all(
     content = bytes?.toString("utf8") ?? "";
   }
 
-  return {
-    id: artifact.id,
-    name: artifact.name,
-    type: artifact.type,
-    content,
-  };
+  return { id: artifact.id, name: artifact.name, type: artifact.type, content };
 }));
 
 const ensureConversationSelection = async conversation => {
@@ -391,7 +308,6 @@ export const handleCarlosRequest = async ({ conversationId, content, artifacts =
   if (!conversation) throw new Error(`Unknown conversation: ${conversationId}`);
 
   state.status = "working";
-
   let phase = "intake";
   let action = null;
   let activeWorkflowId = null;
@@ -574,27 +490,26 @@ export const handleCarlosRequest = async ({ conversationId, content, artifacts =
 
 export const selectTaskExecution = async (workflowId, taskId) => {
   const workflow = getWorkflow(workflowId);
-  if (!workflow) throw new Error(`Unknown workflow: ${workflowId}`);
+  if (!workflow) throw new Error(`Unknown Workflow: ${workflowId}`);
 
-  return selectWorkflowTaskExecution({
+  return selectProcessTaskExecution({
     workflowId,
     taskId,
-    askForJson: askNoraForJson,
+    decide: askNoraForJson,
     noraSelection: getWorkflowNoraSelection(workflow),
     validateModelSelection: validateSelection,
   });
 };
 
 export const runWorkflow = async workflowId => {
-  if (!getWorkflow(workflowId)) throw new Error(`Unknown workflow: ${workflowId}`);
-
+  if (!getWorkflow(workflowId)) throw new Error(`Unknown Workflow: ${workflowId}`);
   state.activeWorkflows.add(workflowId);
   refreshNoraStatus();
 
   try {
-    return await runManagedWorkflow({
+    return await runProcessWorkflow({
       workflowId,
-      askForJson: askNoraForJson,
+      decide: askNoraForJson,
       getNoraSelection: getWorkflowNoraSelection,
       validateModelSelection: validateSelection,
     });
@@ -605,43 +520,111 @@ export const runWorkflow = async workflowId => {
 
 export const reviewFailedTask = async (workflowId, taskId) => {
   const workflow = getWorkflow(workflowId);
-  if (!workflow) throw new Error(`Unknown workflow: ${workflowId}`);
+  if (!workflow) throw new Error(`Unknown Workflow: ${workflowId}`);
+  const task = workflow.tasks?.[taskId];
+  if (!task || task.type !== "task") throw new Error(`Unknown executable Task: ${taskId}`);
+  if (task.status !== "failed") throw new Error(`Task ${taskId} is not failed`);
 
-  return reviewManagedTask({
-    workflowId,
-    taskId,
-    askForJson: askNoraForJson,
-    noraSelection: getWorkflowNoraSelection(workflow),
-  });
+  const decision = await askNoraForJson(
+    [
+      "Review this failed Task.",
+      "Retry only if the problem is operational, safe to recover, and does not require new human authority.",
+      "Return one of:",
+      '{"action":"retry","reason":"...","taskChanges":{}}',
+      '{"action":"escalate","reason":"..."}',
+    ].join("\n\n"),
+    { workflowId, taskId, task },
+    getWorkflowNoraSelection(workflow),
+  );
+
+  if (decision.action === "escalate") {
+    await recordEvent("nora.task_escalated", { workflowId, taskId, reason: decision.reason ?? null });
+    return decision;
+  }
+  if (decision.action !== "retry") throw new Error(`Unknown recovery action: ${decision.action}`);
+
+  if (decision.taskChanges && Object.keys(decision.taskChanges).length) {
+    await editTask(workflowId, taskId, decision.taskChanges);
+  }
+  await setTaskStatus(workflowId, taskId, "pending");
+  await recordEvent("nora.task_retry_requested", { workflowId, taskId, reason: decision.reason ?? null });
+  return decision;
 };
 
-export const inspectWorkflow = workflowId => inspectManagedWorkflow(workflowId);
+export const inspectWorkflow = workflowId => {
+  const workflow = getWorkflow(workflowId);
+  if (!workflow) return null;
+  return {
+    workflow,
+    approvals: listApprovals("pending").filter(approval => approval.context?.workflowId === workflowId),
+  };
+};
 
 export const summarizeWorkflow = async workflowId => {
   const workflow = getWorkflow(workflowId);
-  if (!workflow) throw new Error(`Unknown workflow: ${workflowId}`);
+  if (!workflow) throw new Error(`Unknown Workflow: ${workflowId}`);
+  if (workflow.status !== "completed") throw new Error(`Workflow ${workflowId} is not completed`);
 
-  return summarizeManagedWorkflow({
-    workflowId,
-    askForJson: askNoraForJson,
-    noraSelection: getWorkflowNoraSelection(workflow),
-  });
+  const decision = await askNoraForJson(
+    [
+      "Review this completed Workflow and prepare the result for Carlos.",
+      "Return:",
+      '{"summary":"concise useful result for Carlos","result":null}',
+    ].join("\n\n"),
+    { workflow },
+    getWorkflowNoraSelection(workflow),
+  );
+  if (typeof decision.summary !== "string" || !decision.summary.trim()) {
+    throw new Error("Nora did not produce a Workflow summary");
+  }
+
+  await setWorkflowResult(workflowId, decision.result ?? null);
+  await recordEvent("nora.workflow_reviewed", { workflowId });
+  return { summary: decision.summary, result: decision.result ?? null };
 };
 
 export const createOrUpdateTool = async (name, source) => saveNoraTool(name, source);
-
 export const createOrUpdateSkill = async (name, content) => saveNoraSkill(name, content);
 
 export const promoteWorkflow = async (workflowId, { name, purpose = null }) => {
   const workflow = getWorkflow(workflowId);
-  if (!workflow) throw new Error(`Unknown workflow: ${workflowId}`);
+  if (!workflow) throw new Error(`Unknown Workflow: ${workflowId}`);
+  if (!name || typeof name !== "string") throw new Error("Promoted Process must have a name");
 
-  return promoteManagedWorkflow({
-    workflowId,
-    name,
-    purpose,
+  const noraSelection = getWorkflowNoraSelection(workflow);
+  const decision = await askNoraForJson(
+    [
+      "Carlos explicitly instructed you to promote this Workflow into a reusable Process.",
+      "Remove runtime-only state, attempts, timestamps, outputs, errors, and one-off values.",
+      "Preserve reusable Task configuration, including explicit provider/model requirements when present.",
+      "Return:",
+      '{"purpose":"...","inputs":[],"start":"start","end":"end","tasks":{},"edges":[]}',
+    ].join("\n\n"),
+    { requestedName: name, requestedPurpose: purpose, workflow },
+    noraSelection,
+  );
+
+  const cleanTasks = Object.fromEntries(
+    Object.entries(decision.tasks ?? workflow.tasks).map(([taskId, task]) => {
+      const { status: _status, attempts: _attempts, ...definition } = task;
+      return [taskId, definition];
+    }),
+  );
+  const process = await createNoraProcess({
+    process: {
+      name,
+      purpose: purpose ?? decision.purpose ?? "",
+      inputs: Array.isArray(decision.inputs) ? decision.inputs : Object.keys(workflow.inputs ?? {}),
+      start: decision.start ?? workflow.start,
+      end: decision.end ?? workflow.end,
+      tasks: cleanTasks,
+      edges: Array.isArray(decision.edges) ? decision.edges : workflow.edges,
+    },
     askForJson: askNoraForJson,
-    noraSelection: getWorkflowNoraSelection(workflow),
+    modelSelection: noraSelection,
     validateModelSelection: validateSelection,
   });
+
+  await recordEvent("process.promoted", { workflowId, process: process.name });
+  return process;
 };
