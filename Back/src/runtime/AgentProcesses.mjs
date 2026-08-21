@@ -5,7 +5,7 @@ import { authorize, consumeApproval, listApprovals } from "../controllers/Author
 import { recordEvent } from "../controllers/EventController.mjs";
 import { getTool } from "../registry/Tools.mjs";
 
-const agentProgram = fileURLToPath(new URL("./agent-process.mjs", import.meta.url));
+const agentProgram = fileURLToPath(new URL("./agent.mjs", import.meta.url));
 const active = new Map();
 
 const sameInput = (left, right) => {
