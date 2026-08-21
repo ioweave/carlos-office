@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import config from "./src/config.mjs";
 import { createRouter } from "./src/Router.mjs";
 import { createOllamaProvider } from "./src/providers/OllamaProvider.mjs";
+import { reconcileInterruptedWorkflows } from "./src/services/WorkflowRecoveryService.mjs";
 
 import * as tools from "./src/registry/Tools.mjs";
 import * as skills from "./src/registry/Skills.mjs";
@@ -17,10 +18,12 @@ import * as schedules from "./src/controllers/ScheduleController.mjs";
 import * as tasks from "./src/controllers/TaskController.mjs";
 
 await events.loadEvents();
+await authorization.loadAuthorizations();
 await tools.loadTools();
 await skills.loadSkills();
 await agents.loadBlueprints();
 await processes.loadProcesses();
+await reconcileInterruptedWorkflows();
 await processes.loadWorkflows();
 await conversations.loadConversations();
 await schedules.loadSchedules();
@@ -64,6 +67,7 @@ const runScheduledWorkflow = async workflow => {
 };
 
 const router = createRouter({
+  allowedOrigin: config.frontendOrigin,
   nora,
   processes,
   conversations,
@@ -74,6 +78,7 @@ const router = createRouter({
   agents,
   tools,
   skills,
+  tasks,
 });
 
 const server = createServer((req, res) => {
