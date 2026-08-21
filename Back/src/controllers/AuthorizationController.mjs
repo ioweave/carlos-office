@@ -187,4 +187,19 @@ export const consumeApproval = async id => {
   return structuredClone(approval);
 };
 
+export const deleteApprovalsForWorkflows = async workflowIds => {
+  if (!Array.isArray(workflowIds)) throw new Error("Workflow IDs must be an array");
+  const targets = new Set(workflowIds);
+  const deleted = [];
+
+  for (const [id, approval] of approvals.entries()) {
+    if (!targets.has(approval.context?.workflowId)) continue;
+    approvals.delete(id);
+    deleted.push(id);
+  }
+
+  if (deleted.length) await persistApprovals();
+  return deleted;
+};
+
 export const canProceed = id => approvals.get(id)?.status === "approved";
