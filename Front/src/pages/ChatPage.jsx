@@ -59,10 +59,13 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
   const [workflowId, setWorkflowId] = useState("");
   const [editingConversationId, setEditingConversationId] = useState("");
   const [titleDraft, setTitleDraft] = useState("");
+  const [editingMessageId, setEditingMessageId] = useState("");
+  const [messageDraft, setMessageDraft] = useState("");
   const fileInputRef = useRef(null);
   const textareaRef = useRef(null);
   const requestRef = useRef(null);
   const renameCancelledRef = useRef(false);
+  const messageEditCancelledRef = useRef(false);
 
   const providers = useMemo(() => models.map(item => item.provider), [models]);
   const modelsFor = provider => models.find(item => item.provider === provider)?.models || [];
@@ -104,6 +107,8 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
       setArtifacts(filesResponse.data || []);
       setModelDraft(record.nora || nora || { provider: "", model: "" });
       setWorkflowId(record.workflows?.at(-1) || "");
+      setEditingMessageId("");
+      setMessageDraft("");
       sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
     } catch (error) {
       sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
@@ -146,6 +151,8 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
     setFiles([]);
     setEditingConversationId("");
     setTitleDraft("");
+    setEditingMessageId("");
+    setMessageDraft("");
     setModelDraft(nora || { provider: "", model: "" });
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
@@ -200,6 +207,8 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
         setWorkflowId("");
         setInput("");
         setFiles([]);
+        setEditingMessageId("");
+        setMessageDraft("");
         setModelDraft(nora || { provider: "", model: "" });
       }
 
@@ -211,6 +220,49 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
       toast.success("Conversation deleted.");
     } catch (error) {
       toast.error(error.response?.data?.error || "Could not delete conversation.");
+    }
+  };
+
+  const beginMessageEdit = message => {
+    if (sending || message.actor !== "Carlos") return;
+    messageEditCancelledRef.current = false;
+    setEditingMessageId(message.id);
+    setMessageDraft(message.content);
+  };
+
+  const finishMessageEdit = async message => {
+    if (!conversation?.id || editingMessageId !== message.id) return;
+
+    if (messageEditCancelledRef.current) {
+      messageEditCancelledRef.current = false;
+      setEditingMessageId("");
+      setMessageDraft("");
+      return;
+    }
+
+    const content = messageDraft.trim();
+    if (!content || content === message.content.trim()) {
+      setEditingMessageId("");
+      setMessageDraft("");
+      return;
+    }
+
+    try {
+      const updated = (
+        await api.patch(endpoints.conversationMessage(conversation.id, message.id), { content })
+      ).data;
+      const filesResponse = await api.get(endpoints.conversationArtifacts(conversation.id));
+
+      setConversation(updated);
+      setArtifacts(filesResponse.data || []);
+      setWorkflowId(updated.workflows?.at(-1) || "");
+      setConversations(current => current.map(item => item.id === updated.id ? updated : item));
+      toast.success("Message updated. Later conversation history was removed.");
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Could not edit message.");
+    } finally {
+      setEditingMessageId("");
+      setMessageDraft("");
     }
   };
 
@@ -244,7 +296,7 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
   const send = async event => {
     event.preventDefault();
     const message = input.trim();
-    if (sending || (!message && files.length === 0)) return;
+    if (sending || editingMessageId || (!message && files.length === 0)) return;
 
     const content = message || "Review the attached files.";
     const pendingFiles = [...files];
@@ -480,13 +532,48 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
             <div className="chat-thread__messages">
               {conversation.messages.map(message => {
                 const isCarlos = message.actor === "Carlos";
+                const editing = isCarlos && editingMessageId === message.id;
                 return (
                   <article key={message.id} className={`message ${isCarlos ? "message--carlos" : "message--nora"}`}>
                     <header className="message__header">
                       <strong>{isCarlos ? "Carlos" : "Nora"}</strong>
                       <small>{formatTime(message.at)}</small>
+                      {isCarlos && !editing && (
+                        <button
+                          type="button"
+                          className="message__edit"
+                          onClick={() => beginMessageEdit(message)}
+                          disabled={sending}
+                          aria-label="Edit message"
+                          title="Edit message"
+                        >
+                          <IconPencil size={13} />
+                        </button>
+                      )}
                     </header>
-                    <div className="message__content">{message.content}</div>
+                    {editing ? (
+                      <textarea
+                        autoFocus
+                        className="message__editor"
+                        value={messageDraft}
+                        onChange={event => setMessageDraft(event.target.value)}
+                        onBlur={() => finishMessageEdit(message)}
+                        onKeyDown={event => {
+                          if (event.key === "Escape") {
+                            event.preventDefault();
+                            messageEditCancelledRef.current = true;
+                            event.currentTarget.blur();
+                          }
+                          if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                            event.preventDefault();
+                            event.currentTarget.blur();
+                          }
+                        }}
+                        aria-label="Edit Carlos message"
+                      />
+                    ) : (
+                      <div className="message__content">{message.content}</div>
+                    )}
                     {!!message.artifacts?.length && (
                       <div className="message__artifacts">
                         {message.artifacts.map(id => {
@@ -567,7 +654,7 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
                 <button
                   type="submit"
                   className="composer-send"
-                  disabled={!input.trim() && files.length === 0}
+                  disabled={Boolean(editingMessageId) || (!input.trim() && files.length === 0)}
                   aria-label="Send message"
                 >
                   <IconArrowUp size={18} />
