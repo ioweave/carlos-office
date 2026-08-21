@@ -5,9 +5,7 @@
 @use "./processes";
 @use "./operations";
 @use "./authorizations";
-@use "./skills";
-@use "./tools";
-@use "./settings";
+@use "./capabilities";
 
 /* Global foundation and shared primitives. Mobile-first; desktop overrides at 900px. */
 
