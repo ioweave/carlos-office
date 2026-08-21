@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -147,6 +147,24 @@ export const getArtifact = async (conversationId, artifactId) => {
 export const listArtifacts = async conversationId => {
   const artifacts = await ensureLoaded(conversationId);
   return [...artifacts.values()].map(artifact => structuredClone(artifact));
+};
+
+export const deleteArtifacts = async (conversationId, artifactIds) => {
+  if (!Array.isArray(artifactIds)) throw new Error("Artifact IDs must be an array");
+  const artifacts = await ensureLoaded(conversationId);
+  const { conversationDir } = pathsFor(conversationId);
+  const deleted = [];
+
+  for (const artifactId of new Set(artifactIds)) {
+    const artifact = artifacts.get(artifactId);
+    if (!artifact) continue;
+    await rm(resolve(conversationDir, artifact.path), { force: true });
+    artifacts.delete(artifactId);
+    deleted.push(artifactId);
+  }
+
+  if (deleted.length) await persistArtifacts(conversationId);
+  return deleted;
 };
 
 export const getArtifactPath = async (conversationId, artifactId) => {
