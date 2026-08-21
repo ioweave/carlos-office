@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -35,6 +35,16 @@ const validateModelSelection = selection => {
   }
 };
 
+const normalizeTitle = title => {
+  if (title === null) return null;
+  if (typeof title !== "string") throw new Error("Conversation title must be a string");
+
+  const value = title.trim();
+  if (!value) throw new Error("Conversation title cannot be empty");
+  if (value.length > 120) throw new Error("Conversation title cannot exceed 120 characters");
+  return value;
+};
+
 const normalizeUtc = (value, label) => {
   const date = new Date(value);
   if (typeof value !== "string" || Number.isNaN(date.getTime())) throw new Error(`Invalid ${label}: ${value}`);
@@ -49,6 +59,7 @@ const conversationPath = id => {
 const renderConversation = conversation => {
   const metadata = JSON.stringify({
     id: conversation.id,
+    title: conversation.title ?? null,
     nora: conversation.nora,
     workflows: conversation.workflows,
   });
@@ -102,6 +113,7 @@ const parseConversation = (content, fallbackId) => {
   return {
     id,
     path: conversationPath(id),
+    title: typeof metadata.title === "string" && metadata.title.trim() ? metadata.title.trim() : null,
     nora: metadata.nora ?? null,
     messages,
     workflows: Array.isArray(metadata.workflows) ? metadata.workflows : [],
@@ -134,6 +146,7 @@ export const createConversation = async ({ id = null, nora } = {}) => {
   const conversation = {
     id: conversationId,
     path: conversationPath(conversationId),
+    title: null,
     nora: {
       provider: nora.provider.trim(),
       model: nora.model.trim(),
@@ -188,6 +201,23 @@ export const getConversation = async id => {
 export const listConversations = () => (
   [...conversations.values()].map(conversation => structuredClone(conversation))
 );
+
+export const setConversationTitle = async (conversationId, title) => {
+  const current = await ensureLoaded(conversationId);
+  const conversation = structuredClone(current);
+  conversation.title = normalizeTitle(title);
+  return commitConversation(conversation);
+};
+
+export const deleteConversation = async conversationId => {
+  validateConversationId(conversationId);
+  const current = await getConversation(conversationId);
+  if (!current) return false;
+
+  await rm(dirname(conversationPath(conversationId)), { recursive: true, force: true });
+  conversations.delete(conversationId);
+  return true;
+};
 
 export const setConversationNoraModel = async (conversationId, selection) => {
   validateModelSelection(selection);
