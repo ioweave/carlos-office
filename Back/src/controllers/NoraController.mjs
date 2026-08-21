@@ -14,6 +14,7 @@ import {
   getConversation,
   setConversationNoraModel,
 } from "./ConversationController.mjs";
+import { getArtifact, readArtifact } from "./ArtifactController.mjs";
 import { recordEvent } from "./EventController.mjs";
 import { listSkills } from "../registry/Skills.mjs";
 import { listTools } from "../registry/Tools.mjs";
@@ -43,6 +44,48 @@ const state = {
   status: "idle",
   activeWorkflows: new Set(),
 };
+
+const TEXT_ARTIFACT_TYPES = new Set([
+  "application/json",
+  "application/javascript",
+  "application/xml",
+  "application/sql",
+  "text/javascript",
+  "text/typescript",
+]);
+const TEXT_ARTIFACT_EXTENSIONS = [
+  ".c",
+  ".cpp",
+  ".css",
+  ".go",
+  ".h",
+  ".html",
+  ".ini",
+  ".java",
+  ".js",
+  ".json",
+  ".jsx",
+  ".kt",
+  ".lua",
+  ".md",
+  ".mjs",
+  ".php",
+  ".py",
+  ".rb",
+  ".rs",
+  ".scss",
+  ".sh",
+  ".sql",
+  ".swift",
+  ".toml",
+  ".ts",
+  ".tsx",
+  ".txt",
+  ".vue",
+  ".xml",
+  ".yaml",
+  ".yml",
+];
 
 const errorMessage = error => error instanceof Error ? error.message : String(error);
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -118,26 +161,20 @@ export const listModels = () => [...providers.entries()].map(([name, provider]) 
 export const setAgentModel = async (name, selection) => setBlueprintModel(name, validateSelection(selection));
 
 export const createConversation = async ({ id = null, provider = null, model = null } = {}) => {
-  let selection;
-
-  if (provider || model) {
-    selection = validateSelection({ provider, model });
-    await setBlueprintModel("Nora", selection);
-  } else {
-    selection = getDefaultNoraSelection();
-  }
+  const selection = provider || model
+    ? validateSelection({ provider, model })
+    : getDefaultNoraSelection();
 
   return persistConversation({ id, nora: selection });
 };
 
 export const setConversationModel = async (conversationId, selection) => {
   const selected = validateSelection(selection);
-  await setBlueprintModel("Nora", selected);
   const conversation = await setConversationNoraModel(conversationId, selected);
 
   for (const workflowId of conversation.workflows) {
     const workflow = getWorkflow(workflowId);
-    if (!workflow || ["completed", "cancelled"].includes(workflow.status)) continue;
+    if (!workflow || ["completed", "cancelled", "failed"].includes(workflow.status)) continue;
     await setWorkflowConfig(workflowId, { ...(workflow.config ?? {}), nora: structuredClone(selected) });
   }
 
@@ -215,12 +252,47 @@ const summarizeTools = () => listTools().map(tool => ({
   model: tool.model ?? null,
 }));
 
-const summarizeSkills = () => listSkills().map(({ name, content }) => ({ name, content }));
+const skillDescription = content => String(content ?? "")
+  .split(/\r?\n/)
+  .map(line => line.trim())
+  .find(Boolean)
+  ?.replace(/^#+\s*/, "") ?? "";
+
+const summarizeSkills = () => listSkills().map(({ name, content }) => ({
+  name,
+  description: skillDescription(content),
+}));
 
 const conversationForModel = conversation => conversation.messages.map(({ actor, content, artifacts = [] }) => ({
   actor,
   content,
   artifacts,
+}));
+
+const isTextArtifact = artifact => {
+  const type = String(artifact.type ?? "").toLowerCase();
+  const name = String(artifact.name ?? "").toLowerCase();
+  return type.startsWith("text/")
+    || TEXT_ARTIFACT_TYPES.has(type)
+    || TEXT_ARTIFACT_EXTENSIONS.some(extension => name.endsWith(extension));
+};
+
+const loadRequestArtifacts = async (conversationId, artifactIds) => Promise.all(artifactIds.map(async artifactId => {
+  const artifact = await getArtifact(conversationId, artifactId);
+  if (!artifact) throw new Error(`Unknown artifact: ${artifactId}`);
+
+  let content = null;
+  if (isTextArtifact(artifact)) {
+    const bytes = await readArtifact(conversationId, artifactId);
+    content = bytes?.toString("utf8") ?? "";
+  }
+
+  return {
+    id: artifact.id,
+    name: artifact.name,
+    type: artifact.type,
+    content,
+  };
 }));
 
 const ensureConversationSelection = async conversation => {
@@ -247,13 +319,14 @@ const toolMetadata = tool => ({
 
 const creationMessage = (decision, fallback) => decision.response?.trim() || fallback;
 
-const recordRequestFailure = async ({ conversationId, phase, action, error }) => {
+const recordRequestFailure = async ({ conversationId, phase, action, error, workflowId = null }) => {
   const message = errorMessage(error);
-  console.error("[nora] Request failed.", { conversationId, phase, action, message });
+  console.error("[nora] Request failed.", { conversationId, phase, action, workflowId, message });
 
   try {
     await recordEvent("nora.request_failed", {
       conversationId,
+      workflowId,
       phase,
       action: action ?? null,
       error: message,
@@ -268,8 +341,51 @@ const recordRequestFailure = async ({ conversationId, phase, action, error }) =>
   return message;
 };
 
+const finishConversationWorkflow = async ({ conversationId, workflowId, action }) => {
+  try {
+    const execution = await runWorkflow(workflowId);
+    const finalWorkflow = execution.workflow;
+
+    if (finalWorkflow.status === "completed") {
+      const result = await summarizeWorkflow(finalWorkflow.id);
+      await addNoraMessage(conversationId, result.summary);
+      return;
+    }
+
+    const response = finalWorkflow.status === "blocked"
+      ? `Workflow ${workflowId} is blocked and requires attention.`
+      : finalWorkflow.status === "failed"
+        ? `Workflow ${workflowId} stopped because a Task failed.`
+        : finalWorkflow.status === "cancelled"
+          ? `Workflow ${workflowId} was cancelled.`
+          : `Workflow ${workflowId} stopped in state ${finalWorkflow.status}.`;
+    await addNoraMessage(conversationId, response);
+  } catch (error) {
+    const failure = await recordRequestFailure({
+      conversationId,
+      workflowId,
+      phase: "workflow",
+      action,
+      error,
+    });
+
+    try {
+      await addNoraMessage(conversationId, `Workflow ${workflowId} could not complete. ${failure}`);
+    } catch (messageError) {
+      console.error("[nora] Could not persist background Workflow failure message.", {
+        conversationId,
+        workflowId,
+        message: errorMessage(messageError),
+      });
+    }
+  } finally {
+    refreshNoraStatus();
+  }
+};
+
 export const handleCarlosRequest = async ({ conversationId, content, artifacts = [] }) => {
   if (typeof content !== "string" || !content.trim()) throw new Error("Carlos request must be a non-empty string");
+  if (!Array.isArray(artifacts)) throw new Error("Carlos request artifacts must be an array");
 
   let conversation = await getConversation(conversationId);
   if (!conversation) throw new Error(`Unknown conversation: ${conversationId}`);
@@ -279,19 +395,20 @@ export const handleCarlosRequest = async ({ conversationId, content, artifacts =
   let phase = "intake";
   let action = null;
   let activeWorkflowId = null;
-  let noraSelection = null;
 
   try {
     await addMessage(conversationId, { actor: "Carlos", content, artifacts });
     await recordEvent("nora.request_received", { conversationId });
+    const requestArtifacts = await loadRequestArtifacts(conversationId, artifacts);
     conversation = await getConversation(conversationId);
-    noraSelection = await ensureConversationSelection(conversation);
+    const noraSelection = await ensureConversationSelection(conversation);
     phase = "decision";
 
     const decision = await askNoraForJson(
       getNoraRequestDecisionInstruction(),
       {
         conversation: conversationForModel(conversation),
+        requestArtifacts,
         availableProcesses: summarizeProcesses(),
         availableTools: summarizeTools(),
         availableSkills: summarizeSkills(),
@@ -377,13 +494,24 @@ export const handleCarlosRequest = async ({ conversationId, content, artifacts =
     if (decision.config != null && !isObject(decision.config)) {
       throw new Error("Nora Workflow config must be an object");
     }
+    if (decision.inputs != null && !isObject(decision.inputs)) {
+      throw new Error("Nora Workflow inputs must be an object");
+    }
 
-    const config = { ...(decision.config ?? {}), nora: structuredClone(noraSelection) };
+    const config = {
+      ...(decision.config ?? {}),
+      nora: structuredClone(noraSelection),
+      conversationId,
+    };
+    const inputs = {
+      ...(decision.inputs ?? {}),
+      ...(requestArtifacts.length ? { attachments: structuredClone(requestArtifacts) } : {}),
+    };
     let workflow;
 
     if (action === "process") {
       if (!getProcess(decision.process)) throw new Error(`Nora selected unknown Process: ${decision.process}`);
-      workflow = await createWorkflow(decision.process, decision.inputs ?? {}, config);
+      workflow = await createWorkflow(decision.process, inputs, config);
     } else if (action === "adhoc") {
       const definition = await ensureValidGeneratedGraph({
         definition: decision.workflow,
@@ -391,7 +519,7 @@ export const handleCarlosRequest = async ({ conversationId, content, artifacts =
         askForJson: askNoraForJson,
         modelSelection: noraSelection,
       });
-      workflow = await createAdHocWorkflow({ ...definition, inputs: decision.inputs ?? {}, config });
+      workflow = await createAdHocWorkflow({ ...definition, inputs, config });
     } else {
       throw new Error(`Unknown Nora action: ${action}`);
     }
@@ -405,30 +533,22 @@ export const handleCarlosRequest = async ({ conversationId, content, artifacts =
       process: workflow.process,
     });
 
-    phase = "workflow";
-    const execution = await runWorkflow(workflow.id);
-    const finalWorkflow = execution.workflow;
-
-    if (finalWorkflow.status === "completed") {
-      phase = "review";
-      const result = await summarizeWorkflow(finalWorkflow.id);
-      const message = await addNoraMessage(conversationId, result.summary);
-      refreshNoraStatus();
-      return { action, message, workflow: getWorkflow(workflow.id) };
-    }
-
-    const response = decision.response ?? (
-      finalWorkflow.status === "blocked"
-        ? `Workflow ${workflow.id} is blocked and requires attention.`
-        : finalWorkflow.status === "failed"
-          ? `Workflow ${workflow.id} stopped because a Task failed.`
-          : `Workflow ${workflow.id} is active.`
+    const message = await addNoraMessage(
+      conversationId,
+      decision.response?.trim() || `Started Workflow ${workflow.id}. I will report back when it changes state.`,
     );
-    const message = await addNoraMessage(conversationId, response);
+
+    void finishConversationWorkflow({ conversationId, workflowId: workflow.id, action });
     refreshNoraStatus();
-    return { action, message, workflow: finalWorkflow };
+    return { action, message, workflow: getWorkflow(workflow.id) };
   } catch (error) {
-    const failure = await recordRequestFailure({ conversationId, phase, action, error });
+    const failure = await recordRequestFailure({
+      conversationId,
+      phase,
+      action,
+      workflowId: activeWorkflowId,
+      error,
+    });
     let message = null;
 
     try {
