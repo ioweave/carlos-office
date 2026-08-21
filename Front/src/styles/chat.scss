@@ -220,6 +220,30 @@
   font-size: 9px;
 }
 
+.message__edit {
+  display: flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-faint);
+  opacity: 0;
+  transition: opacity var(--motion-fast), background var(--motion-fast), color var(--motion-fast);
+}
+
+.message--carlos:hover .message__edit,
+.message--carlos:focus-within .message__edit {
+  opacity: 1;
+}
+
+.message__edit:hover {
+  background: var(--color-surface-soft);
+  color: var(--color-text);
+}
+
 .message--carlos {
   width: min(78%, 650px);
   margin-left: auto;
@@ -242,6 +266,25 @@
   line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.message__editor {
+  field-sizing: content;
+  width: 100%;
+  min-width: 0;
+  min-height: 24px;
+  max-height: 320px;
+  overflow-y: auto;
+  resize: none;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  outline: 1px solid var(--color-accent);
+  outline-offset: 3px;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  line-height: 1.65;
 }
 
 .message--thinking .message__content {
