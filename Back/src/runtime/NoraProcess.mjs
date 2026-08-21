@@ -2,7 +2,7 @@ import { fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
-const noraProgram = fileURLToPath(new URL("./nora-process.mjs", import.meta.url));
+const noraProgram = fileURLToPath(new URL("./nora.mjs", import.meta.url));
 const pending = new Map();
 let child = null;
 let models = [];
