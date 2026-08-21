@@ -5,10 +5,25 @@ import WorkflowSummary from "./WorkflowSummary";
 
 const formatTime = value => {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return Number.isNaN(date.getTime())
+    ? ""
+    : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 };
 
-const Turn = ({ message, agentName, richArtifacts, messageArtifacts, activeArtifactId, onArtifactSelect, copied, onCopy, speaking, onSpeak, onStopSpeak, index }) => {
+const Turn = ({
+  message,
+  agentName,
+  richArtifacts,
+  messageArtifacts,
+  activeArtifactId,
+  onArtifactSelect,
+  copied,
+  onCopy,
+  speaking,
+  onSpeak,
+  onStopSpeak,
+  index,
+}) => {
   const isUser = message.role === "user";
 
   return (
@@ -18,10 +33,22 @@ const Turn = ({ message, agentName, richArtifacts, messageArtifacts, activeArtif
         <span>{formatTime(message.at)}</span>
         {!isUser && (
           <div className="chat__turn-actions">
-            <button type="button" className="icon-button" onClick={() => onCopy(message.content, index)} aria-label="Copy response" title="Copy response">
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => onCopy(message.content, index)}
+              aria-label="Copy response"
+              title="Copy response"
+            >
               {copied === index ? <IconCheck size={15} /> : <IconCopy size={15} />}
             </button>
-            <button type="button" className="icon-button" onClick={() => speaking === index ? onStopSpeak() : onSpeak(message.content, index)} aria-label="Read response aloud" title="Read response aloud">
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => speaking === index ? onStopSpeak() : onSpeak(message.content, index)}
+              aria-label="Read response aloud"
+              title="Read response aloud"
+            >
               <IconVolume size={15} />
             </button>
           </div>
@@ -34,7 +61,11 @@ const Turn = ({ message, agentName, richArtifacts, messageArtifacts, activeArtif
       </div>
       {!!messageArtifacts.length && (
         <div className="chat__artifacts" aria-label={isUser ? "Attached artifacts" : "Generated artifacts"}>
-          <span className="chat__artifacts-label">{isUser ? <><IconPaperclip size={12} /> Attachments</> : <><IconFile size={12} /> Artifacts</>}</span>
+          <span className="chat__artifacts-label">
+            {isUser
+              ? <><IconPaperclip size={12} /> Attachments</>
+              : <><IconFile size={12} /> Artifacts</>}
+          </span>
           {messageArtifacts.map(artifact => (
             <button
               type="button"
@@ -43,7 +74,10 @@ const Turn = ({ message, agentName, richArtifacts, messageArtifacts, activeArtif
               onClick={() => onArtifactSelect(artifact.id)}
             >
               <IconFile size={16} />
-              <span><strong className="chat__artifact-link-name">{artifact.name}</strong><small className="chat__artifact-link-meta">{artifact.type || "file"}</small></span>
+              <span>
+                <strong className="chat__artifact-link-name">{artifact.name}</strong>
+                <small className="chat__artifact-link-meta">{artifact.type || "file"}</small>
+              </span>
             </button>
           ))}
         </div>
@@ -52,7 +86,22 @@ const Turn = ({ message, agentName, richArtifacts, messageArtifacts, activeArtif
   );
 };
 
-export default function ChatThread({ messages, agentName, artifacts, activeArtifactId, onArtifactSelect, sending, copied, onCopy, speaking, onSpeak, onStopSpeak, onOpenOperations, workflowId }) {
+export default function ChatThread({
+  messages,
+  agentName,
+  artifacts,
+  activeArtifactId,
+  onArtifactSelect,
+  sending,
+  copied,
+  onCopy,
+  speaking,
+  onSpeak,
+  onStopSpeak,
+  onOpenOperations,
+  onWorkflowSettled,
+  workflowId,
+}) {
   const scrollRef = useRef(null);
   const richArtifacts = artifacts.map(item => ({ ...item, artifactId: item.id, title: item.name }));
   const resolveArtifacts = ids => (ids || [])
@@ -69,7 +118,9 @@ export default function ChatThread({ messages, agentName, artifacts, activeArtif
         {!messages.length && (
           <div className="chat__welcome">
             <h2 className="chat__welcome-title">Start a conversation with {agentName}</h2>
-            <p className="chat__welcome-copy">Send a request and Nora will respond, run a Workflow, or create a Tool or Skill.</p>
+            <p className="chat__welcome-copy">
+              Send a request and Nora will respond, run a Workflow, or create a Tool or Skill.
+            </p>
           </div>
         )}
         {messages.map((message, index) => (
@@ -98,7 +149,13 @@ export default function ChatThread({ messages, agentName, artifacts, activeArtif
             </div>
           </article>
         )}
-        {workflowId && <WorkflowSummary workflowId={workflowId} onOpenOperations={() => onOpenOperations?.(workflowId)} />}
+        {workflowId && (
+          <WorkflowSummary
+            workflowId={workflowId}
+            onOpenOperations={() => onOpenOperations?.(workflowId)}
+            onSettled={onWorkflowSettled}
+          />
+        )}
       </div>
     </div>
   );
