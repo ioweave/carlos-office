@@ -5,8 +5,10 @@ import {
   IconFolder,
   IconMessageCircle,
   IconPaperclip,
+  IconPencil,
   IconPlus,
   IconRoute,
+  IconTrash,
   IconX,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
@@ -22,6 +24,8 @@ const formatTime = value => {
 };
 
 const conversationTitle = conversation => {
+  const saved = conversation?.title?.trim();
+  if (saved) return saved;
   const first = conversation?.messages?.find(message => message.actor === "Carlos");
   return first?.content?.replace(/\s+/g, " ").trim().slice(0, 56) || "New conversation";
 };
@@ -139,6 +143,48 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
     setFiles([]);
     setModelDraft(nora || { provider: "", model: "" });
     requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
+  const renameConversation = async item => {
+    const currentTitle = conversationTitle(item);
+    const title = window.prompt("Rename conversation", currentTitle);
+    if (title === null) return;
+
+    const nextTitle = title.trim();
+    if (!nextTitle || nextTitle === currentTitle) return;
+
+    try {
+      const updated = (await api.patch(endpoints.conversation(item.id), { title: nextTitle })).data;
+      setConversations(current => current.map(entry => entry.id === item.id ? updated : entry));
+      if (conversation?.id === item.id) setConversation(updated);
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Could not rename conversation.");
+    }
+  };
+
+  const deleteConversation = async item => {
+    if (sending && conversation?.id === item.id) return;
+    const confirmed = window.confirm(`Delete "${conversationTitle(item)}"? This cannot be undone.`);
+    if (!confirmed) return;
+
+    try {
+      await api.delete(endpoints.conversation(item.id));
+      setConversations(current => current.filter(entry => entry.id !== item.id));
+
+      if (conversation?.id === item.id) {
+        sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
+        setConversation(null);
+        setArtifacts([]);
+        setWorkflowId("");
+        setInput("");
+        setFiles([]);
+        setModelDraft(nora || { provider: "", model: "" });
+      }
+
+      toast.success("Conversation deleted.");
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Could not delete conversation.");
+    }
   };
 
   const ensureConversation = async () => {
@@ -262,10 +308,7 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
     <div className="workspace-page chat-page">
       <aside className="chat-history">
         <header className="chat-history__header">
-          <div>
-            <span className="eyebrow">Carlos ↔ Nora</span>
-            <h1>Chat</h1>
-          </div>
+          <h1>Chat</h1>
           <button type="button" className="icon-button" onClick={startNew} aria-label="New conversation">
             <IconPlus size={18} />
           </button>
@@ -283,15 +326,40 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
               <span>Start with Nora.</span>
             </div>
           ) : conversations.map(item => (
-            <button
+            <div
               key={item.id}
-              type="button"
               className={`conversation-row ${conversation?.id === item.id ? "conversation-row--active" : ""}`}
-              onClick={() => openConversation(item.id)}
             >
-              <strong>{conversationTitle(item)}</strong>
-              <small>{formatTime(item.messages?.at(-1)?.at)}</small>
-            </button>
+              <button
+                type="button"
+                className="conversation-row__open"
+                onClick={() => openConversation(item.id)}
+              >
+                <strong>{conversationTitle(item)}</strong>
+                <small>{formatTime(item.messages?.at(-1)?.at)}</small>
+              </button>
+              <div className="conversation-row__actions">
+                <button
+                  type="button"
+                  className="conversation-row__action"
+                  onClick={() => renameConversation(item)}
+                  aria-label={`Rename ${conversationTitle(item)}`}
+                  title="Rename"
+                >
+                  <IconPencil size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="conversation-row__action conversation-row__action--danger"
+                  onClick={() => deleteConversation(item)}
+                  disabled={sending && conversation?.id === item.id}
+                  aria-label={`Delete ${conversationTitle(item)}`}
+                  title="Delete"
+                >
+                  <IconTrash size={14} />
+                </button>
+              </div>
+            </div>
           ))}
         </div>
       </aside>
