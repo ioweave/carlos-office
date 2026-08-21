@@ -1,6 +1,7 @@
 .chat-page {
   display: flex;
   min-height: 0;
+  flex-direction: row;
   overflow: hidden;
 }
 
@@ -228,10 +229,10 @@
 }
 
 .chat-bottom {
-  width: min(100%, 900px);
+  width: min(100%, 980px);
   flex: 0 0 auto;
   margin: 0 auto;
-  padding: 0 28px 22px;
+  padding: 0 28px 18px;
 }
 
 .workflow-link {
@@ -285,50 +286,96 @@
 .chat-composer {
   position: relative;
   display: flex;
-  align-items: flex-end;
+  min-height: 118px;
+  flex-direction: column;
   gap: 8px;
-  flex-wrap: wrap;
-  padding: 10px;
+  padding: 14px 16px 10px;
   border: 1px solid var(--color-border);
-  border-radius: 12px;
+  border-radius: 24px;
   background: var(--color-surface);
-  box-shadow: var(--shadow-composer);
+  box-shadow: 0 5px 22px color-mix(in srgb, var(--color-text) 8%, transparent);
 }
 
 .chat-composer textarea {
-  width: auto;
+  width: 100%;
   min-width: 0;
-  min-height: 44px;
+  min-height: 54px;
   max-height: 180px;
-  flex: 1 1 240px;
+  flex: 1 1 auto;
   resize: none;
-  padding: 11px 8px;
+  padding: 4px 2px;
   border: 0;
   outline: 0;
   background: transparent;
+  font-size: 14px;
   line-height: 1.5;
 }
 
 .chat-composer__actions {
   display: flex;
+  width: 100%;
   flex: 0 0 auto;
   align-items: center;
-  gap: 5px;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chat-composer__actions .icon-button {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text);
+}
+
+.chat-composer__actions .icon-button:hover {
+  background: var(--color-surface-soft);
+}
+
+.chat-composer__actions .icon-button svg {
+  display: none;
+}
+
+.chat-composer__actions .icon-button::before {
+  content: "+";
+  font-size: 27px;
+  font-weight: 300;
+  line-height: 1;
 }
 
 .composer-send {
-  width: 34px;
-  min-width: 34px;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
   padding: 0;
-  border-color: var(--color-accent);
-  background: var(--color-accent);
-  color: #fff;
+  border-color: var(--color-warning);
+  border-radius: 50%;
+  background: var(--color-warning);
+  color: var(--color-surface);
+}
+
+.composer-send:hover:not(:disabled) {
+  filter: brightness(0.96);
+}
+
+.composer-send:disabled {
+  border-color: var(--color-surface-muted);
+  background: var(--color-surface-muted);
+  color: var(--color-text-faint);
+}
+
+.chat-composer__actions .button--danger {
+  margin-left: auto;
+  border-radius: 999px;
 }
 
 .chat-composer__files {
   display: flex;
   width: 100%;
-  flex: 0 0 100%;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   gap: 5px;
   padding: 0 2px;
