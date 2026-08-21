@@ -5,12 +5,19 @@ import api, { endpoints } from "../api";
 import StateView from "../components/StateView";
 import StatusBadge from "../components/StatusBadge";
 
-const TABS = ["pending", "approved", "rejected"];
+const TABS = ["pending", "approved", "consumed", "rejected"];
 
 const formatTime = value => {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
 };
+
+const toneFor = status => ({
+  pending: "warning",
+  approved: "success",
+  consumed: "neutral",
+  rejected: "danger",
+})[status] || "neutral";
 
 export default function AuthorizationsPage() {
   const [approvals, setApprovals] = useState([]);
@@ -31,7 +38,12 @@ export default function AuthorizationsPage() {
     }
   }, [tab]);
 
-  useEffect(() => { setLoading(true); load(); const timer = setInterval(load, 5000); return () => clearInterval(timer); }, [load]);
+  useEffect(() => {
+    setLoading(true);
+    load();
+    const timer = setInterval(load, 5000);
+    return () => clearInterval(timer);
+  }, [load]);
 
   const resolve = async (id, decision) => {
     setBusy(id);
@@ -53,14 +65,25 @@ export default function AuthorizationsPage() {
         <div className="redesign-header__leading">
           <span className="eyebrow">Human authority boundary</span>
           <h1 className="redesign-header__title">Authorizations</h1>
-          <p className="redesign-header__subtitle">Approvals requested by Nora and Agents during Workflow execution. Carlos remains the authority.</p>
+          <p className="redesign-header__subtitle">
+            Durable approvals requested during Workflow execution. Times are shown in your local timezone.
+          </p>
         </div>
-        <button type="button" className="secondary-button" onClick={load}><IconRefresh size={15} /> Refresh</button>
+        <button type="button" className="secondary-button" onClick={load}>
+          <IconRefresh size={15} /> Refresh
+        </button>
       </header>
 
-      <nav className="redesign-tabs">
+      <nav className="redesign-tabs" aria-label="Authorization status">
         {TABS.map(value => (
-          <button key={value} type="button" className={tab === value ? "redesign-tabs__tab redesign-tabs__tab--active" : "redesign-tabs__tab"} onClick={() => setTab(value)}>{value}</button>
+          <button
+            key={value}
+            type="button"
+            className={tab === value ? "redesign-tabs__tab redesign-tabs__tab--active" : "redesign-tabs__tab"}
+            onClick={() => setTab(value)}
+          >
+            {value}
+          </button>
         ))}
       </nav>
 
@@ -68,9 +91,22 @@ export default function AuthorizationsPage() {
         {loading ? (
           <StateView variant="loading" />
         ) : error ? (
-          <StateView variant="error" message={error} actions={<button className="secondary-button" onClick={load}><IconRefresh size={15} /> Retry</button>} />
+          <StateView
+            variant="error"
+            message={error}
+            actions={(
+              <button type="button" className="secondary-button" onClick={load}>
+                <IconRefresh size={15} /> Retry
+              </button>
+            )}
+          />
         ) : !approvals.length ? (
-          <StateView variant="empty" icon={tab === "pending" ? IconShieldCheck : IconKey} title={`No ${tab} approvals`} message={tab === "pending" ? "No actions are waiting for your authority." : undefined} />
+          <StateView
+            variant="empty"
+            icon={tab === "pending" ? IconShieldCheck : IconKey}
+            title={`No ${tab} approvals`}
+            message={tab === "pending" ? "No actions are waiting for your authority." : undefined}
+          />
         ) : (
           <ul className="approval-list">
             {approvals.map(approval => (
@@ -79,19 +115,50 @@ export default function AuthorizationsPage() {
                 <div className="approval-card__body">
                   <div className="approval-card__heading">
                     <strong className="approval-card__title">{approval.action}</strong>
-                    <StatusBadge tone={approval.status === "pending" ? "warning" : approval.status === "approved" ? "success" : "danger"}>{approval.status}</StatusBadge>
+                    <StatusBadge tone={toneFor(approval.status)}>{approval.status}</StatusBadge>
                   </div>
                   <p className="muted-copy">Requested by {approval.actor}</p>
                   <dl className="meta-list">
-                    <div className="meta-list__row"><dt className="meta-list__term">Workflow</dt><dd className="meta-list__value">{approval.context?.workflowId || "—"}</dd></div>
-                    <div className="meta-list__row"><dt className="meta-list__term">Task</dt><dd className="meta-list__value">{approval.context?.taskId || "—"}</dd></div>
-                    <div className="meta-list__row"><dt className="meta-list__term">Resolved</dt><dd className="meta-list__value">{formatTime(approval.resolvedAt)}</dd></div>
+                    <div className="meta-list__row">
+                      <dt className="meta-list__term">Workflow</dt>
+                      <dd className="meta-list__value">{approval.context?.workflowId || "—"}</dd>
+                    </div>
+                    <div className="meta-list__row">
+                      <dt className="meta-list__term">Task</dt>
+                      <dd className="meta-list__value">{approval.context?.taskId || "—"}</dd>
+                    </div>
+                    <div className="meta-list__row">
+                      <dt className="meta-list__term">Created</dt>
+                      <dd className="meta-list__value">{formatTime(approval.createdAt)}</dd>
+                    </div>
+                    <div className="meta-list__row">
+                      <dt className="meta-list__term">Resolved</dt>
+                      <dd className="meta-list__value">{formatTime(approval.resolvedAt)}</dd>
+                    </div>
+                    <div className="meta-list__row">
+                      <dt className="meta-list__term">Consumed</dt>
+                      <dd className="meta-list__value">{formatTime(approval.consumedAt)}</dd>
+                    </div>
                   </dl>
                 </div>
                 {approval.status === "pending" && (
                   <div className="approval-card__actions">
-                    <button type="button" className="primary-button" disabled={busy === approval.id} onClick={() => resolve(approval.id, "approve")}><IconCheck size={15} /> Approve</button>
-                    <button type="button" className="danger-button" disabled={busy === approval.id} onClick={() => resolve(approval.id, "reject")}><IconX size={15} /> Reject</button>
+                    <button
+                      type="button"
+                      className="primary-button"
+                      disabled={busy === approval.id}
+                      onClick={() => resolve(approval.id, "approve")}
+                    >
+                      <IconCheck size={15} /> Approve
+                    </button>
+                    <button
+                      type="button"
+                      className="danger-button"
+                      disabled={busy === approval.id}
+                      onClick={() => resolve(approval.id, "reject")}
+                    >
+                      <IconX size={15} /> Reject
+                    </button>
                   </div>
                 )}
               </li>
