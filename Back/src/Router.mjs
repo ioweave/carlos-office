@@ -16,7 +16,7 @@ export const createRouter = ({
   agents,
   tools,
   skills,
-  tasks,
+  engine,
 }) => {
   if (!allowedOrigin || typeof allowedOrigin !== "string") {
     throw new Error("Router requires one allowed frontend origin");
@@ -127,12 +127,7 @@ export const createRouter = ({
         return conversation ? sendJson(200, conversation) : sendError(404, "Conversation not found");
       }
 
-      if (
-        method === "PATCH"
-        && parts[0] === "conversations"
-        && parts[2] === "model"
-        && parts.length === 3
-      ) {
+      if (method === "PATCH" && parts[0] === "conversations" && parts[2] === "model" && parts.length === 3) {
         const body = await readJson(req);
         const conversation = await nora.setConversationModel(parts[1], {
           provider: body.provider,
@@ -141,12 +136,7 @@ export const createRouter = ({
         return sendJson(200, conversation);
       }
 
-      if (
-        method === "POST"
-        && parts[0] === "conversations"
-        && parts[2] === "requests"
-        && parts.length === 3
-      ) {
+      if (method === "POST" && parts[0] === "conversations" && parts[2] === "requests" && parts.length === 3) {
         const body = await readJson(req);
         const result = await nora.handleCarlosRequest({
           conversationId: parts[1],
@@ -156,21 +146,11 @@ export const createRouter = ({
         return sendJson(200, result);
       }
 
-      if (
-        method === "GET"
-        && parts[0] === "conversations"
-        && parts[2] === "artifacts"
-        && parts.length === 3
-      ) {
+      if (method === "GET" && parts[0] === "conversations" && parts[2] === "artifacts" && parts.length === 3) {
         return sendJson(200, await artifacts.listArtifacts(parts[1]));
       }
 
-      if (
-        method === "POST"
-        && parts[0] === "conversations"
-        && parts[2] === "artifacts"
-        && parts.length === 3
-      ) {
+      if (method === "POST" && parts[0] === "conversations" && parts[2] === "artifacts" && parts.length === 3) {
         const body = await readJson(req);
         const artifact = await artifacts.createArtifact({
           conversationId: parts[1],
@@ -184,12 +164,7 @@ export const createRouter = ({
         return sendJson(201, artifact);
       }
 
-      if (
-        method === "GET"
-        && parts[0] === "conversations"
-        && parts[2] === "artifacts"
-        && parts.length === 4
-      ) {
+      if (method === "GET" && parts[0] === "conversations" && parts[2] === "artifacts" && parts.length === 4) {
         const artifact = await artifacts.getArtifact(parts[1], parts[3]);
         if (!artifact) return sendError(404, "Artifact not found");
 
@@ -220,12 +195,7 @@ export const createRouter = ({
         return workflow ? sendJson(200, workflow) : sendError(404, "Workflow not found");
       }
 
-      if (
-        method === "GET"
-        && parts[0] === "workflows"
-        && parts[2] === "inspect"
-        && parts.length === 3
-      ) {
+      if (method === "GET" && parts[0] === "workflows" && parts[2] === "inspect" && parts.length === 3) {
         const result = nora.inspectWorkflow(parts[1]);
         return result ? sendJson(200, result) : sendError(404, "Workflow not found");
       }
@@ -234,121 +204,59 @@ export const createRouter = ({
         return sendJson(200, await executeWorkflow(parts[1]));
       }
 
-      if (
-        method === "POST"
-        && parts[0] === "workflows"
-        && parts[2] === "resume"
-        && parts.length === 3
-      ) {
+      if (method === "POST" && parts[0] === "workflows" && parts[2] === "resume" && parts.length === 3) {
         const body = await readJson(req);
         await processes.resumeWorkflow(parts[1], body.taskIds ?? null);
         const execution = await executeWorkflow(parts[1]);
         return sendJson(200, execution.workflow);
       }
 
-      if (
-        method === "POST"
-        && parts[0] === "workflows"
-        && parts[2] === "restart"
-        && parts.length === 3
-      ) {
+      if (method === "POST" && parts[0] === "workflows" && parts[2] === "restart" && parts.length === 3) {
         await processes.restartWorkflow(parts[1]);
         const execution = await executeWorkflow(parts[1]);
         return sendJson(200, execution.workflow);
       }
 
-      if (
-        method === "POST"
-        && parts[0] === "workflows"
-        && parts[2] === "cancel"
-        && parts.length === 3
-      ) {
-        tasks.cancelWorkflowTasks(parts[1], "Workflow cancelled by Carlos");
+      if (method === "POST" && parts[0] === "workflows" && parts[2] === "cancel" && parts.length === 3) {
+        engine.cancelWorkflowExecution(parts[1], "Workflow cancelled by Carlos");
         return sendJson(200, await processes.cancelWorkflow(parts[1]));
       }
 
-      if (
-        method === "PATCH"
-        && parts[0] === "workflows"
-        && parts[2] === "inputs"
-        && parts.length === 3
-      ) {
+      if (method === "PATCH" && parts[0] === "workflows" && parts[2] === "inputs" && parts.length === 3) {
         return sendJson(200, await processes.setWorkflowInputs(parts[1], await readJson(req)));
       }
 
-      if (
-        method === "PATCH"
-        && parts[0] === "workflows"
-        && parts[2] === "config"
-        && parts.length === 3
-      ) {
+      if (method === "PATCH" && parts[0] === "workflows" && parts[2] === "config" && parts.length === 3) {
         return sendJson(200, await processes.setWorkflowConfig(parts[1], await readJson(req)));
       }
 
-      if (
-        method === "PUT"
-        && parts[0] === "workflows"
-        && parts[2] === "edges"
-        && parts.length === 3
-      ) {
+      if (method === "PUT" && parts[0] === "workflows" && parts[2] === "edges" && parts.length === 3) {
         const body = await readJson(req);
         return sendJson(200, await processes.setWorkflowEdges(parts[1], body.edges));
       }
 
-      if (
-        method === "PATCH"
-        && parts[0] === "workflows"
-        && parts[2] === "tasks"
-        && parts.length === 4
-      ) {
+      if (method === "PATCH" && parts[0] === "workflows" && parts[2] === "tasks" && parts.length === 4) {
         return sendJson(200, await processes.editTask(parts[1], parts[3], await readJson(req)));
       }
 
-      if (
-        method === "POST"
-        && parts[0] === "workflows"
-        && parts[2] === "tasks"
-        && parts[4] === "skip"
-        && parts.length === 5
-      ) {
+      if (method === "POST" && parts[0] === "workflows" && parts[2] === "tasks" && parts[4] === "skip" && parts.length === 5) {
         return sendJson(200, await processes.skipTask(parts[1], parts[3]));
       }
 
-      if (
-        method === "POST"
-        && parts[0] === "workflows"
-        && parts[2] === "tasks"
-        && parts[4] === "review"
-        && parts.length === 5
-      ) {
+      if (method === "POST" && parts[0] === "workflows" && parts[2] === "tasks" && parts[4] === "review" && parts.length === 5) {
         return sendJson(200, await nora.reviewFailedTask(parts[1], parts[3]));
       }
 
-      if (
-        method === "POST"
-        && parts[0] === "workflows"
-        && parts[2] === "tasks"
-        && parts.length === 4
-      ) {
+      if (method === "POST" && parts[0] === "workflows" && parts[2] === "tasks" && parts.length === 4) {
         const body = await readJson(req);
         return sendJson(200, await processes.addTask(parts[1], parts[3], body.task, body.edges ?? []));
       }
 
-      if (
-        method === "DELETE"
-        && parts[0] === "workflows"
-        && parts[2] === "tasks"
-        && parts.length === 4
-      ) {
+      if (method === "DELETE" && parts[0] === "workflows" && parts[2] === "tasks" && parts.length === 4) {
         return sendJson(200, await processes.removeTask(parts[1], parts[3]));
       }
 
-      if (
-        method === "POST"
-        && parts[0] === "workflows"
-        && parts[2] === "promote"
-        && parts.length === 3
-      ) {
+      if (method === "POST" && parts[0] === "workflows" && parts[2] === "promote" && parts.length === 3) {
         const body = await readJson(req);
         return sendJson(
           201,
@@ -360,43 +268,28 @@ export const createRouter = ({
         return sendJson(200, authorization.listApprovals(url.searchParams.get("status")));
       }
 
-      if (
-        method === "POST"
-        && parts[0] === "approvals"
-        && parts[2] === "approve"
-        && parts.length === 3
-      ) {
+      if (method === "POST" && parts[0] === "approvals" && parts[2] === "approve" && parts.length === 3) {
         return sendJson(200, await authorization.approve(parts[1]));
       }
 
-      if (
-        method === "POST"
-        && parts[0] === "approvals"
-        && parts[2] === "reject"
-        && parts.length === 3
-      ) {
+      if (method === "POST" && parts[0] === "approvals" && parts[2] === "reject" && parts.length === 3) {
         return sendJson(200, await authorization.reject(parts[1]));
       }
 
       if (method === "GET" && parts[0] === "agents" && parts.length === 1) {
-        return sendJson(200, agents.listBlueprints());
+        return sendJson(200, agents.listAgents());
       }
 
       if (method === "GET" && parts[0] === "agents" && parts[1] === "active" && parts.length === 2) {
-        return sendJson(200, agents.listActiveAgents());
+        return sendJson(200, engine.listAgentProcesses());
       }
 
-      if (
-        method === "PATCH"
-        && parts[0] === "agents"
-        && parts[2] === "model"
-        && parts.length === 3
-      ) {
+      if (method === "PATCH" && parts[0] === "agents" && parts[2] === "model" && parts.length === 3) {
         const body = await readJson(req);
-        return sendJson(
-          200,
-          await nora.setAgentModel(parts[1], { provider: body.provider, model: body.model }),
-        );
+        return sendJson(200, await nora.setAgentModel(parts[1], {
+          provider: body.provider,
+          model: body.model,
+        }));
       }
 
       if (method === "GET" && parts[0] === "tools" && parts.length === 1) {
@@ -432,12 +325,7 @@ export const createRouter = ({
         return sendJson(200, await schedules.updateSchedule(parts[1], await readJson(req)));
       }
 
-      if (
-        method === "POST"
-        && parts[0] === "schedules"
-        && parts[2] === "trigger"
-        && parts.length === 3
-      ) {
+      if (method === "POST" && parts[0] === "schedules" && parts[2] === "trigger" && parts.length === 3) {
         const workflow = await schedules.triggerSchedule(parts[1]);
         const execution = await executeWorkflow(workflow.id);
         return sendJson(201, execution.workflow);
