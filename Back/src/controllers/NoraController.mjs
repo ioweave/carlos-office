@@ -226,6 +226,16 @@ const addNoraMessage = async (conversationId, content) => addMessage(conversatio
   content,
 });
 
+const conversationTracksWorkflow = async (conversationId, workflowId) => {
+  const conversation = await getConversation(conversationId);
+  return Boolean(conversation?.workflows?.includes(workflowId));
+};
+
+const addWorkflowNoraMessage = async (conversationId, workflowId, content) => {
+  if (!(await conversationTracksWorkflow(conversationId, workflowId))) return null;
+  return addNoraMessage(conversationId, content);
+};
+
 const toolMetadata = tool => ({
   name: tool.name,
   description: tool.description ?? "",
@@ -265,7 +275,7 @@ const finishConversationWorkflow = async ({ conversationId, workflowId, action }
 
     if (finalWorkflow.status === "completed") {
       const result = await summarizeWorkflow(finalWorkflow.id);
-      await addNoraMessage(conversationId, result.summary);
+      await addWorkflowNoraMessage(conversationId, workflowId, result.summary);
       return;
     }
 
@@ -276,7 +286,7 @@ const finishConversationWorkflow = async ({ conversationId, workflowId, action }
         : finalWorkflow.status === "cancelled"
           ? `Workflow ${workflowId} was cancelled.`
           : `Workflow ${workflowId} stopped in state ${finalWorkflow.status}.`;
-    await addNoraMessage(conversationId, response);
+    await addWorkflowNoraMessage(conversationId, workflowId, response);
   } catch (error) {
     const failure = await recordRequestFailure({
       conversationId,
@@ -287,7 +297,7 @@ const finishConversationWorkflow = async ({ conversationId, workflowId, action }
     });
 
     try {
-      await addNoraMessage(conversationId, `Workflow ${workflowId} could not complete. ${failure}`);
+      await addWorkflowNoraMessage(conversationId, workflowId, `Workflow ${workflowId} could not complete. ${failure}`);
     } catch (messageError) {
       console.error("[nora] Could not persist background Workflow failure message.", {
         conversationId,
@@ -313,7 +323,7 @@ export const handleCarlosRequest = async ({ conversationId, content, artifacts =
   let activeWorkflowId = null;
 
   try {
-    await addMessage(conversationId, { actor: "Carlos", content, artifacts });
+    const carlosMessage = await addMessage(conversationId, { actor: "Carlos", content, artifacts });
     await recordEvent("nora.request_received", { conversationId });
     const requestArtifacts = await loadRequestArtifacts(conversationId, artifacts);
     conversation = await getConversation(conversationId);
@@ -418,6 +428,7 @@ export const handleCarlosRequest = async ({ conversationId, content, artifacts =
       ...(decision.config ?? {}),
       nora: structuredClone(noraSelection),
       conversationId,
+      sourceMessageId: carlosMessage.id,
     };
     const inputs = {
       ...(decision.inputs ?? {}),
