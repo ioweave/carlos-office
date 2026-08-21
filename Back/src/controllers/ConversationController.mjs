@@ -231,6 +231,26 @@ export const setConversationNoraModel = async (conversationId, selection) => {
   return commitConversation(conversation);
 };
 
+export const editCarlosMessage = async (conversationId, messageId, content, removedWorkflowIds = []) => {
+  if (typeof content !== "string" || !content.trim()) {
+    throw new Error("Edited message content must be a non-empty string");
+  }
+  if (!Array.isArray(removedWorkflowIds)) throw new Error("Removed Workflow IDs must be an array");
+
+  const current = await ensureLoaded(conversationId);
+  const conversation = structuredClone(current);
+  const index = conversation.messages.findIndex(message => message.id === messageId);
+  if (index === -1) throw new Error(`Unknown message: ${messageId}`);
+  if (conversation.messages[index].actor !== "Carlos") throw new Error("Only Carlos messages can be edited");
+
+  conversation.messages[index].content = content.trim();
+  conversation.messages = conversation.messages.slice(0, index + 1);
+
+  const removed = new Set(removedWorkflowIds);
+  conversation.workflows = conversation.workflows.filter(workflowId => !removed.has(workflowId));
+  return commitConversation(conversation);
+};
+
 export const addMessage = async (conversationId, { actor, content, artifacts = [] }) => {
   if (!actor || typeof actor !== "string") throw new Error("Message actor must be a non-empty string");
   if (typeof content !== "string" || !content.trim()) {
