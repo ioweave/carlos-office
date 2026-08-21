@@ -17,6 +17,7 @@ export const startNora = async () => {
   if (child && readyPromise) return readyPromise;
 
   readyPromise = new Promise((resolve, reject) => {
+    let started = false;
     child = fork(noraProgram, [], {
       stdio: ["ignore", "inherit", "inherit", "ipc"],
       serialization: "advanced",
@@ -24,6 +25,7 @@ export const startNora = async () => {
 
     child.on("message", message => {
       if (message?.type === "ready") {
+        started = true;
         models = Array.isArray(message.models) ? structuredClone(message.models) : [];
         resolve(getNoraProcessState());
         return;
@@ -40,12 +42,13 @@ export const startNora = async () => {
 
     child.once("error", error => {
       rejectPending(error);
-      reject(error);
+      if (!started) reject(error);
     });
 
     child.on("exit", (code, signal) => {
       const error = new Error(`Nora process exited (${signal ?? code ?? "unknown"})`);
       rejectPending(error);
+      if (!started) reject(error);
       child = null;
       readyPromise = null;
       models = [];
