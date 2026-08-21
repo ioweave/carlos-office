@@ -6,197 +6,236 @@ Carlos Office is a private, local-first AI operating environment for Carlos.
 
 Carlos is the CEO and final authority. Nora is the one permanent Chief of Staff. Carlos primarily communicates with Nora. Nora may answer directly, use an existing Process, create an ad-hoc Workflow, or create reusable Tools, Skills, Processes, and Schedules needed to perform the work.
 
-The product is intentionally small. It is not:
+The implementation must remain deliberately small. Carlos Office is not:
 
 - a multi-user SaaS;
 - a distributed workflow engine;
-- Kubernetes for agents;
+- Kubernetes for Agents;
 - an event-sourcing platform;
 - a generic enterprise orchestration framework;
-- a system that needs transactional infrastructure for ordinary local files.
+- a worker fleet, queueing platform, or microservice system.
 
 The simplest correct implementation is the required implementation.
 
-## 2. Mandatory implementation guidance
-
-`MANDATORY_CODING_STANDARD.md` is authoritative for code style, module structure, validation, SCSS, error handling, and validation commands.
-
-TypeScript and TSX must not be introduced unless Carlos explicitly approves them.
-
-The Office Map is an approved operational interface. Changes to its visual design require an explicit product reason; ordinary runtime work should not redesign it.
-
-## 3. Operating model
+## 2. Operating model
 
 ```text
 Carlos
   ↓
-Nora
+Nora process
   ↓
-Process / Workflow
+Process / Workflow graph
   ↓
-Temporary Specialist Agents
+Temporary specialist Agent processes
   ↓
 Tools + Skills
   ↓
 Result / Artifact
 ```
 
-Product principles:
+Three rules define the runtime:
 
-1. Carlos retains final human authority.
-2. There is exactly one permanent Nora.
-3. Specialist Agents are temporary workers created for Workflow Tasks.
-4. Processes are reusable definitions; Workflows are runtime snapshots.
-5. Workers execute Tasks but do not directly mutate Workflow structure.
-6. Tools perform executable actions; Skills provide guidance.
-7. A Tool that declares `requiresApproval` cannot run that action without Carlos's matching approval.
-8. Failures and cancellations must be represented truthfully.
-9. Local files are preferred over databases and infrastructure frameworks.
-10. Runtime timestamps are persisted in UTC and localized only in the UI.
+> Nora thinks. Platform coordinates. Agents work.
 
-## 4. Actors
+> A Process is graph data.
 
-### 4.1 Carlos
+> The Agent process itself is the Agent Instance.
 
-Carlos can:
+## 3. System processes
 
-- send requests to Nora;
-- inspect Conversations, Workflows, Tasks, Attempts, Agents, Events, Tools, Skills, and Artifacts;
-- approve or reject Tool actions requiring authority;
-- cancel, resume, restart, skip, or edit Workflow work where the UI permits;
-- change Nora and Agent blueprint model configuration from the Office Map;
-- change a Conversation's Nora provider/model without changing Nora's global default;
-- create Schedules;
-- promote an ad-hoc Workflow into a reusable Process.
+Carlos Office has three executable roles.
 
-### 4.2 Nora
+### 3.1 Platform process
 
-Nora is the singleton Chief of Staff while the backend is running.
+`Back/server.mjs` is the persistent server-like Node process.
+
+The Platform owns infrastructure and authority:
+
+- HTTP/API;
+- local file persistence;
+- Process definitions and Workflow state;
+- graph execution;
+- Schedules;
+- Conversation and Artifact storage;
+- Tool and Skill registries;
+- Tool execution;
+- Authorizations;
+- Event recording;
+- spawning and terminating Nora/Agent child processes.
+
+The Platform must not perform LLM reasoning itself.
+
+### 3.2 Nora process
+
+Nora is exactly one persistent Node child process while Carlos Office is running.
+
+Nora owns reasoning and Chief-of-Staff decisions. The Platform communicates with Nora using Node IPC. Nora receives a decision request and returns structured output.
 
 Nora may:
 
-- classify Carlos's requests;
-- answer directly;
+- answer Carlos directly;
 - choose an existing Process;
 - create an ad-hoc Workflow;
-- select temporary specialist Agents, Tools, Skills, providers, and models for Tasks;
-- create or update Tools, Skills, Processes, and Schedules when a request requires them;
-- review completed Workflows;
-- review a failed Task and recommend a safe retry or escalation.
+- select unspecified Agent/Tool/Skill/model resources for a Task;
+- create or update Tools, Skills, Processes, and Schedules;
+- review failed Tasks;
+- summarize completed Workflows.
 
 Nora must not:
 
 - create another Nora;
-- approve Carlos's authorization requests herself;
+- approve Carlos's Authorization requests;
 - report failed work as successful;
-- continue starting new side effects after Workflow cancellation;
-- silently treat interrupted work as successfully resumed after restart.
+- directly execute Platform authority or persistence operations.
 
-### 4.3 Specialist Agent blueprints
+### 3.3 Agent process
 
-Agent blueprints are durable configuration, not permanent running services.
+A specialist Agent Instance is one temporary Node child process created for one Task execution.
 
-The initial specialist names may include Dex, Iris, Luma, Marco, and Vera. Each blueprint can define instructions and a provider/model default.
+The process:
 
-### 4.4 Specialist Agent instances
+1. receives the Agent Definition, Task, model selection, Skills, and allowed Tool contracts;
+2. creates one small generic `Agent` class instance internally;
+3. builds Task context;
+4. runs the model/Tool loop;
+5. requests Tool execution from the Platform over IPC when needed;
+6. returns `completed`, `blocked`, or `failed` output;
+7. exits.
 
-An Agent instance is temporary. It is created for one Task in one Workflow and disposed when that execution ends.
+There is no separate persistent runtime Agent object whose lifecycle duplicates the operating system process lifecycle.
 
-An instance records at least:
+The OS process is the Agent Instance. Its PID is the runtime identity used for observation.
 
-- unique ID;
-- blueprint;
-- Workflow context;
-- Task ID;
-- current runtime status.
+## 4. Agent Definition
 
-The current implementation does not require OS child processes, containers, remote workers, or a worker fleet.
+An Agent Definition is data, not a subclass and not a running service.
 
-## 5. Core domain model
+Agent Definitions live under:
 
-### 5.1 Conversation
+```text
+Back/ObsidianVault/90-System/Agents/*.md
+```
 
-A Conversation is durable communication history between Carlos and Nora.
+A definition can contain:
 
-It stores:
+- name;
+- instructions;
+- provider/model defaults;
+- default Tool names;
+- default Skill names.
 
-- conversation ID;
-- Conversation-specific Nora provider/model selection;
-- messages;
-- related Workflow IDs;
-- related Artifacts.
+All specialists use the same small generic `Agent` execution class unless a demonstrated product requirement requires genuinely different execution semantics.
 
-Changing a Conversation model changes only that Conversation and its non-terminal Workflows. It does not rewrite Nora's global blueprint.
+Agent specializations such as researcher, writer, developer, analyst, or designer should normally differ through data — instructions, model, Tools, and Skills — rather than class inheritance.
 
-### 5.2 Process
+Nora also has a definition file, but Nora is not launched as a disposable specialist Agent.
 
-A Process is a durable reusable DAG definition containing:
+## 5. Agent execution class
+
+The generic Agent class is intentionally small. Its responsibilities are only:
+
+- build model context from the Agent Definition, Task input, and Skills;
+- expose the selected Tool contracts to the model;
+- call the selected model;
+- request allowed Tool execution;
+- add Tool results back to model context;
+- continue until the Task has a final result or fails.
+
+It does not own:
+
+- Workflow persistence;
+- Task status persistence;
+- Authorization persistence;
+- Agent registries;
+- retry/recovery policy;
+- Process graph execution;
+- long-lived lifecycle state.
+
+Those concerns belong to the Platform.
+
+## 6. Process graph
+
+A Process is a durable reusable directed graph represented as data.
+
+It contains:
 
 - name;
 - purpose;
 - declared inputs;
-- start node;
-- end node;
-- Task definitions;
-- dependency edges.
+- exactly one start node;
+- exactly one end node;
+- Task nodes;
+- directed edges.
 
-A Process file is validated before it becomes available. A Workflow receives a copied runtime snapshot of the Process graph. The v1 product does not require a separate ProcessVersion, draft/publish lifecycle, or version database.
+The graph is necessary product complexity: start, end, nodes, and edges guide execution and allow fan-out branches and joins.
 
-### 5.3 Workflow
+Graph invariants:
 
-A Workflow is one runtime execution. It can come from a Process or be ad-hoc.
+- node types are `start`, `task`, or `end`;
+- exactly one start and one end exist;
+- every edge references existing nodes;
+- start has no incoming edge;
+- end has no outgoing edge;
+- self-edges and duplicate edges are invalid;
+- the graph is acyclic in v1;
+- every node is reachable from start;
+- every node can reach end.
 
-It contains:
+The Process definition is data. It is not executable orchestration code.
+
+## 7. Workflow
+
+A Workflow is one durable runtime execution of a Process graph or one ad-hoc graph.
+
+A Workflow stores:
 
 - Workflow ID;
 - source Process name when applicable;
 - status;
 - inputs and runtime config;
-- copied Task graph and dependency edges;
+- copied start/end/Task/edge graph;
 - Task Attempt history;
 - final result when available.
 
-Required v1 statuses are those implemented by the runtime, including `running`, `blocked`, `completed`, `failed`, and `cancelled`.
+Workflow state is persisted as local JSON so Operations remains inspectable across Platform restarts.
 
-Workflow state is persisted as local JSON so Operations remains inspectable across backend restarts.
+A separate ProcessVersion system, draft/publish lifecycle, command bus, event-sourcing store, or distributed coordinator is not required.
 
-### 5.4 Task
+## 8. Task and Attempt
 
-An executable Task contains the reusable execution requirements needed by a specialist Agent, including where present:
+An executable Task can define:
 
 - objective;
 - completion criteria;
-- inputs and output name;
-- explicit Agent blueprint;
+- named inputs/output;
+- explicit Agent Definition;
 - Tool names;
 - Skill names;
 - provider/model override;
 - runtime status;
 - ordered Attempt history.
 
-Dependencies determine when pending Tasks become ready.
+The Platform determines readiness from graph dependencies. Independent ready Tasks may execute in parallel.
 
-### 5.5 Task Attempt
+Each execution creates an Attempt containing:
 
-Each execution try creates a separate Attempt containing:
-
-- ID and attempt number;
+- Attempt ID and number;
 - Workflow and Task IDs;
-- Agent instance;
+- Agent Definition name;
 - provider/model;
 - resolved input;
 - selected Tools and Skills;
 - UTC start/end timestamps;
 - status;
-- result, blocker, or error.
+- output, blocker, or error.
 
-Previous Attempts remain inspectable.
+Attempt history remains durable after the Agent process exits.
 
-### 5.6 Tool
+## 9. Tools
 
 A Tool is an executable `.mjs` module in `Back/tools/`.
 
-A Tool exposes at least:
+A Tool exposes:
 
 - unique name;
 - description where useful;
@@ -204,245 +243,202 @@ A Tool exposes at least:
 - executable function;
 - optional output contract;
 - optional `requiresApproval` flag;
-- optional provider/model metadata for Tool-specific execution.
+- optional Tool-specific provider/model metadata.
 
-Nora may autonomously create or update Tool modules as part of local operation. The Tool registry validates and loads the resulting module before making it available.
+Nora may autonomously create or update Tool modules. The Tool registry validates the generated module before making it live.
 
-If a Tool declares `requiresApproval`, the exact Workflow/Task/Tool/input action must have a matching approved Authorization before execution. Approved authorizations are consumed, not deleted.
+Specialist Agent processes do not execute Tool source directly. They request Tool invocation over IPC and the Platform executes it. This keeps side effects, Tool availability, and Carlos's authority centralized.
 
-Tools receive Workflow/Task/Attempt context and an `AbortSignal`. Cooperative Tools should stop promptly when that signal is aborted.
+If a Tool declares `requiresApproval`, the exact Workflow/Task/Tool/input action must have a matching approved Authorization before the Platform executes it. The approval is consumed after use.
 
-### 5.7 Skill
+Tools receive an `AbortSignal` so cooperative Tool work can stop when a Workflow is cancelled.
 
-A Skill is Markdown guidance in `Back/skills/`.
+## 10. Skills
 
-Skills guide Task execution but cannot execute side effects or grant authority. Full Skill content is loaded for the Task that uses it. Nora's routing context receives compact Skill summaries rather than every full Skill document.
+A Skill is reusable Markdown guidance in `Back/skills/`.
 
-### 5.8 Authorization
+Skills provide methodology or operating knowledge. They cannot execute side effects or grant authority.
 
-An Authorization is a durable authority record with:
+The full selected Skill content is supplied to the Agent performing the Task. Nora's routing context should use compact Skill summaries rather than loading every full Skill document.
+
+## 11. Authorization
+
+Carlos is the final authority.
+
+An Authorization is durable and contains:
 
 - UUID;
 - action;
 - actor;
 - exact execution context;
-- status: pending, approved, rejected, or consumed;
+- status: `pending`, `approved`, `rejected`, or `consumed`;
 - UTC creation/resolution/consumption timestamps.
 
-Authorization history survives backend restart.
+Authorization history survives Platform restart.
 
-### 5.9 Artifact
+Nora and specialist Agents may request authority but cannot grant it.
 
-An Artifact is a file related to a Conversation.
+## 12. Workflow execution
 
-Artifact bytes are stored under an ID-based unique filename so two files with the same human filename cannot overwrite each other's historical content. The original filename remains metadata for display/download.
+The Platform Process engine is deliberately direct:
 
-Text-like request Artifacts are supplied to Nora's intake and to Workflow inputs when a Workflow is created. Binary request Artifacts are represented by metadata unless a Tool explicitly reads them.
+1. load the Workflow graph;
+2. stop if it is terminal or blocked;
+3. find ready Task nodes;
+4. ask Nora only for execution resources the Task did not explicitly define;
+5. resolve the Task input from Workflow input and completed upstream Tasks;
+6. fork one temporary Agent process per assigned ready Task;
+7. run independent ready Tasks in parallel;
+8. persist Attempt and Task transitions;
+9. let child Agent processes exit when their Task ends;
+10. continue until the graph completes, blocks, fails, or is cancelled.
 
-### 5.10 Event
+Only one Platform execution promise may own a Workflow at a time. Duplicate run requests join the existing execution rather than dispatching the same Task twice.
 
-Events are append-only local JSONL diagnostics, not an architectural event-sourcing system.
+If no ready Task exists while an otherwise active Workflow cannot advance, the Platform records a stalled event rather than inventing progress.
 
-Every event receives a UTC ISO timestamp. Events make failures, Workflow transitions, approvals, Tool execution, scheduling, and recovery inspectable in Operations.
+## 13. Cancellation
 
-### 5.11 Schedule
-
-A Schedule starts a Process either once or by cron.
-
-Time rules:
-
-- one-time Schedule timestamps are persisted as canonical UTC ISO values;
-- cron expressions are evaluated in UTC;
-- `lastRunAt` and `nextRunAt` are persisted as UTC ISO values;
-- the UI converts one-time local user input to UTC before submission;
-- the UI converts stored timestamps to the browser's local timezone for display.
-
-## 6. Workflow execution
-
-Nora's runtime loop is deliberately direct:
-
-1. Load the current Workflow.
-2. Stop when it is terminal or blocked.
-3. Find ready Tasks.
-4. Resolve any unspecified Agent/Tool/Skill/model selections.
-5. Create one temporary specialist Agent per assigned Task.
-6. Run independent ready Tasks in parallel.
-7. Persist Attempt and Task transitions.
-8. Dispose temporary Agents after execution.
-9. Continue until the Workflow completes, blocks, fails, or is cancelled.
-
-If no ready Tasks exist while the Workflow is otherwise active, record a stalled event rather than inventing progress.
-
-## 7. Cancellation
-
-Cancellation must stop future work, not merely change a label.
+Cancellation must stop actual runtime work, not merely change a status label.
 
 When Carlos cancels a Workflow:
 
-- active Task AbortControllers are aborted;
-- provider requests receive the AbortSignal;
-- no new Tool call may begin after cancellation is observed;
-- Tools receive the same AbortSignal for cooperative cancellation;
-- running Attempts become cancelled rather than failed;
-- pending/running non-terminal Tasks become cancelled;
-- the Workflow becomes cancelled;
+- the Platform terminates active specialist Agent child processes for that Workflow;
+- Platform-side Tool AbortSignals are aborted;
+- no new Tasks are scheduled;
+- running Attempts become cancelled rather than successful;
+- non-terminal Task/Workflow state is persisted as cancelled;
 - cancellation is recorded durably.
 
-A side effect that already completed before cancellation cannot be undone and must not be represented as if it were.
+A side effect that already completed cannot be undone and must not be represented otherwise.
 
-## 8. Restart recovery
+## 14. Restart recovery
 
-Carlos Office does not require a replay engine or distributed recovery service.
+Carlos Office does not require replay infrastructure or an autonomous recovery Agent.
 
-At backend startup, persisted Workflows are inspected before loading into memory. If a Workflow or Attempt was running when the previous backend stopped:
+At Platform startup, persisted Workflows are inspected. If the previous Platform stopped while work was running:
 
-- running Attempts are closed with a UTC end timestamp and interruption error;
-- running Tasks become blocked;
+- running Attempts receive a UTC end timestamp and interruption error;
+- affected Tasks become blocked;
 - the Workflow becomes blocked;
-- a UTC interruption record/event is saved;
+- an interruption record/event is persisted;
 - work is not automatically retried.
 
-Carlos may then inspect the Workflow and explicitly resume or restart it. This avoids duplicating uncertain external side effects.
+Carlos may inspect and explicitly resume or restart the Workflow.
 
-## 9. Chat behavior
+## 15. Conversation and Chat
 
-Chat is Carlos's direct request channel to Nora.
+A Conversation is durable communication history between Carlos and Nora. It stores:
 
-For a direct response or creation action, the HTTP request may return the completed direct result.
+- Conversation ID;
+- Conversation-specific Nora provider/model selection;
+- messages;
+- related Workflow IDs;
+- related Artifacts.
 
-For a Workflow request:
+Changing a Conversation's model changes only that Conversation and its non-terminal Workflows. It does not rewrite Nora's global Agent Definition.
 
-1. save Carlos's message;
-2. classify the request;
-3. create and persist the Workflow;
+For Workflow requests, Chat flow is:
+
+1. persist Carlos's message;
+2. ask Nora to classify the request;
+3. create/persist the Workflow;
 4. link it to the Conversation;
-5. save Nora's acknowledgement;
+5. persist Nora's acknowledgement;
 6. return the Workflow to Chat promptly;
-7. continue Workflow execution in the backend;
+7. continue Workflow execution asynchronously in the Platform;
 8. let the frontend poll the Workflow card;
-9. append Nora's final handover or truthful failure/blocker message to the Conversation.
+9. append Nora's final handover or truthful blocker/failure message.
 
-The frontend does not need SSE for v1. Bounded polling is sufficient.
+SSE/WebSocket infrastructure is not required for v1; bounded polling is sufficient.
 
-## 10. Office Map
+## 16. Artifact
 
-The Office Map is the primary operational and Agent-configuration interface.
+An Artifact is a file related to a Conversation.
 
-It shows Nora, specialist blueprints, active Agent instances, Workflows, Conversations, and runtime activity using the approved spatial metaphor.
+Artifact bytes use an ID-based unique backing filename so duplicate human filenames cannot overwrite historical content. The original filename remains metadata.
 
-Agent/Nora model configuration belongs here. A separate Agents or Settings page is not required.
+Text-like request Artifacts are supplied to Nora intake and Workflow inputs. Binary Artifacts remain metadata unless a Tool explicitly reads them.
 
-## 11. Processes and Schedules
+No additional backend request/upload size limit is a v1 requirement.
 
-The Processes surface provides:
+## 17. Schedule and time contract
 
-- Process index;
-- Process graph inspection;
-- Task details;
-- Ask-Nora creation/revision actions;
-- Schedule creation, enable/disable, inspection, and manual trigger.
+A Schedule starts a Process once or by cron.
 
-Schedules are part of Processes rather than a separate navigation surface.
+All persisted timestamps are UTC ISO-8601 values produced or normalized with `Date#toISOString()`.
 
-## 12. Operations
+Rules:
 
-Operations is the detailed runtime surface for:
+- one-time Schedule values are stored in UTC;
+- cron expressions are evaluated in UTC;
+- `lastRunAt` and `nextRunAt` are UTC;
+- Events, messages, Artifacts, Attempts, Authorizations, and interruption timestamps are UTC;
+- the backend never stores locale-formatted dates;
+- the frontend converts local date/time input to UTC before persistence;
+- the frontend converts stored UTC timestamps to browser-local time only for display.
 
-- Workflow list and status;
-- Workflow graph/task state;
-- Attempts;
-- recent Events;
-- blockers and errors;
-- pending Authorizations;
-- resume/restart/cancel/skip/edit controls already supported by the backend;
-- promotion of an ad-hoc Workflow to a Process.
+## 18. Events
 
-Operations reflects durable state; it must not invent missing runtime data.
+Events are append-only local diagnostics, not an event-sourcing architecture.
 
-## 13. Authorizations
+They make Workflow transitions, failures, approvals, Tool execution, scheduling, cancellation, and restart interruption inspectable in Operations.
 
-Authorizations is Carlos's authority inbox and history.
+## 19. Product surfaces
 
-It shows pending, approved, consumed, and rejected records. Stored UTC timestamps are converted to local browser time for display.
+Carlos Office has six user-facing surfaces:
 
-## 14. Capabilities
+1. **Chat** — Carlos's direct channel to Nora.
+2. **Office Map** — operational view and Nora/Agent Definition configuration.
+3. **Processes** — reusable Process graphs and Schedules.
+4. **Operations** — Workflow/Task/Attempt/Event inspection and controls.
+5. **Authorizations** — Carlos's authority inbox and durable history.
+6. **Capabilities** — installed Tools and Skills.
 
-Capabilities combines the Tool and Skill catalogs in one surface.
+There is no separate Settings, Tools, Skills, or Agents page.
 
-It supports:
+The Office Map remains the approved spatial operational interface and should not be redesigned as a side effect of runtime work.
 
-- browsing/searching installed Tools;
-- inspecting Tool contracts and approval requirement;
-- browsing/searching Skills;
-- reading full Skill content;
-- asking Nora to create or update a Tool or Skill.
+## 20. Persistence and privacy
 
-Separate Tools and Skills navigation entries are not required.
+Carlos Office prefers direct local files over database infrastructure.
 
-## 15. Appearance and configuration
+Private runtime/user data must not be committed to Git, including Conversations, Artifacts, Events, Processes, Workflows, Schedules, Authorization runtime state, credentials, sessions, and caches.
 
-Theme switching belongs in the sidebar. Backend connectivity is visible globally. Agent/Nora provider-model configuration belongs in the Office Map. Conversation-specific model selection belongs in Chat.
+Source-controlled material includes application code, Agent Definitions, Tools, Skills, specifications, and example environment files.
 
-A separate Settings surface is not required for v1.
+## 21. Validation
 
-## 16. Persistence and privacy
-
-Private runtime/user data must not be committed to Git.
-
-Ignored local data includes:
-
-- Conversations and Artifacts;
-- Events;
-- Processes;
-- Workflows;
-- Schedules;
-- Authorization runtime state;
-- credentials, OAuth/session material, caches, and local runtime files.
-
-Source-controlled configuration includes application code, Agent blueprints, Tools, Skills, specifications, and example environment files.
-
-## 17. Time contract
-
-All persisted timestamps use UTC ISO-8601 strings produced or normalized by JavaScript `Date#toISOString()`.
-
-The backend must never persist locale-formatted dates or depend on the host's local timezone for cron matching.
-
-The frontend may use `Date` and `toLocaleString`/`toLocaleTimeString` to present timestamps in the browser's local timezone. Local date/time form input is converted to UTC before persistence.
-
-## 18. Validation and CI
-
-Routine validation consists of:
-
-Backend:
+Routine validation is:
 
 ```bash
+cd Back
 npm run lint
 npm run check
-```
 
-Frontend:
-
-```bash
+cd ../Front
 npm run lint
 npm run build
 ```
 
 CI performs those checks on pushes and pull requests.
 
-Automated tests are not mandatory and are added or run only when Carlos explicitly requests them, consistent with `MANDATORY_CODING_STANDARD.md`.
+Automated tests are added when explicitly required by the project owner or coding standard.
 
-## 19. Non-requirements for v1
+## 22. Non-requirements
 
-Do not introduce the following without a demonstrated product need:
+Do not introduce these without a demonstrated product need:
 
-- separate immutable ProcessVersion infrastructure;
-- draft/publish/archive machinery merely for architecture completeness;
-- a generic command bus or revision-conflict framework;
-- a separate autonomous recovery Agent;
-- SSE/WebSocket infrastructure when polling is sufficient;
-- event sourcing;
-- distributed locks or queues;
-- databases solely to replace the current local files;
-- transaction/journaling frameworks for ordinary local configuration;
 - permanent specialist Agent services;
-- generic multi-user authentication/RBAC infrastructure for this local single-owner product.
+- an in-memory Agent lifecycle model duplicating OS processes;
+- Agent class inheritance for configuration differences;
+- worker fleets or job queues;
+- separate ProcessVersion infrastructure;
+- draft/publish/archive machinery merely for architecture completeness;
+- generic command buses;
+- distributed locks;
+- event sourcing;
+- SSE/WebSockets when polling is sufficient;
+- databases solely to replace local files;
+- generic multi-user authentication/RBAC infrastructure;
+- containers or remote workers merely to run local specialist Agents.
