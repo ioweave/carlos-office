@@ -30,16 +30,23 @@ const OPERATIONS_EVENT_TYPES = new Set([
   "nora.plan_completed",
   "process.load_failed",
   "workflow.load_failed",
+  "workflow.interrupted",
   "tool.load_failed",
   "schedule.load_failed",
   "event.load_failed",
   "schedule.workflow_failed",
   "workflow.created",
   "workflow.completed",
+  "workflow.cancelled",
   "workflow.stalled",
   "attempt.failed",
+  "attempt.cancelled",
   "task.failed",
   "task.blocked",
+  "approval.requested",
+  "approval.approved",
+  "approval.rejected",
+  "approval.consumed",
   "schedule.created",
   "schedule.triggered",
   "schedule.failed",
@@ -55,9 +62,11 @@ const statusTone = {
 
 const eventTone = event => {
   if (event.type.endsWith("failed") || event.type === "workflow.stalled") return "danger";
-  if (event.type.endsWith("blocked")) return "warning";
+  if (event.type.endsWith("blocked") || event.type === "approval.requested") return "warning";
   if (event.type.endsWith("completed") || event.type.endsWith("created")) return "success";
   if (event.type.endsWith("saved") || event.type === "nora.plan_completed") return "success";
+  if (event.type === "approval.approved" || event.type === "approval.consumed") return "success";
+  if (event.type === "approval.rejected") return "danger";
   return "info";
 };
 
@@ -80,16 +89,23 @@ const eventTitle = event => {
     "nora.plan_completed": "Creation plan completed",
     "process.load_failed": "Process load failed",
     "workflow.load_failed": "Workflow load failed",
+    "workflow.interrupted": "Workflow interrupted by restart",
     "tool.load_failed": "Tool load failed",
     "schedule.load_failed": "Schedule load failed",
     "event.load_failed": "Event load failed",
     "schedule.workflow_failed": "Scheduled workflow failed",
     "workflow.created": "Workflow created",
     "workflow.completed": "Workflow completed",
+    "workflow.cancelled": "Workflow cancelled",
     "workflow.stalled": "Workflow stalled",
     "attempt.failed": "Task attempt failed",
+    "attempt.cancelled": "Task attempt cancelled",
     "task.failed": "Task failed",
     "task.blocked": "Task blocked",
+    "approval.requested": "Authorization requested",
+    "approval.approved": "Authorization approved",
+    "approval.rejected": "Authorization rejected",
+    "approval.consumed": "Authorization consumed",
     "schedule.created": "Schedule created",
     "schedule.triggered": "Schedule triggered",
     "schedule.failed": "Schedule failed",
@@ -100,9 +116,11 @@ const eventTitle = event => {
 
 const eventDetail = event => {
   if (event.error) return event.error;
+  if (event.reason) return event.reason;
   if (event.taskId) return `${event.taskId}${event.workflowId ? ` · ${event.workflowId}` : ""}`;
   if (event.workflowId) return event.workflowId;
   if (event.scheduleId) return `${event.scheduleId}${event.process ? ` · ${event.process}` : ""}`;
+  if (event.approvalId) return `${event.approvalId}${event.action ? ` · ${event.action}` : ""}`;
   if (event.tool) return event.tool;
   if (event.skill) return event.skill;
   if (event.process) return event.process;
@@ -127,8 +145,8 @@ const AttemptDetail = ({ attempt }) => {
     model: attempt.model,
     status: attempt.status,
     approvalId: attempt.approvalId,
-    startedAt: attempt.startedAt,
-    endedAt: attempt.endedAt,
+    startedAt: formatTime(attempt.startedAt),
+    endedAt: formatTime(attempt.endedAt),
     blockedReason: attempt.blockedReason,
     error: attempt.error,
     input: attempt.input,
@@ -408,9 +426,11 @@ export default function OperationsPage({ onAskNora, openRequest }) {
                 <ul className="operations-approvals">
                   {approvals.map(approval => (
                     <li key={approval.id} className="operations-approvals__item">
-                      <strong className="operations-approvals__title">{approval.tool || "Action"}</strong>
+                      <strong className="operations-approvals__title">
+                        {approval.context?.tool || approval.action || "Action"}
+                      </strong>
                       <small className="operations-approvals__meta">
-                        {approval.reason || "Authorization required"}
+                        Requested {formatTime(approval.createdAt)}
                       </small>
                     </li>
                   ))}
@@ -627,7 +647,7 @@ export default function OperationsPage({ onAskNora, openRequest }) {
         </section>
       )}
 
-      <nav className="redesign-tabs">
+      <nav className="redesign-tabs" aria-label="Workflow status">
         {STATUS_FILTERS.map(value => (
           <button
             key={value}
@@ -664,7 +684,7 @@ export default function OperationsPage({ onAskNora, openRequest }) {
                   <span className="workflow-list__body">
                     <strong className="workflow-list__title">{item.process || "Ad-hoc workflow"}</strong>
                     <small className="workflow-list__meta">
-                      {item.id} · {Object.keys(item.tasks || {}).length} tasks · {formatTime(item.updatedAt)}
+                      {item.id} · {Object.keys(item.tasks || {}).length} tasks
                     </small>
                   </span>
                   <StatusBadge tone={statusTone[item.status] || "neutral"}>{item.status}</StatusBadge>
