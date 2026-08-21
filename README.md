@@ -25,14 +25,14 @@ Carlos Office is intentionally not an enterprise orchestration platform, distrib
 Carlos Office has three executable roles:
 
 ```text
-platform process
-nora process
-agent process
+platform.mjs
+src/runtime/nora.mjs
+src/runtime/agent.mjs
 ```
 
 ### Platform
 
-`Back/server.mjs` is the persistent server-like Node process. It owns:
+`Back/platform.mjs` is the persistent server-like Node process. It owns:
 
 - HTTP/API;
 - local persistence;
@@ -61,7 +61,7 @@ An Agent definition is data stored in `Back/ObsidianVault/90-System/Agents/*.md`
 
 A running Agent Instance is not a persisted JavaScript domain object. **The Agent process itself is the Agent Instance.**
 
-For each executable Task, the Platform forks `agent-process.mjs`. Inside that process a small generic `Agent` class loads the selected definition, Skills, model and allowed Tool contracts, runs the model/Tool loop, returns one result, and exits.
+For each executable Task, the Platform forks `src/runtime/agent.mjs`. Inside that process a small generic `Agent` class loads the selected definition, Skills, model and allowed Tool contracts, runs the model/Tool loop, returns one result, and exits.
 
 Tools themselves execute in the Platform process. An Agent requests a Tool through IPC so Carlos's Authorization rules and side effects remain centrally controlled.
 
