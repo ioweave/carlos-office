@@ -1,4 +1,3 @@
-import { getBlueprint } from "../controllers/AgentController.mjs";
 import { recordEvent } from "../controllers/EventController.mjs";
 import {
   getProcess,
@@ -7,6 +6,7 @@ import {
   validateProcessDefinition,
 } from "../controllers/ProcessController.mjs";
 import { createSchedule, validateScheduleTiming } from "../controllers/ScheduleController.mjs";
+import { getAgent } from "../registry/Agents.mjs";
 import { getSkill, saveSkill } from "../registry/Skills.mjs";
 import { getTool, saveTool } from "../registry/Tools.mjs";
 
@@ -90,9 +90,9 @@ const validateProcessDependencies = (
     if (task.type !== "task") continue;
 
     if (task.agent) {
-      const blueprint = getBlueprint(task.agent);
-      if (!blueprint) throw new Error(`Process ${process.name} Task ${taskId} uses unknown Agent: ${task.agent}`);
-      if (blueprint.isNora) throw new Error(`Process ${process.name} Task ${taskId} cannot assign Nora as a worker`);
+      const definition = getAgent(task.agent);
+      if (!definition) throw new Error(`Process ${process.name} Task ${taskId} uses unknown Agent: ${task.agent}`);
+      if (definition.isNora) throw new Error(`Process ${process.name} Task ${taskId} cannot assign Nora as a worker`);
     }
 
     for (const toolName of task.tools ?? []) {
