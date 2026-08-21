@@ -48,13 +48,10 @@ const deriveTitle = conversation => {
   return firstUser?.content?.slice(0, 60).trim() || conversation?.id || "Conversation";
 };
 
-const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-
 export default function ChatPage({
   agents,
   health,
   nora,
-  onNoraChange,
   openRequest,
   onOpenOperations,
 }) {
@@ -261,7 +258,6 @@ export default function ChatPage({
       const next = record.nora || modelDraft;
       setConversationModel(next);
       setModelDraft(next);
-      onNoraChange?.(next);
       toast.success("Conversation model updated.");
     } catch (error) {
       toast.error(error.response?.data?.error || "Could not update conversation model.");
@@ -285,10 +281,15 @@ export default function ChatPage({
     const next = created.nora || { provider, model };
     setConversationModel(next);
     setModelDraft(next);
-    onNoraChange?.(next);
     await loadCatalog();
     return created.id;
   };
+
+  const refreshSettledWorkflow = useCallback(async () => {
+    if (!conversationId) return;
+    await loadConversation(conversationId, { quiet: true });
+    await loadHistory({ quiet: true });
+  }, [conversationId, loadConversation, loadHistory]);
 
   const send = async event => {
     event?.preventDefault?.();
@@ -298,8 +299,6 @@ export default function ChatPage({
     const requestContent = message || "Review the attached files.";
     const pendingFiles = [...files];
     let requestConversationId = conversationId;
-    let watchingWorkflow = false;
-    let workflowWatcher = null;
 
     setActiveWorkflowId(null);
     setSending(true);
@@ -335,27 +334,6 @@ export default function ChatPage({
         artifactIds.push(created.id);
       }
 
-      const beforeRequest = (await api.get(endpoints.conversation(id))).data;
-      const knownWorkflowIds = new Set(beforeRequest.workflows || []);
-
-      watchingWorkflow = true;
-      workflowWatcher = (async () => {
-        while (watchingWorkflow) {
-          try {
-            const record = (await api.get(endpoints.conversation(id))).data;
-            const workflowIds = record.workflows || [];
-            const discovered = workflowIds.find(workflowId => !knownWorkflowIds.has(workflowId));
-            if (discovered) {
-              workflowIds.forEach(workflowId => knownWorkflowIds.add(workflowId));
-              setActiveWorkflowId(discovered);
-            }
-          } catch {
-            // Workflow discovery is best-effort. The request result owns user-visible failure handling.
-          }
-          if (watchingWorkflow) await wait(750);
-        }
-      })();
-
       const result = (
         await api.post(
           endpoints.conversationRequest(id),
@@ -388,8 +366,6 @@ export default function ChatPage({
       }
       if (requestConversationId) await loadConversation(requestConversationId, { quiet: true });
     } finally {
-      watchingWorkflow = false;
-      if (workflowWatcher) await workflowWatcher;
       requestRef.current = null;
       setSending(false);
     }
@@ -514,6 +490,7 @@ export default function ChatPage({
             onSpeak={speak}
             onStopSpeak={stopSpeech}
             onOpenOperations={onOpenOperations}
+            onWorkflowSettled={refreshSettledWorkflow}
             workflowId={activeWorkflowId}
           />
           <ChatComposer
