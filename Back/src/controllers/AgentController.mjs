@@ -8,11 +8,9 @@ const blueprints = new Map();
 const activeAgents = new Map();
 let nextAgentId = 1;
 
-const validateName = (name) => {
-  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
-    throw new Error(`Invalid agent name: ${name}`);
-  }
-}
+const validateName = name => {
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) throw new Error(`Invalid agent name: ${name}`);
+};
 
 const parseBlueprint = (name, path, content) => {
   if (typeof content !== "string" || !content.trim()) {
@@ -23,7 +21,7 @@ const parseBlueprint = (name, path, content) => {
   const model = content.match(/^model:\s*(.+)$/im)?.[1]?.trim() || null;
   const instructions = content
     .split(/\r?\n/)
-    .filter((line) => !/^\s*(provider|model):\s*/i.test(line))
+    .filter(line => !/^\s*(provider|model):\s*/i.test(line))
     .join("\n")
     .trim();
 
@@ -35,88 +33,69 @@ const parseBlueprint = (name, path, content) => {
     instructions,
     isNora: name.toLowerCase() === "nora",
   };
-}
+};
 
-const renderBlueprint = (blueprint) => {
+const renderBlueprint = blueprint => {
   const lines = [];
-
-  if (blueprint.provider) {
-    lines.push(`provider: ${blueprint.provider}`);
-  }
-
-  if (blueprint.model) {
-    lines.push(`model: ${blueprint.model}`);
-  }
-
-  if (blueprint.instructions) {
-    lines.push("", blueprint.instructions.trim());
-  }
-
+  if (blueprint.provider) lines.push(`provider: ${blueprint.provider}`);
+  if (blueprint.model) lines.push(`model: ${blueprint.model}`);
+  if (blueprint.instructions) lines.push("", blueprint.instructions.trim());
   return `${lines.join("\n").trim()}\n`;
-}
+};
 
 export const loadBlueprints = async () => {
   await mkdir(agentsDir, { recursive: true });
-
   blueprints.clear();
 
   const files = await readdir(agentsDir);
-
-  for (const filename of files.filter((file) => file.endsWith(".md"))) {
+  for (const filename of files.filter(file => file.endsWith(".md"))) {
     const path = resolve(agentsDir, filename);
     const name = basename(filename, ".md");
     const content = await readFile(path, "utf8");
-
+    if (blueprints.has(name)) throw new Error(`Duplicate Agent Blueprint: ${name}`);
     blueprints.set(name, parseBlueprint(name, path, content));
   }
 
   return listBlueprints();
-}
+};
 
-export const getBlueprint = (name) => {
-  return blueprints.get(name) ?? null;
-}
+export const getBlueprint = name => {
+  const blueprint = blueprints.get(name);
+  return blueprint ? structuredClone(blueprint) : null;
+};
 
-export const listBlueprints = () => {
-  return [...blueprints.values()];
-}
+export const listBlueprints = () => (
+  [...blueprints.values()].map(blueprint => structuredClone(blueprint))
+);
 
 export const getNoraBlueprint = () => {
-  return [...blueprints.values()].find((blueprint) => blueprint.isNora) ?? null;
-}
+  const blueprint = [...blueprints.values()].find(item => item.isNora) ?? null;
+  return blueprint ? structuredClone(blueprint) : null;
+};
 
 export const saveBlueprint = async (name, content) => {
   validateName(name);
-
   if (typeof content !== "string" || !content.trim()) {
     throw new Error(`Agent ${name} must contain configuration or instructions`);
   }
 
   await mkdir(agentsDir, { recursive: true });
-
   await writeFile(resolve(agentsDir, `${name}.md`), content, "utf8");
-
   await loadBlueprints();
-
   return getBlueprint(name);
-}
+};
 
 export const setBlueprintModel = async (name, { provider, model }) => {
   validateName(name);
-
   if (!provider || typeof provider !== "string") {
     throw new Error("Agent provider must be a non-empty string");
   }
-
   if (!model || typeof model !== "string") {
     throw new Error("Agent model must be a non-empty string");
   }
 
   const blueprint = getBlueprint(name);
-
-  if (!blueprint) {
-    throw new Error(`Unknown agent blueprint: ${name}`);
-  }
+  if (!blueprint) throw new Error(`Unknown agent blueprint: ${name}`);
 
   const updated = {
     ...blueprint,
@@ -125,97 +104,70 @@ export const setBlueprintModel = async (name, { provider, model }) => {
   };
 
   await writeFile(blueprint.path, renderBlueprint(updated), "utf8");
-
   await loadBlueprints();
-
   return getBlueprint(name);
-}
+};
 
 export const createAgent = (blueprintName, taskId = null, context = {}) => {
   const blueprint = getBlueprint(blueprintName);
-
-  if (!blueprint) {
-    throw new Error(`Unknown agent blueprint: ${blueprintName}`);
-  }
-
-  if (blueprint.isNora) {
-    throw new Error("Nora cannot be created as a disposable Agent Instance");
-  }
+  if (!blueprint) throw new Error(`Unknown agent blueprint: ${blueprintName}`);
+  if (blueprint.isNora) throw new Error("Nora cannot be created as a disposable Agent Instance");
 
   const id = `agent-${nextAgentId++}`;
-
   const agent = {
     id,
     name: `${blueprint.name}-${id}`,
     blueprint: blueprint.name,
     status: taskId ? "working" : "idle",
     taskId,
-    context,
+    context: structuredClone(context),
     notes: [],
   };
 
   activeAgents.set(id, agent);
+  return structuredClone(agent);
+};
 
-  return agent;
-}
+export const getAgent = id => {
+  const agent = activeAgents.get(id);
+  return agent ? structuredClone(agent) : null;
+};
 
-export const getAgent = (id) => {
-  return activeAgents.get(id) ?? null;
-}
-
-export const listActiveAgents = () => {
-  return [...activeAgents.values()];
-}
+export const listActiveAgents = () => (
+  [...activeAgents.values()].map(agent => structuredClone(agent))
+);
 
 export const assignTask = (id, taskId) => {
-  const agent = getAgent(id);
-
-  if (!agent) {
-    throw new Error(`Unknown agent: ${id}`);
-  }
+  const agent = activeAgents.get(id);
+  if (!agent) throw new Error(`Unknown agent: ${id}`);
 
   agent.taskId = taskId;
   agent.status = "working";
-
-  return agent;
-}
+  return structuredClone(agent);
+};
 
 export const setAgentStatus = (id, status) => {
-  const agent = getAgent(id);
-
-  if (!agent) {
-    throw new Error(`Unknown agent: ${id}`);
-  }
+  const agent = activeAgents.get(id);
+  if (!agent) throw new Error(`Unknown agent: ${id}`);
 
   agent.status = status;
-
-  return agent;
-}
+  return structuredClone(agent);
+};
 
 export const setAgentContext = (id, context) => {
-  const agent = getAgent(id);
+  const agent = activeAgents.get(id);
+  if (!agent) throw new Error(`Unknown agent: ${id}`);
 
-  if (!agent) {
-    throw new Error(`Unknown agent: ${id}`);
-  }
-
-  agent.context = context;
-
-  return agent;
-}
+  agent.context = structuredClone(context);
+  return structuredClone(agent);
+};
 
 export const addAgentNote = (id, note) => {
-  const agent = getAgent(id);
-
-  if (!agent) {
-    throw new Error(`Unknown agent: ${id}`);
-  }
+  const agent = activeAgents.get(id);
+  if (!agent) throw new Error(`Unknown agent: ${id}`);
 
   agent.notes.push(note);
+  return structuredClone(agent);
+};
 
-  return agent;
-}
-
-export const disposeAgent = (id) => {
-  return activeAgents.delete(id);
-}
+export const disposeAgent = id => activeAgents.delete(id);
