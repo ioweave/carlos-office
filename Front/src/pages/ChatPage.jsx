@@ -57,9 +57,12 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
   const [sending, setSending] = useState(false);
   const [loadingConversation, setLoadingConversation] = useState(false);
   const [workflowId, setWorkflowId] = useState("");
+  const [editingConversationId, setEditingConversationId] = useState("");
+  const [titleDraft, setTitleDraft] = useState("");
   const fileInputRef = useRef(null);
   const textareaRef = useRef(null);
   const requestRef = useRef(null);
+  const renameCancelledRef = useRef(false);
 
   const providers = useMemo(() => models.map(item => item.provider), [models]);
   const modelsFor = provider => models.find(item => item.provider === provider)?.models || [];
@@ -141,17 +144,33 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
     setWorkflowId("");
     setInput("");
     setFiles([]);
+    setEditingConversationId("");
+    setTitleDraft("");
     setModelDraft(nora || { provider: "", model: "" });
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
-  const renameConversation = async item => {
-    const currentTitle = conversationTitle(item);
-    const title = window.prompt("Rename conversation", currentTitle);
-    if (title === null) return;
+  const beginRename = item => {
+    renameCancelledRef.current = false;
+    setEditingConversationId(item.id);
+    setTitleDraft(conversationTitle(item));
+  };
 
-    const nextTitle = title.trim();
-    if (!nextTitle || nextTitle === currentTitle) return;
+  const finishRename = async item => {
+    if (renameCancelledRef.current) {
+      renameCancelledRef.current = false;
+      setEditingConversationId("");
+      setTitleDraft("");
+      return;
+    }
+
+    const currentTitle = conversationTitle(item);
+    const nextTitle = titleDraft.trim();
+    if (!nextTitle || nextTitle === currentTitle) {
+      setEditingConversationId("");
+      setTitleDraft("");
+      return;
+    }
 
     try {
       const updated = (await api.patch(endpoints.conversation(item.id), { title: nextTitle })).data;
@@ -159,6 +178,9 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
       if (conversation?.id === item.id) setConversation(updated);
     } catch (error) {
       toast.error(error.response?.data?.error || "Could not rename conversation.");
+    } finally {
+      setEditingConversationId("");
+      setTitleDraft("");
     }
   };
 
@@ -179,6 +201,11 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
         setInput("");
         setFiles([]);
         setModelDraft(nora || { provider: "", model: "" });
+      }
+
+      if (editingConversationId === item.id) {
+        setEditingConversationId("");
+        setTitleDraft("");
       }
 
       toast.success("Conversation deleted.");
@@ -330,19 +357,60 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
               key={item.id}
               className={`conversation-row ${conversation?.id === item.id ? "conversation-row--active" : ""}`}
             >
-              <button
-                type="button"
-                className="conversation-row__open"
-                onClick={() => openConversation(item.id)}
-              >
-                <strong>{conversationTitle(item)}</strong>
-                <small>{formatTime(item.messages?.at(-1)?.at)}</small>
-              </button>
+              {editingConversationId === item.id ? (
+                <div className="conversation-row__open">
+                  <input
+                    autoFocus
+                    value={titleDraft}
+                    onChange={event => setTitleDraft(event.target.value)}
+                    onFocus={event => event.currentTarget.select()}
+                    onBlur={() => finishRename(item)}
+                    onKeyDown={event => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        event.currentTarget.blur();
+                      }
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        renameCancelledRef.current = true;
+                        event.currentTarget.blur();
+                      }
+                    }}
+                    aria-label={`Rename ${conversationTitle(item)}`}
+                    style={{
+                      width: "100%",
+                      minWidth: 0,
+                      padding: 0,
+                      border: 0,
+                      borderRadius: "2px",
+                      outline: "1px solid var(--color-accent)",
+                      outlineOffset: "1px",
+                      background: "transparent",
+                      color: "var(--color-text)",
+                      font: "inherit",
+                      fontSize: "11px",
+                      fontWeight: 700,
+                      lineHeight: 1.2,
+                    }}
+                  />
+                  <small>{formatTime(item.messages?.at(-1)?.at)}</small>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="conversation-row__open"
+                  onClick={() => openConversation(item.id)}
+                >
+                  <strong>{conversationTitle(item)}</strong>
+                  <small>{formatTime(item.messages?.at(-1)?.at)}</small>
+                </button>
+              )}
               <div className="conversation-row__actions">
                 <button
                   type="button"
                   className="conversation-row__action"
-                  onClick={() => renameConversation(item)}
+                  onClick={() => beginRename(item)}
+                  disabled={editingConversationId === item.id}
                   aria-label={`Rename ${conversationTitle(item)}`}
                   title="Rename"
                 >
