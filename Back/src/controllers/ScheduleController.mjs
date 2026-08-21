@@ -105,12 +105,12 @@ const parseCron = expression => {
 };
 
 const cronMatches = (date, cron) => {
-  if (!cron.minute.values.has(date.getMinutes())) return false;
-  if (!cron.hour.values.has(date.getHours())) return false;
-  if (!cron.month.values.has(date.getMonth() + 1)) return false;
+  if (!cron.minute.values.has(date.getUTCMinutes())) return false;
+  if (!cron.hour.values.has(date.getUTCHours())) return false;
+  if (!cron.month.values.has(date.getUTCMonth() + 1)) return false;
 
-  const dayOfMonthMatches = cron.dayOfMonth.values.has(date.getDate());
-  const dayOfWeekMatches = cron.dayOfWeek.values.has(date.getDay());
+  const dayOfMonthMatches = cron.dayOfMonth.values.has(date.getUTCDate());
+  const dayOfWeekMatches = cron.dayOfWeek.values.has(date.getUTCDay());
 
   if (!cron.dayOfMonth.wildcard && !cron.dayOfWeek.wildcard) return dayOfMonthMatches || dayOfWeekMatches;
   if (!cron.dayOfMonth.wildcard && !dayOfMonthMatches) return false;
@@ -121,39 +121,45 @@ const cronMatches = (date, cron) => {
 const nextCronDate = (expression, after = new Date()) => {
   const cron = parseCron(expression);
   const candidate = new Date(after.getTime());
-  candidate.setSeconds(0, 0);
-  candidate.setMinutes(candidate.getMinutes() + 1);
+  candidate.setUTCSeconds(0, 0);
+  candidate.setUTCMinutes(candidate.getUTCMinutes() + 1);
 
   const maxMinutes = 60 * 24 * 366 * 2;
   for (let index = 0; index < maxMinutes; index += 1) {
     if (cronMatches(candidate, cron)) return candidate;
-    candidate.setMinutes(candidate.getMinutes() + 1);
+    candidate.setUTCMinutes(candidate.getUTCMinutes() + 1);
   }
 
   throw new Error(`Could not find next cron occurrence: ${expression}`);
 };
 
-const validateTiming = timing => {
+const normalizeUtcTimestamp = (value, label, nullable = true) => {
+  if (nullable && value == null) return null;
+  const date = new Date(value);
+  if (typeof value !== "string" || Number.isNaN(date.getTime())) throw new Error(`Invalid ${label}: ${value}`);
+  return date.toISOString();
+};
+
+const normalizeTiming = timing => {
   if (!isObject(timing)) throw new Error("Schedule timing must be an object");
 
   if (timing.type === "at") {
-    const date = new Date(timing.value);
-    if (typeof timing.value !== "string" || Number.isNaN(date.getTime())) {
-      throw new Error(`Invalid one-time schedule: ${timing.value}`);
-    }
-    return;
+    return {
+      type: "at",
+      value: normalizeUtcTimestamp(timing.value, "one-time schedule", false),
+    };
   }
 
   if (timing.type === "cron") {
     parseCron(timing.value);
-    return;
+    return { type: "cron", value: timing.value.trim() };
   }
 
   throw new Error(`Unsupported schedule type: ${timing.type}`);
 };
 
 export const validateScheduleTiming = timing => {
-  validateTiming(timing);
+  normalizeTiming(timing);
   return true;
 };
 
@@ -169,7 +175,9 @@ const validateSchedule = schedule => {
   if (!isObject(schedule.inputs)) throw new Error("Schedule inputs must be an object");
   if (!isObject(schedule.config)) throw new Error("Schedule config must be an object");
 
-  validateTiming(schedule.timing);
+  normalizeTiming(schedule.timing);
+  if (schedule.lastRunAt != null) normalizeUtcTimestamp(schedule.lastRunAt, "schedule lastRunAt");
+  if (schedule.nextRunAt != null) normalizeUtcTimestamp(schedule.nextRunAt, "schedule nextRunAt");
 };
 
 const calculateNextRun = (schedule, after = new Date()) => {
@@ -177,7 +185,7 @@ const calculateNextRun = (schedule, after = new Date()) => {
 
   if (schedule.timing.type === "at") {
     if (schedule.lastRunAt) return null;
-    return new Date(schedule.timing.value).toISOString();
+    return normalizeUtcTimestamp(schedule.timing.value, "one-time schedule", false);
   }
 
   return nextCronDate(schedule.timing.value, after).toISOString();
@@ -197,6 +205,16 @@ const recordLoadFailure = async (filename, error) => {
   }
 };
 
+const normalizeStoredSchedule = stored => ({
+  inputs: {},
+  config: {},
+  lastRunAt: null,
+  nextRunAt: null,
+  ...structuredClone(stored),
+  timing: normalizeTiming(stored.timing),
+  lastRunAt: stored.lastRunAt == null ? null : normalizeUtcTimestamp(stored.lastRunAt, "schedule lastRunAt"),
+});
+
 export const loadSchedules = async () => {
   await mkdir(schedulesDir, { recursive: true });
   schedules.clear();
@@ -204,23 +222,12 @@ export const loadSchedules = async () => {
   const files = await readdir(schedulesDir);
   for (const filename of files.filter(file => file.endsWith(".json"))) {
     try {
-      const stored = JSON.parse(await readFile(resolve(schedulesDir, filename), "utf8"));
-      const schedule = {
-        inputs: {},
-        config: {},
-        lastRunAt: null,
-        nextRunAt: null,
-        ...stored,
-      };
-
+      const schedule = normalizeStoredSchedule(JSON.parse(await readFile(resolve(schedulesDir, filename), "utf8")));
       validateSchedule(schedule);
       if (schedules.has(schedule.id)) throw new Error(`Duplicate schedule ID: ${schedule.id}`);
 
-      if (schedule.enabled && !schedule.nextRunAt) {
-        schedule.nextRunAt = calculateNextRun(schedule);
-        await persistSchedule(schedule);
-      }
-
+      schedule.nextRunAt = calculateNextRun(schedule, new Date());
+      await persistSchedule(schedule);
       schedules.set(schedule.id, schedule);
     } catch (error) {
       await recordLoadFailure(filename, error);
@@ -251,7 +258,7 @@ export const createSchedule = async ({
     id,
     process,
     enabled,
-    timing: structuredClone(timing),
+    timing: normalizeTiming(timing),
     inputs: structuredClone(inputs),
     config: structuredClone(config),
     lastRunAt: null,
@@ -268,14 +275,7 @@ export const createSchedule = async ({
 };
 
 export const saveSchedule = async schedule => {
-  const stored = {
-    inputs: {},
-    config: {},
-    lastRunAt: null,
-    nextRunAt: null,
-    ...structuredClone(schedule),
-  };
-
+  const stored = normalizeStoredSchedule(schedule);
   validateSchedule(stored);
   stored.nextRunAt = calculateNextRun(stored, new Date());
   await persistSchedule(stored);
@@ -291,7 +291,12 @@ export const updateSchedule = async (id, changes) => {
   const current = requireSchedule(id);
   if (changes.id && changes.id !== id) throw new Error("Schedule ID cannot be changed");
 
-  const updated = { ...current, ...structuredClone(changes), id };
+  const normalizedChanges = structuredClone(changes);
+  if (Object.prototype.hasOwnProperty.call(normalizedChanges, "timing")) {
+    normalizedChanges.timing = normalizeTiming(normalizedChanges.timing);
+  }
+
+  const updated = { ...current, ...normalizedChanges, id };
   validateSchedule(updated);
 
   const timingChanged = Object.prototype.hasOwnProperty.call(changes, "timing");
