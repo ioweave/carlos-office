@@ -1,41 +1,40 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { IconHistory, IconPlus } from "@tabler/icons-react";
+import {
+  IconArrowUp,
+  IconFile,
+  IconFolder,
+  IconMessageCircle,
+  IconPaperclip,
+  IconPlus,
+  IconRoute,
+  IconX,
+} from "@tabler/icons-react";
 import { toast } from "sonner";
 
 import api, { endpoints } from "../api";
-import ArtifactPreview from "../components/ArtifactPreview";
-import ChatComposer from "../components/ChatComposer";
-import ChatThread from "../components/ChatThread";
-import ConversationList from "../components/ConversationList";
-import StatusBadge from "../components/StatusBadge";
 
-const ACTIVE_CONVERSATION_KEY = "office-active-conversation";
+const ACTIVE_CONVERSATION_KEY = "office-active-conversation-v2";
 
-const mapMessage = message => ({
-  id: message.id,
-  role: message.actor === "Carlos" ? "user" : "assistant",
-  at: message.at,
-  content: message.content,
-  artifacts: message.artifacts || [],
-});
+const formatTime = value => {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
+};
 
-const readable = value => String(value || "")
-  .replace(/```[\s\S]*?```/g, " ")
-  .replace(/`([^`]+)`/g, "$1")
-  .replace(/\[([^\]]+)]\([^)]+\)/g, "$1")
-  .replace(/[#>*_~|]/g, " ")
-  .replace(/\s+/g, " ")
-  .trim();
+const conversationTitle = conversation => {
+  const first = conversation?.messages?.find(message => message.actor === "Carlos");
+  return first?.content?.replace(/\s+/g, " ").trim().slice(0, 56) || "New conversation";
+};
 
 const filePayload = file => new Promise((resolve, reject) => {
   const reader = new FileReader();
   reader.onload = () => {
-    const dataUrl = String(reader.result || "");
-    const comma = dataUrl.indexOf(",");
+    const value = String(reader.result || "");
+    const comma = value.indexOf(",");
     resolve({
       name: file.name,
       type: file.type || "application/octet-stream",
-      content: comma >= 0 ? dataUrl.slice(comma + 1) : "",
+      content: comma >= 0 ? value.slice(comma + 1) : "",
       encoding: "base64",
     });
   };
@@ -43,292 +42,166 @@ const filePayload = file => new Promise((resolve, reject) => {
   reader.readAsDataURL(file);
 });
 
-const deriveTitle = conversation => {
-  const firstUser = conversation?.messages?.find(message => message.actor === "Carlos");
-  return firstUser?.content?.slice(0, 60).trim() || conversation?.id || "Conversation";
-};
-
-export default function ChatPage({
-  agents,
-  health,
-  nora,
-  openRequest,
-  onOpenOperations,
-}) {
+export default function ChatPage({ health, nora, openRequest, onOpenOperations }) {
   const [conversations, setConversations] = useState([]);
-  const [conversationId, setConversationId] = useState(null);
-  const [conversationModel, setConversationModel] = useState({ provider: "", model: "" });
-  const [modelDraft, setModelDraft] = useState({ provider: "", model: "" });
-  const [messages, setMessages] = useState([]);
+  const [conversation, setConversation] = useState(null);
   const [artifacts, setArtifacts] = useState([]);
   const [models, setModels] = useState([]);
+  const [modelDraft, setModelDraft] = useState({ provider: "", model: "" });
   const [input, setInput] = useState("");
   const [files, setFiles] = useState([]);
-  const [search, setSearch] = useState("");
   const [sending, setSending] = useState(false);
-  const [loadingHistory, setLoadingHistory] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [activeWorkflowId, setActiveWorkflowId] = useState(null);
-  const [activeArtifactId, setActiveArtifactId] = useState("");
-  const [copied, setCopied] = useState(null);
-  const [speaking, setSpeaking] = useState(null);
-  const [listening, setListening] = useState(false);
-  const [savingModel, setSavingModel] = useState(false);
-
+  const [loadingConversation, setLoadingConversation] = useState(false);
+  const [workflowId, setWorkflowId] = useState("");
+  const fileInputRef = useRef(null);
   const textareaRef = useRef(null);
   const requestRef = useRef(null);
-  const recognitionRef = useRef(null);
-  const copyTimerRef = useRef(null);
-  const language = useRef("en-US");
 
-  const agentName = useMemo(() => agents.find(item => item.isNora)?.name || "Nora", [agents]);
-  const providerNames = useMemo(() => models.map(entry => entry.provider), [models]);
-  const modelsFor = provider => models.find(entry => entry.provider === provider)?.models || [];
-  const modelDirty = conversationModel.provider !== modelDraft.provider
-    || conversationModel.model !== modelDraft.model;
+  const providers = useMemo(() => models.map(item => item.provider), [models]);
+  const modelsFor = provider => models.find(item => item.provider === provider)?.models || [];
+  const connected = health?.ok === true;
+  const artifactById = useMemo(
+    () => Object.fromEntries(artifacts.map(item => [item.id, item])),
+    [artifacts],
+  );
 
   const loadCatalog = useCallback(async () => {
     try {
-      const modelsResponse = await api.get(endpoints.models());
-      setModels(modelsResponse.data || []);
+      setModels((await api.get(endpoints.models())).data || []);
     } catch (error) {
-      toast.error(error.response?.data?.error || "Could not load model catalog.");
+      toast.error(error.response?.data?.error || "Could not load models.");
     }
   }, []);
 
-  const loadHistory = useCallback(async ({ quiet = false } = {}) => {
-    if (!quiet) setLoadingHistory(true);
-
+  const loadHistory = useCallback(async () => {
     try {
-      setConversations((await api.get(endpoints.conversations())).data || []);
+      const items = (await api.get(endpoints.conversations())).data || [];
+      items.sort((left, right) => {
+        const leftAt = left.messages?.at(-1)?.at || "";
+        const rightAt = right.messages?.at(-1)?.at || "";
+        return rightAt.localeCompare(leftAt);
+      });
+      setConversations(items);
     } catch (error) {
-      if (!quiet) toast.error(error.response?.data?.error || "Could not load conversations.");
-    } finally {
-      if (!quiet) setLoadingHistory(false);
+      toast.error(error.response?.data?.error || "Could not load conversations.");
     }
   }, []);
 
-  const loadConversation = useCallback(async (id, { quiet = false } = {}) => {
+  const openConversation = useCallback(async id => {
     if (!id) return;
-
+    setLoadingConversation(true);
     try {
       const record = (await api.get(endpoints.conversation(id))).data;
-      setConversationId(record.id);
-      sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, record.id);
-      setMessages(record.messages?.length ? record.messages.map(mapMessage) : []);
-      setActiveWorkflowId(record.workflows?.length ? record.workflows[record.workflows.length - 1] : null);
-
-      const selection = record.nora || { provider: "", model: "" };
-      setConversationModel(selection);
-      setModelDraft(selection);
-
-      const artifactList = (await api.get(endpoints.conversationArtifacts(record.id))).data || [];
-      setArtifacts(artifactList);
-      setActiveArtifactId("");
-      setHistoryOpen(false);
+      const filesResponse = await api.get(endpoints.conversationArtifacts(id));
+      setConversation(record);
+      setArtifacts(filesResponse.data || []);
+      setModelDraft(record.nora || nora || { provider: "", model: "" });
+      setWorkflowId(record.workflows?.at(-1) || "");
+      sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
     } catch (error) {
       sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
-      if (!quiet) toast.error(error.response?.data?.error || "Could not open conversation.");
+      toast.error(error.response?.data?.error || "Could not open conversation.");
+    } finally {
+      setLoadingConversation(false);
     }
-  }, []);
+  }, [nora]);
 
   useEffect(() => {
     loadCatalog();
     loadHistory();
     const stored = sessionStorage.getItem(ACTIVE_CONVERSATION_KEY);
-    if (stored) loadConversation(stored, { quiet: true });
-  }, [loadCatalog, loadHistory, loadConversation]);
+    if (stored) openConversation(stored);
+  }, [loadCatalog, loadHistory, openConversation]);
 
   useEffect(() => {
     if (!openRequest) return;
-    if (openRequest.conversationId) loadConversation(openRequest.conversationId);
+    if (openRequest.conversationId) openConversation(openRequest.conversationId);
     if (openRequest.prefill) {
       setInput(openRequest.prefill);
-      setHistoryOpen(false);
       requestAnimationFrame(() => textareaRef.current?.focus());
     }
-  }, [openRequest?.token]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => () => {
-    requestRef.current?.abort();
-    recognitionRef.current?.abort?.();
-    window.speechSynthesis?.cancel?.();
-    clearTimeout(copyTimerRef.current);
-  }, []);
+  }, [openRequest, openConversation]);
 
   useEffect(() => {
-    if (conversationId || !nora?.provider) return;
-    if (!modelDraft.provider) setModelDraft(nora);
-  }, [nora, conversationId, modelDraft.provider]);
+    if (conversation || modelDraft.provider || !nora?.provider) return;
+    setModelDraft(nora);
+  }, [conversation, modelDraft.provider, nora]);
+
+  useEffect(() => () => requestRef.current?.abort(), []);
 
   const startNew = () => {
     if (sending) return;
-
     sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
-    setConversationId(null);
-    setMessages([]);
+    setConversation(null);
     setArtifacts([]);
+    setWorkflowId("");
     setInput("");
     setFiles([]);
-    setActiveWorkflowId(null);
-    setActiveArtifactId("");
-    setHistoryOpen(false);
-
-    const defaults = nora?.provider
-      ? nora
-      : providerNames.length
-        ? { provider: providerNames[0], model: "" }
-        : { provider: "", model: "" };
-
-    setConversationModel(defaults);
-    setModelDraft(defaults);
+    setModelDraft(nora || { provider: "", model: "" });
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
-  const stopSpeech = () => {
-    window.speechSynthesis?.cancel?.();
-    setSpeaking(null);
-  };
-
-  const speak = (text, index) => {
-    if (!window.speechSynthesis) return toast.error("Speech output is unavailable in this browser.");
-
-    stopSpeech();
-    const utterance = new SpeechSynthesisUtterance(readable(text));
-    utterance.lang = language.current;
-    utterance.onend = () => setSpeaking(null);
-    utterance.onerror = () => setSpeaking(null);
-    setSpeaking(index);
-    window.speechSynthesis.speak(utterance);
-  };
-
-  const copyResponse = async (text, index) => {
-    try {
-      await navigator.clipboard?.writeText(String(text || ""));
-      setCopied(index);
-      clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = setTimeout(() => setCopied(null), 1600);
-    } catch {
-      toast.error("Could not copy the response.");
-    }
-  };
-
-  const toggleListening = () => {
-    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!Recognition) return toast.error("Speech recognition is unavailable. Chrome or Edge is recommended.");
-    if (listening) return recognitionRef.current?.stop?.();
-
-    const recognition = new Recognition();
-    const existing = input.trim();
-    recognition.lang = language.current;
-    recognition.interimResults = true;
-    recognition.onstart = () => setListening(true);
-    recognition.onresult = event => {
-      const transcript = [...event.results].map(result => result[0]?.transcript || "").join("");
-      setInput([existing, transcript.trim()].filter(Boolean).join(" "));
-    };
-    recognition.onerror = event => {
-      if (!["aborted", "no-speech"].includes(event.error)) {
-        toast.error(`Speech recognition failed: ${event.error}`);
-      }
-    };
-    recognition.onend = () => {
-      setListening(false);
-      recognitionRef.current = null;
-    };
-    recognitionRef.current = recognition;
-    recognition.start();
-  };
-
-  const changeProvider = provider => setModelDraft({ provider, model: "" });
-  const changeModel = model => setModelDraft({ provider: modelDraft.provider, model });
-
-  const saveModel = async () => {
-    if (!conversationId) return;
-    if (!modelDraft.provider || !modelDraft.model) return toast.error("Select a provider and model.");
-
-    setSavingModel(true);
-    try {
-      const record = (
-        await api.patch(endpoints.conversationModel(conversationId), {
-          provider: modelDraft.provider,
-          model: modelDraft.model,
-        })
-      ).data;
-      const next = record.nora || modelDraft;
-      setConversationModel(next);
-      setModelDraft(next);
-      toast.success("Conversation model updated.");
-    } catch (error) {
-      toast.error(error.response?.data?.error || "Could not update conversation model.");
-      setModelDraft(conversationModel);
-    } finally {
-      setSavingModel(false);
-    }
-  };
-
   const ensureConversation = async () => {
-    if (conversationId) return conversationId;
-
-    const provider = modelDraft.provider || nora?.provider || providerNames[0];
-    const model = modelDraft.model || modelsFor(provider)[0] || "";
+    if (conversation?.id) return conversation.id;
+    const provider = modelDraft.provider || nora?.provider || providers[0] || "";
+    const model = modelDraft.model || nora?.model || modelsFor(provider)[0] || "";
     if (!provider || !model) throw new Error("Select a provider and model before sending.");
 
     const created = (await api.post(endpoints.conversations(), { provider, model })).data;
-    setConversationId(created.id);
+    setConversation(created);
+    setModelDraft(created.nora || { provider, model });
     sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, created.id);
-
-    const next = created.nora || { provider, model };
-    setConversationModel(next);
-    setModelDraft(next);
-    await loadCatalog();
     return created.id;
   };
 
-  const refreshSettledWorkflow = useCallback(async () => {
-    if (!conversationId) return;
-    await loadConversation(conversationId, { quiet: true });
-    await loadHistory({ quiet: true });
-  }, [conversationId, loadConversation, loadHistory]);
+  const saveModel = async () => {
+    if (!conversation?.id || !modelDraft.provider || !modelDraft.model) return;
+    try {
+      const updated = (
+        await api.patch(endpoints.conversationModel(conversation.id), modelDraft)
+      ).data;
+      setConversation(updated);
+      setModelDraft(updated.nora || modelDraft);
+      toast.success("Conversation model updated.");
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Could not update model.");
+    }
+  };
 
   const send = async event => {
-    event?.preventDefault?.();
+    event.preventDefault();
     const message = input.trim();
-    if (sending || (!message && !files.length)) return;
+    if (sending || (!message && files.length === 0)) return;
 
-    const requestContent = message || "Review the attached files.";
+    const content = message || "Review the attached files.";
     const pendingFiles = [...files];
-    let requestConversationId = conversationId;
-
-    setActiveWorkflowId(null);
+    const optimistic = {
+      id: `pending-${Date.now()}`,
+      actor: "Carlos",
+      at: new Date().toISOString(),
+      content,
+      artifacts: [],
+    };
+    setConversation(current => current
+      ? { ...current, messages: [...(current.messages || []), optimistic] }
+      : { id: "", messages: [optimistic], workflows: [], nora: modelDraft });
+    setInput("");
+    setFiles([]);
     setSending(true);
-    setHistoryOpen(false);
 
     const controller = new AbortController();
     requestRef.current = controller;
-    setMessages(current => [...current, {
-      id: `pending-${Date.now()}`,
-      role: "user",
-      at: new Date().toISOString(),
-      content: requestContent,
-    }]);
-    setInput("");
-    setFiles([]);
 
     try {
       const id = await ensureConversation();
-      requestConversationId = id;
       const artifactIds = [];
 
       for (const item of pendingFiles) {
-        const payload = await filePayload(item.file);
+        const payload = await filePayload(item);
         const created = (
           await api.post(endpoints.conversationArtifacts(id), {
-            name: payload.name,
-            type: payload.type,
+            ...payload,
             createdBy: "Carlos",
-            content: payload.content,
-            encoding: "base64",
           })
         ).data;
         artifactIds.push(created.id);
@@ -337,213 +210,237 @@ export default function ChatPage({
       const result = (
         await api.post(
           endpoints.conversationRequest(id),
-          { content: requestContent, artifacts: artifactIds },
+          { content, artifacts: artifactIds },
           { signal: controller.signal },
         )
       ).data;
 
-      if (result.workflow?.id) setActiveWorkflowId(result.workflow.id);
-
-      const record = (await api.get(endpoints.conversation(id))).data;
-      setMessages(record.messages?.map(mapMessage) || []);
-      setArtifacts((await api.get(endpoints.conversationArtifacts(id))).data || []);
-
-      if (result.action === "tool") toast.success(`Tool ${result.tool?.name} saved.`);
-      if (result.action === "skill") toast.success(`Skill ${result.skill?.name} saved.`);
-      if (result.action === "create_process") toast.success(`Process ${result.process?.name} saved.`);
-      if (result.action === "create_schedule") toast.success(`Schedule ${result.schedule?.id} created.`);
-      if (result.action === "plan") toast.success("Creation plan completed.");
-      if (result.action === "failed") {
-        toast.error(result.error?.message || "Nora could not complete the request.");
-      }
-
-      await loadHistory({ quiet: true });
+      if (result.workflow?.id) setWorkflowId(result.workflow.id);
+      await openConversation(id);
+      await loadHistory();
     } catch (error) {
-      if (error?.code === "ERR_CANCELED" || error?.name === "CanceledError") {
-        toast.message("Response connection stopped.");
-      } else {
+      if (error?.code !== "ERR_CANCELED" && error?.name !== "CanceledError") {
         toast.error(error.response?.data?.error || error.message || "Request failed.");
       }
-      if (requestConversationId) await loadConversation(requestConversationId, { quiet: true });
+      if (conversation?.id) await openConversation(conversation.id);
     } finally {
       requestRef.current = null;
       setSending(false);
     }
   };
 
-  const stopResponse = async () => {
+  const stop = async () => {
     requestRef.current?.abort();
-    if (!activeWorkflowId) return;
-
+    if (!workflowId) return;
     try {
-      await api.post(endpoints.workflowCancel(activeWorkflowId));
+      await api.post(endpoints.workflowCancel(workflowId));
+      toast.message("Workflow cancelled.");
     } catch (error) {
-      toast.error(
-        error.response?.data?.error
-        || "The response was disconnected, but the Workflow could not be cancelled.",
-      );
+      toast.error(error.response?.data?.error || "Could not cancel workflow.");
     }
   };
 
-  const activeArtifact = artifacts.find(item => item.id === activeArtifactId) || null;
-  const title = conversationId
-    ? deriveTitle({
-      id: conversationId,
-      messages: messages.map(item => ({
-        actor: item.role === "user" ? "Carlos" : "Nora",
-        content: item.content,
-        at: item.at,
-      })),
-    })
-    : "New conversation";
-  const connected = health?.ok === true;
+  const addFiles = event => {
+    const selected = [...(event.target.files || [])];
+    if (!selected.length) return;
+    setFiles(current => [...current, ...selected]);
+    event.target.value = "";
+  };
+
+  const removeFile = index => setFiles(current => current.filter((_, itemIndex) => itemIndex !== index));
+
+  const openArtifact = artifact => {
+    if (!conversation?.id || !artifact?.id) return;
+    const url = `${api.defaults.baseURL}${endpoints.conversationArtifact(conversation.id, artifact.id)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const modelChanged = conversation?.id
+    && (conversation.nora?.provider !== modelDraft.provider || conversation.nora?.model !== modelDraft.model);
 
   return (
-    <div
-      className={`chat ${historyOpen ? "chat--history-open" : ""} ${activeArtifact ? "chat--artifact-open" : ""}`}
-    >
-      <section className="chat__main">
-        <header className="chat__header">
-          <div className="chat__header-leading">
-            <button
-              type="button"
-              className="icon-button chat__history-toggle"
-              onClick={() => setHistoryOpen(current => !current)}
-              aria-label="Open conversation history"
-            >
-              <IconHistory size={19} />
-            </button>
-            <div className="chat__identity">
-              <span className="chat__agent-label">{agentName} · Chief of Staff</span>
-              <div className="chat__title">
-                <h1 className="chat__title-text">{title}</h1>
-              </div>
-            </div>
+    <div className="workspace-page chat-page">
+      <aside className="chat-history">
+        <header className="chat-history__header">
+          <div>
+            <span className="eyebrow">Carlos ↔ Nora</span>
+            <h1>Chat</h1>
           </div>
+          <button type="button" className="icon-button" onClick={startNew} aria-label="New conversation">
+            <IconPlus size={18} />
+          </button>
+        </header>
 
-          <div className="chat__header-actions">
-            <div className="chat__model-controls" aria-label="Conversation model">
-              <label className="chat__model-field">
-                <span className="chat__model-field-label">Provider</span>
-                <select
-                  className="chat__model-select"
-                  value={modelDraft.provider}
-                  onChange={event => changeProvider(event.target.value)}
-                >
-                  {!providerNames.includes(modelDraft.provider) && modelDraft.provider && (
-                    <option value={modelDraft.provider}>{modelDraft.provider} · current</option>
-                  )}
-                  {providerNames.map(name => <option key={name} value={name}>{name}</option>)}
-                </select>
-              </label>
-              <label className="chat__model-field chat__model-field--model">
-                <span className="chat__model-field-label">Model</span>
-                <select
-                  className="chat__model-select chat__model-select--model"
-                  value={modelDraft.model}
-                  onChange={event => changeModel(event.target.value)}
-                >
-                  <option value="">Select model</option>
-                  {modelsFor(modelDraft.provider).map(model => (
-                    <option key={model} value={model}>{model}</option>
-                  ))}
-                  {!modelsFor(modelDraft.provider).includes(modelDraft.model) && modelDraft.model && (
-                    <option value={modelDraft.model}>{modelDraft.model} · current</option>
-                  )}
-                </select>
-              </label>
-              {conversationId && modelDirty && (
-                <button
-                  type="button"
-                  className="secondary-button chat__model-save"
-                  onClick={saveModel}
-                  disabled={savingModel || !modelDraft.provider || !modelDraft.model}
-                >
-                  {savingModel ? "Saving…" : "Save"}
-                </button>
-              )}
+        <button type="button" className="button button--primary chat-history__new" onClick={startNew}>
+          <IconPlus size={15} /> New conversation
+        </button>
+
+        <div className="chat-history__list">
+          {!conversations.length ? (
+            <div className="empty-state empty-state--compact">
+              <IconMessageCircle size={22} stroke={1.5} />
+              <strong>No conversations yet</strong>
+              <span>Start with Nora.</span>
             </div>
-            <StatusBadge
-              className="chat__backend-status"
-              tone={connected ? "success" : "warning"}
+          ) : conversations.map(item => (
+            <button
+              key={item.id}
+              type="button"
+              className={`conversation-row ${conversation?.id === item.id ? "conversation-row--active" : ""}`}
+              onClick={() => openConversation(item.id)}
             >
-              {connected ? "Backend online" : "Backend offline"}
-            </StatusBadge>
-            <button type="button" className="secondary-button" onClick={startNew} disabled={sending}>
-              <IconPlus size={16} />
-              <span>New</span>
+              <strong>{conversationTitle(item)}</strong>
+              <small>{formatTime(item.messages?.at(-1)?.at)}</small>
             </button>
+          ))}
+        </div>
+      </aside>
+
+      <section className="chat-workspace">
+        <header className="page-header chat-workspace__header">
+          <div className="page-header__copy">
+            <span className="eyebrow">Nora · Chief of Staff</span>
+            <h1>{conversation ? conversationTitle(conversation) : "New conversation"}</h1>
+            <p>{connected ? "Platform online" : "Platform offline"}</p>
+          </div>
+          <div className="model-control">
+            <select
+              aria-label="Provider"
+              value={modelDraft.provider}
+              onChange={event => setModelDraft({ provider: event.target.value, model: "" })}
+            >
+              {!providers.includes(modelDraft.provider) && modelDraft.provider && (
+                <option value={modelDraft.provider}>{modelDraft.provider}</option>
+              )}
+              {providers.map(provider => <option key={provider} value={provider}>{provider}</option>)}
+            </select>
+            <select
+              aria-label="Model"
+              value={modelDraft.model}
+              onChange={event => setModelDraft(current => ({ ...current, model: event.target.value }))}
+            >
+              <option value="">Select model</option>
+              {modelsFor(modelDraft.provider).map(model => <option key={model} value={model}>{model}</option>)}
+              {!modelsFor(modelDraft.provider).includes(modelDraft.model) && modelDraft.model && (
+                <option value={modelDraft.model}>{modelDraft.model}</option>
+              )}
+            </select>
+            {modelChanged && (
+              <button type="button" className="button button--quiet" onClick={saveModel}>Save</button>
+            )}
           </div>
         </header>
 
-        <div className="chat__workspace">
-          <ChatThread
-            messages={messages}
-            agentName={agentName}
-            artifacts={artifacts}
-            activeArtifactId={activeArtifactId}
-            onArtifactSelect={setActiveArtifactId}
-            sending={sending}
-            copied={copied}
-            onCopy={copyResponse}
-            speaking={speaking}
-            onSpeak={speak}
-            onStopSpeak={stopSpeech}
-            onOpenOperations={onOpenOperations}
-            onWorkflowSettled={refreshSettledWorkflow}
-            workflowId={activeWorkflowId}
-          />
-          <ChatComposer
-            input={input}
-            setInput={setInput}
-            onSend={send}
-            sending={sending}
-            onStop={stopResponse}
-            files={files}
-            setFiles={setFiles}
-            agentName={agentName}
-            textareaRef={textareaRef}
-            listening={listening}
-            toggleListening={toggleListening}
-          />
+        <div className="chat-thread">
+          {loadingConversation ? (
+            <div className="page-state"><span className="spinner" /> Loading conversation</div>
+          ) : !conversation?.messages?.length ? (
+            <div className="chat-welcome">
+              <div className="chat-welcome__mark">N</div>
+              <h2>What do you need?</h2>
+              <p>Ask Nora directly. She decides whether to answer, use a capability, or start a Workflow.</p>
+            </div>
+          ) : (
+            <div className="chat-thread__messages">
+              {conversation.messages.map(message => {
+                const isCarlos = message.actor === "Carlos";
+                return (
+                  <article key={message.id} className={`message ${isCarlos ? "message--carlos" : "message--nora"}`}>
+                    <header className="message__header">
+                      <strong>{isCarlos ? "Carlos" : "Nora"}</strong>
+                      <small>{formatTime(message.at)}</small>
+                    </header>
+                    <div className="message__content">{message.content}</div>
+                    {!!message.artifacts?.length && (
+                      <div className="message__artifacts">
+                        {message.artifacts.map(id => {
+                          const artifact = artifactById[id];
+                          return artifact ? (
+                            <button key={id} type="button" onClick={() => openArtifact(artifact)}>
+                              <IconFile size={14} /> {artifact.name}
+                            </button>
+                          ) : null;
+                        })}
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
+              {sending && (
+                <article className="message message--nora message--thinking">
+                  <header className="message__header"><strong>Nora</strong></header>
+                  <div className="message__content"><span className="spinner" /> Working…</div>
+                </article>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="chat-bottom">
+          {workflowId && (
+            <button type="button" className="workflow-link" onClick={() => onOpenOperations?.(workflowId)}>
+              <IconRoute size={16} />
+              <span>Workflow {workflowId}</span>
+              <strong>Open Operations</strong>
+            </button>
+          )}
+
+          {artifacts.length > 0 && (
+            <div className="artifact-strip" aria-label="Conversation artifacts">
+              <span><IconFolder size={15} /> Artifacts</span>
+              {artifacts.map(artifact => (
+                <button key={artifact.id} type="button" onClick={() => openArtifact(artifact)}>{artifact.name}</button>
+              ))}
+            </div>
+          )}
+
+          <form className="chat-composer" onSubmit={send}>
+            {files.length > 0 && (
+              <div className="chat-composer__files">
+                {files.map((file, index) => (
+                  <span key={`${file.name}-${file.size}-${index}`}>
+                    <IconFile size={13} /> {file.name}
+                    <button type="button" onClick={() => removeFile(index)} aria-label={`Remove ${file.name}`}>
+                      <IconX size={12} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={event => setInput(event.target.value)}
+              onKeyDown={event => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+              placeholder="Message Nora…"
+              rows={1}
+            />
+            <div className="chat-composer__actions">
+              <input ref={fileInputRef} type="file" multiple hidden onChange={addFiles} />
+              <button type="button" className="icon-button" onClick={() => fileInputRef.current?.click()} aria-label="Attach files">
+                <IconPaperclip size={18} />
+              </button>
+              {sending ? (
+                <button type="button" className="button button--danger" onClick={stop}>Stop</button>
+              ) : (
+                <button
+                  type="submit"
+                  className="composer-send"
+                  disabled={!input.trim() && files.length === 0}
+                  aria-label="Send message"
+                >
+                  <IconArrowUp size={18} />
+                </button>
+              )}
+            </div>
+          </form>
         </div>
       </section>
-
-      <aside
-        className={`chat__history ${historyOpen ? "chat__history--open" : ""}`}
-        aria-label="Conversation history"
-      >
-        <ConversationList
-          conversations={conversations}
-          conversationId={conversationId}
-          onOpen={id => loadConversation(id)}
-          onRefresh={() => loadHistory()}
-          onNew={startNew}
-          search={search}
-          setSearch={setSearch}
-          loading={loadingHistory}
-          onClose={() => setHistoryOpen(false)}
-        />
-      </aside>
-
-      {historyOpen && (
-        <button
-          type="button"
-          className="chat__history-backdrop"
-          onClick={() => setHistoryOpen(false)}
-          aria-label="Close conversation history"
-        />
-      )}
-
-      {activeArtifact && (
-        <ArtifactPreview
-          conversationId={conversationId}
-          artifact={activeArtifact}
-          artifacts={artifacts}
-          onSelect={setActiveArtifactId}
-          onClose={() => setActiveArtifactId("")}
-        />
-      )}
     </div>
   );
 }

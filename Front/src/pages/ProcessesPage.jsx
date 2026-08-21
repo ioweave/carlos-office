@@ -2,17 +2,16 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   IconArrowLeft,
   IconBolt,
-  IconClock,
+  IconCalendarClock,
   IconGitBranch,
   IconPlus,
   IconRefresh,
-  IconRoute,
   IconSparkles,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
+
 import api, { endpoints } from "../api";
 import ProcessGraph from "../components/ProcessGraph";
-import StateView from "../components/StateView";
 
 const EMPTY_SCHEDULE = {
   process: "",
@@ -27,30 +26,20 @@ const formatTime = value => {
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
 };
 
-const scheduleTimingLabel = schedule => {
-  if (schedule.timing?.type === "at") return `once · ${formatTime(schedule.timing.value)}`;
-  return `cron UTC · ${schedule.timing?.value || "—"}`;
-};
-
-const scheduleValue = draft => {
-  const value = draft.timingValue.trim();
-  if (draft.timingType === "cron") return value;
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) throw new Error("Choose a valid local date and time.");
-  return date.toISOString();
+const timingLabel = schedule => {
+  if (schedule.timing?.type === "at") return `Once · ${formatTime(schedule.timing.value)}`;
+  return `Cron UTC · ${schedule.timing?.value || "—"}`;
 };
 
 export default function ProcessesPage({ onAskNora }) {
   const [processes, setProcesses] = useState([]);
   const [schedules, setSchedules] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [selectedName, setSelectedName] = useState(null);
+  const [view, setView] = useState("library");
+  const [selectedName, setSelectedName] = useState("");
   const [selectedTaskId, setSelectedTaskId] = useState("");
-  const [tab, setTab] = useState("library");
-  const [scheduleDraft, setScheduleDraft] = useState(EMPTY_SCHEDULE);
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
+  const [scheduleDraft, setScheduleDraft] = useState(EMPTY_SCHEDULE);
 
   const load = useCallback(async () => {
     try {
@@ -60,9 +49,8 @@ export default function ProcessesPage({ onAskNora }) {
       ]);
       setProcesses(processResponse.data || []);
       setSchedules(scheduleResponse.data || []);
-      setError("");
-    } catch (fetchError) {
-      setError(fetchError.response?.data?.error || "Could not load processes.");
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Could not load Processes.");
     } finally {
       setLoading(false);
     }
@@ -74,197 +62,158 @@ export default function ProcessesPage({ onAskNora }) {
     () => processes.find(item => item.name === selectedName) || null,
     [processes, selectedName],
   );
-  const selectedTask = useMemo(
-    () => selected?.tasks?.[selectedTaskId] || null,
-    [selected, selectedTaskId],
-  );
+  const selectedTask = selected?.tasks?.[selectedTaskId] || null;
 
   const createSchedule = async event => {
     event.preventDefault();
-    if (!scheduleDraft.process) return toast.error("Select a process.");
-    if (!scheduleDraft.timingValue.trim()) return toast.error("Provide a schedule value.");
+    if (!scheduleDraft.process || !scheduleDraft.timingValue.trim()) return;
 
-    let timingValue;
-    try {
-      timingValue = scheduleValue(scheduleDraft);
-    } catch (validationError) {
-      return toast.error(validationError.message);
+    let value = scheduleDraft.timingValue.trim();
+    if (scheduleDraft.timingType === "at") {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return toast.error("Choose a valid local date and time.");
+      value = date.toISOString();
     }
 
-    setBusy("schedule");
+    setBusy("create-schedule");
     try {
       await api.post(endpoints.schedules(), {
         process: scheduleDraft.process,
         enabled: scheduleDraft.enabled,
-        timing: { type: scheduleDraft.timingType, value: timingValue },
+        timing: { type: scheduleDraft.timingType, value },
         inputs: {},
         config: {},
       });
-      toast.success("Schedule created.");
       setScheduleDraft(EMPTY_SCHEDULE);
+      toast.success("Schedule created.");
       await load();
-    } catch (fetchError) {
-      toast.error(fetchError.response?.data?.error || "Could not create schedule.");
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Could not create schedule.");
     } finally {
       setBusy("");
     }
   };
 
   const toggleSchedule = async schedule => {
+    setBusy(schedule.id);
     try {
       await api.patch(endpoints.schedule(schedule.id), { enabled: !schedule.enabled });
       await load();
-    } catch (fetchError) {
-      toast.error(fetchError.response?.data?.error || "Could not update schedule.");
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Could not update schedule.");
+    } finally {
+      setBusy("");
     }
   };
 
   const triggerSchedule = async schedule => {
+    setBusy(schedule.id);
     try {
       await api.post(endpoints.scheduleTrigger(schedule.id));
-      toast.success("Schedule triggered.");
+      toast.success("Workflow started.");
       await load();
-    } catch (fetchError) {
-      toast.error(fetchError.response?.data?.error || "Could not trigger schedule.");
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Could not trigger schedule.");
+    } finally {
+      setBusy("");
     }
   };
 
   if (loading) {
-    return <div className="processes-page redesign-page"><StateView variant="loading" /></div>;
-  }
-  if (error && !processes.length) {
-    return (
-      <div className="processes-page redesign-page">
-        <StateView
-          variant="error"
-          message={error}
-          actions={(
-            <button type="button" className="secondary-button" onClick={load}>
-              <IconRefresh size={15} /> Retry
-            </button>
-          )}
-        />
-      </div>
-    );
+    return <div className="workspace-page"><div className="page-state"><span className="spinner" /> Loading Processes</div></div>;
   }
 
   if (selected) {
-    const taskList = Object.entries(selected.tasks || {}).map(([id, task]) => ({ id, ...task }));
-
+    const taskEntries = Object.entries(selected.tasks || {});
     return (
-      <div className="process-studio redesign-page">
-        <header className="redesign-header">
-          <div className="redesign-header__leading">
+      <div className="workspace-page process-studio">
+        <header className="page-header">
+          <div className="page-header__leading">
             <button
               type="button"
-              className="icon-button redesign-header__back"
-              onClick={() => setSelectedName(null)}
-              aria-label="Back to library"
+              className="icon-button"
+              onClick={() => {
+                setSelectedName("");
+                setSelectedTaskId("");
+              }}
+              aria-label="Back to Process library"
             >
               <IconArrowLeft size={18} />
             </button>
-            <span className="eyebrow">Process definition · read-only</span>
-            <h1 className="redesign-header__title">{selected.name}</h1>
-            <p className="redesign-header__subtitle">{selected.purpose || "No purpose recorded."}</p>
+            <div className="page-header__copy">
+              <span className="eyebrow">Process definition</span>
+              <h1>{selected.name}</h1>
+              <p>{selected.purpose || "Reusable procedure coordinated by Nora."}</p>
+            </div>
           </div>
-          <button
-            type="button"
-            className="primary-button"
-            onClick={() => onAskNora?.(
-              `Create or update the Process ${selected.name} as a reusable Carlos Office process.`,
-            )}
-          >
-            <IconSparkles size={15} /> Ask Nora to update
-          </button>
+          <div className="page-header__actions">
+            <button
+              type="button"
+              className="button button--quiet"
+              onClick={() => onAskNora?.(`Run the Process ${selected.name}. Ask me for any required inputs first.`)}
+            >
+              <IconBolt size={15} /> Run with Nora
+            </button>
+            <button
+              type="button"
+              className="button button--primary"
+              onClick={() => onAskNora?.(`Update the reusable Process ${selected.name}: `)}
+            >
+              <IconSparkles size={15} /> Ask Nora to edit
+            </button>
+          </div>
         </header>
 
-        <div className="process-studio__body">
-          <div className="process-studio__graph">
+        <div className="studio-layout">
+          <section className="studio-layout__canvas">
+            <div className="studio-toolbar">
+              <span><IconGitBranch size={15} /> {taskEntries.length} nodes</span>
+              <span>{(selected.edges || []).length} edges</span>
+              <span>{(selected.inputs || []).length} inputs</span>
+            </div>
             <ProcessGraph
               tasks={selected.tasks}
               edges={selected.edges}
               start={selected.start}
-              end={selected.end}
               selectedId={selectedTaskId}
               onSelect={node => setSelectedTaskId(node.id)}
             />
-          </div>
-          <aside className="process-studio__inspector">
-            <section className="process-studio__inspector-section">
-              <span className="eyebrow">Process</span>
-              <dl className="meta-list">
-                <div className="meta-list__row">
-                  <dt className="meta-list__term">Inputs</dt>
-                  <dd className="meta-list__value">{(selected.inputs || []).join(", ") || "—"}</dd>
+          </section>
+
+          <aside className="inspector-panel">
+            {!selectedTask ? (
+              <div className="inspector-panel__empty">
+                <IconGitBranch size={24} stroke={1.4} />
+                <strong>Select a node</strong>
+                <span>Inspect the Task definition, Agent binding, Tools, Skills, and completion criteria.</span>
+              </div>
+            ) : (
+              <>
+                <header className="inspector-panel__header">
+                  <span className="eyebrow">{selectedTask.type || "Task"}</span>
+                  <h2>{selectedTask.objective || selectedTaskId}</h2>
+                  <code>{selectedTaskId}</code>
+                </header>
+                <div className="definition-list">
+                  <div><span>Objective</span><strong>{selectedTask.objective || "—"}</strong></div>
+                  <div><span>Agent</span><strong>{selectedTask.agent || "Nora selects"}</strong></div>
+                  <div><span>Model</span><strong>{selectedTask.model || "Agent default"}</strong></div>
+                  <div><span>Inputs</span><strong>{(selectedTask.inputs || []).join(", ") || "—"}</strong></div>
+                  <div><span>Output</span><strong>{selectedTask.output || "—"}</strong></div>
+                  <div><span>Tools</span><strong>{(selectedTask.tools || []).join(", ") || "Nora selects"}</strong></div>
+                  <div><span>Skills</span><strong>{(selectedTask.skills || []).join(", ") || "Nora selects"}</strong></div>
+                  <div><span>Completion</span><strong>{selectedTask.completion || "—"}</strong></div>
                 </div>
-                <div className="meta-list__row">
-                  <dt className="meta-list__term">Start</dt>
-                  <dd className="meta-list__value">{selected.start}</dd>
-                </div>
-                <div className="meta-list__row">
-                  <dt className="meta-list__term">End</dt>
-                  <dd className="meta-list__value">{selected.end}</dd>
-                </div>
-                <div className="meta-list__row">
-                  <dt className="meta-list__term">Tasks</dt>
-                  <dd className="meta-list__value">{taskList.length}</dd>
-                </div>
-              </dl>
-            </section>
-            {selectedTask && (
-              <section className="process-studio__inspector-section">
-                <span className="eyebrow">Task · {selectedTask.type}</span>
-                <h2 className="process-studio__inspector-title">
-                  {selectedTask.objective || selectedTaskId}
-                </h2>
-                <dl className="meta-list">
-                  <div className="meta-list__row">
-                    <dt className="meta-list__term">Objective</dt>
-                    <dd className="meta-list__value">{selectedTask.objective || "—"}</dd>
-                  </div>
-                  <div className="meta-list__row">
-                    <dt className="meta-list__term">Inputs</dt>
-                    <dd className="meta-list__value">{(selectedTask.inputs || []).join(", ") || "—"}</dd>
-                  </div>
-                  <div className="meta-list__row">
-                    <dt className="meta-list__term">Output</dt>
-                    <dd className="meta-list__value">{selectedTask.output || "—"}</dd>
-                  </div>
-                  <div className="meta-list__row">
-                    <dt className="meta-list__term">Completion</dt>
-                    <dd className="meta-list__value">{selectedTask.completion || "—"}</dd>
-                  </div>
-                  <div className="meta-list__row">
-                    <dt className="meta-list__term">Tools</dt>
-                    <dd className="meta-list__value">{(selectedTask.tools || []).join(", ") || "—"}</dd>
-                  </div>
-                  <div className="meta-list__row">
-                    <dt className="meta-list__term">Skills</dt>
-                    <dd className="meta-list__value">{(selectedTask.skills || []).join(", ") || "—"}</dd>
-                  </div>
-                  <div className="meta-list__row">
-                    <dt className="meta-list__term">Agent</dt>
-                    <dd className="meta-list__value">{selectedTask.agent || "—"}</dd>
-                  </div>
-                  <div className="meta-list__row">
-                    <dt className="meta-list__term">Provider</dt>
-                    <dd className="meta-list__value">{selectedTask.provider || "—"}</dd>
-                  </div>
-                  <div className="meta-list__row">
-                    <dt className="meta-list__term">Model</dt>
-                    <dd className="meta-list__value">{selectedTask.model || "—"}</dd>
-                  </div>
-                </dl>
                 <button
                   type="button"
-                  className="secondary-button"
+                  className="button button--quiet inspector-panel__action"
                   onClick={() => onAskNora?.(
-                    `Create or update the Process ${selected.name}; revise task ${selectedTask.objective || selectedTaskId}.`,
+                    `Update Process ${selected.name}, specifically Task ${selectedTaskId} (${selectedTask.objective || selectedTaskId}): `,
                   )}
                 >
-                  <IconSparkles size={15} /> Ask Nora to revise
+                  <IconSparkles size={15} /> Ask Nora to revise Task
                 </button>
-              </section>
+              </>
             )}
           </aside>
         </div>
@@ -273,179 +222,170 @@ export default function ProcessesPage({ onAskNora }) {
   }
 
   return (
-    <div className="processes-page redesign-page">
-      <header className="redesign-header">
-        <div className="redesign-header__leading">
-          <span className="eyebrow">Reusable office procedures</span>
-          <h1 className="redesign-header__title">Processes</h1>
-          <p className="redesign-header__subtitle">
-            Read-only Process definitions and their Schedules. Ask Nora to create or revise reusable procedures.
-          </p>
+    <div className="workspace-page processes-page">
+      <header className="page-header">
+        <div className="page-header__copy">
+          <span className="eyebrow">Design how work happens</span>
+          <h1>Processes</h1>
+          <p>Reusable graph definitions: Start → Tasks → Edges → End. Schedules live with the Process they execute.</p>
         </div>
         <button
           type="button"
-          className="primary-button"
+          className="button button--primary"
           onClick={() => onAskNora?.("Create a new reusable Carlos Office Process for: ")}
         >
           <IconSparkles size={15} /> Ask Nora to create
         </button>
       </header>
 
-      <nav className="redesign-tabs" aria-label="Process view">
+      <div className="segmented-control page-tabs" role="tablist" aria-label="Processes view">
         <button
           type="button"
-          className={tab === "library" ? "redesign-tabs__tab redesign-tabs__tab--active" : "redesign-tabs__tab"}
-          onClick={() => setTab("library")}
+          className={view === "library" ? "segmented-control__item segmented-control__item--active" : "segmented-control__item"}
+          onClick={() => setView("library")}
         >
           Library
         </button>
         <button
           type="button"
-          className={tab === "schedules" ? "redesign-tabs__tab redesign-tabs__tab--active" : "redesign-tabs__tab"}
-          onClick={() => setTab("schedules")}
+          className={view === "schedules" ? "segmented-control__item segmented-control__item--active" : "segmented-control__item"}
+          onClick={() => setView("schedules")}
         >
           Schedules
         </button>
-      </nav>
+      </div>
 
-      {tab === "library" && (
+      {view === "library" ? (
         <section className="process-library">
           {!processes.length ? (
-            <StateView
-              variant="empty"
-              icon={IconRoute}
-              title="No Process definitions"
-              message="Ask Nora to create a Process, or promote an ad-hoc Workflow from Operations."
-            />
+            <div className="empty-state">
+              <IconGitBranch size={28} stroke={1.4} />
+              <strong>No reusable Processes</strong>
+              <span>Ask Nora to create one when a procedure becomes worth repeating.</span>
+            </div>
           ) : (
-            <ul className="process-library__list">
-              {processes.map(item => {
-                const taskCount = Object.keys(item.tasks || {}).length;
-
-                return (
-                  <li key={item.name}>
-                    <button
-                      type="button"
-                      className="process-library__item"
-                      onClick={() => {
-                        setSelectedName(item.name);
-                        setSelectedTaskId("");
-                      }}
-                    >
-                      <span className="process-library__item-icon"><IconGitBranch size={18} /></span>
-                      <span className="process-library__item-body">
-                        <strong className="process-library__item-name">{item.name}</strong>
-                        <small className="process-library__item-meta">
-                          {item.purpose || "No purpose"} · {taskCount} tasks
-                        </small>
-                      </span>
-                      <span className="process-library__item-inputs">{(item.inputs || []).join(", ")}</span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+            <div className="process-grid">
+              {processes.map(process => (
+                <button
+                  key={process.name}
+                  type="button"
+                  className="process-card"
+                  onClick={() => setSelectedName(process.name)}
+                >
+                  <span className="process-card__icon"><IconGitBranch size={18} /></span>
+                  <span className="process-card__copy">
+                    <strong>{process.name}</strong>
+                    <span>{process.purpose || "Reusable Process"}</span>
+                  </span>
+                  <span className="process-card__meta">
+                    {Object.keys(process.tasks || {}).length} nodes · {(process.edges || []).length} edges
+                  </span>
+                </button>
+              ))}
+            </div>
           )}
         </section>
-      )}
-
-      {tab === "schedules" && (
-        <section className="process-schedules">
-          <form className="process-schedules__form" onSubmit={createSchedule}>
-            <h2 className="process-schedules__form-title">New schedule</h2>
-            <label className="process-schedules__form-field">
+      ) : (
+        <section className="schedule-workspace">
+          <form className="schedule-form panel" onSubmit={createSchedule}>
+            <div className="panel__header">
+              <div>
+                <span className="eyebrow">Timed execution</span>
+                <h2>New schedule</h2>
+              </div>
+              <IconCalendarClock size={20} />
+            </div>
+            <label className="field">
               <span>Process</span>
               <select
                 value={scheduleDraft.process}
-                onChange={event => setScheduleDraft({ ...scheduleDraft, process: event.target.value })}
+                onChange={event => setScheduleDraft(current => ({ ...current, process: event.target.value }))}
                 required
               >
-                <option value="">Select a process…</option>
-                {processes.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}
+                <option value="">Select Process</option>
+                {processes.map(process => <option key={process.name} value={process.name}>{process.name}</option>)}
               </select>
             </label>
-            <label className="process-schedules__form-field">
-              <span>Timing</span>
+            <label className="field">
+              <span>Timing type</span>
               <select
                 value={scheduleDraft.timingType}
-                onChange={event => setScheduleDraft({
-                  ...scheduleDraft,
+                onChange={event => setScheduleDraft(current => ({
+                  ...current,
                   timingType: event.target.value,
                   timingValue: "",
-                })}
+                }))}
               >
-                <option value="cron">cron (UTC)</option>
-                <option value="at">one time (your local time)</option>
+                <option value="cron">Recurring · cron UTC</option>
+                <option value="at">One time · local time</option>
               </select>
             </label>
-            <label className="process-schedules__form-field">
-              <span>{scheduleDraft.timingType === "at" ? "Local date and time" : "UTC cron expression"}</span>
+            <label className="field">
+              <span>{scheduleDraft.timingType === "at" ? "Local date and time" : "Cron expression (UTC)"}</span>
               <input
                 type={scheduleDraft.timingType === "at" ? "datetime-local" : "text"}
                 value={scheduleDraft.timingValue}
-                onChange={event => setScheduleDraft({ ...scheduleDraft, timingValue: event.target.value })}
-                placeholder={scheduleDraft.timingType === "cron" ? "0 14 * * *" : undefined}
+                onChange={event => setScheduleDraft(current => ({ ...current, timingValue: event.target.value }))}
+                placeholder={scheduleDraft.timingType === "cron" ? "0 13 * * *" : undefined}
                 required
               />
             </label>
-            <label className="redesign-switch">
+            <label className="check-field">
               <input
-                className="redesign-switch__input"
                 type="checkbox"
                 checked={scheduleDraft.enabled}
-                onChange={event => setScheduleDraft({ ...scheduleDraft, enabled: event.target.checked })}
+                onChange={event => setScheduleDraft(current => ({ ...current, enabled: event.target.checked }))}
               />
-              <span>Enabled</span>
+              <span>Enabled immediately</span>
             </label>
-            <button
-              type="submit"
-              className="primary-button process-schedules__form-submit"
-              disabled={!!busy}
-            >
+            <button type="submit" className="button button--primary" disabled={busy === "create-schedule"}>
               <IconPlus size={15} /> Create schedule
             </button>
           </form>
 
-          <div className="process-schedules__list">
-            <h2 className="process-schedules__list-title">Schedules</h2>
+          <div className="schedule-list panel">
+            <div className="panel__header">
+              <div>
+                <span className="eyebrow">Existing timers</span>
+                <h2>Schedules</h2>
+              </div>
+              <button type="button" className="icon-button" onClick={load} aria-label="Refresh schedules">
+                <IconRefresh size={17} />
+              </button>
+            </div>
             {!schedules.length ? (
-              <StateView
-                variant="empty"
-                icon={IconClock}
-                title="No schedules"
-                message="Create a schedule above to run a Process on a timer."
-              />
-            ) : (
-              <ul className="schedule-list">
-                {schedules.map(schedule => (
-                  <li key={schedule.id} className="schedule-list__item">
-                    <div className="schedule-list__body">
-                      <strong className="schedule-list__title">{schedule.process}</strong>
-                      <small className="schedule-list__meta">{scheduleTimingLabel(schedule)}</small>
-                      <small className="schedule-list__meta">
-                        Last: {formatTime(schedule.lastRunAt)} · Next: {formatTime(schedule.nextRunAt)}
-                      </small>
-                    </div>
-                    <div className="schedule-list__actions">
-                      <button
-                        type="button"
-                        className={`secondary-button ${schedule.enabled ? "secondary-button--active" : ""}`}
-                        onClick={() => toggleSchedule(schedule)}
-                      >
-                        {schedule.enabled ? "Enabled" : "Disabled"}
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => triggerSchedule(schedule)}
-                      >
-                        <IconBolt size={15} /> Trigger
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
+              <div className="empty-state empty-state--compact">
+                <IconCalendarClock size={24} stroke={1.4} />
+                <strong>No schedules</strong>
+                <span>Processes only run on demand until you create one.</span>
+              </div>
+            ) : schedules.map(schedule => (
+              <div key={schedule.id} className="schedule-row">
+                <div className="schedule-row__copy">
+                  <strong>{schedule.process}</strong>
+                  <span>{timingLabel(schedule)}</span>
+                  <small>Last {formatTime(schedule.lastRunAt)} · Next {formatTime(schedule.nextRunAt)}</small>
+                </div>
+                <div className="schedule-row__actions">
+                  <button
+                    type="button"
+                    className={`status-pill ${schedule.enabled ? "status-pill--completed" : ""}`}
+                    onClick={() => toggleSchedule(schedule)}
+                    disabled={busy === schedule.id}
+                  >
+                    {schedule.enabled ? "enabled" : "disabled"}
+                  </button>
+                  <button
+                    type="button"
+                    className="button button--quiet"
+                    onClick={() => triggerSchedule(schedule)}
+                    disabled={busy === schedule.id}
+                  >
+                    <IconBolt size={14} /> Run now
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </section>
       )}

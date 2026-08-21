@@ -1,47 +1,32 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  IconBraces,
+  IconBook2,
+  IconLock,
   IconRefresh,
-  IconSearch,
-  IconShieldCheck,
   IconSparkles,
   IconTool,
 } from "@tabler/icons-react";
+import { toast } from "sonner";
+
 import api, { endpoints } from "../api";
-import MarkdownMessage from "../components/MarkdownMessage";
-import StateView from "../components/StateView";
-import StatusBadge from "../components/StatusBadge";
 
 export default function CapabilitiesPage({ onAskNora }) {
-  const [tab, setTab] = useState("tools");
   const [tools, setTools] = useState([]);
   const [skills, setSkills] = useState([]);
-  const [selectedTool, setSelectedTool] = useState("");
-  const [selectedSkill, setSelectedSkill] = useState("");
-  const [query, setQuery] = useState("");
+  const [view, setView] = useState("tools");
+  const [selectedName, setSelectedName] = useState("");
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
 
   const load = useCallback(async () => {
-    setLoading(true);
     try {
-      const [toolsResponse, skillsResponse] = await Promise.all([
+      const [toolResponse, skillResponse] = await Promise.all([
         api.get(endpoints.tools()),
         api.get(endpoints.skills()),
       ]);
-      const nextTools = toolsResponse.data || [];
-      const nextSkills = skillsResponse.data || [];
-      setTools(nextTools);
-      setSkills(nextSkills);
-      setSelectedTool(current => (
-        current && nextTools.some(item => item.name === current) ? current : (nextTools[0]?.name || "")
-      ));
-      setSelectedSkill(current => (
-        current && nextSkills.some(item => item.name === current) ? current : (nextSkills[0]?.name || "")
-      ));
-      setError("");
-    } catch (fetchError) {
-      setError(fetchError.response?.data?.error || "Could not load capabilities.");
+      setTools(toolResponse.data || []);
+      setSkills(skillResponse.data || []);
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Could not load Capabilities.");
     } finally {
       setLoading(false);
     }
@@ -49,207 +34,149 @@ export default function CapabilitiesPage({ onAskNora }) {
 
   useEffect(() => { load(); }, [load]);
 
-  const needle = query.trim().toLowerCase();
-  const filteredTools = useMemo(() => (
-    needle
-      ? tools.filter(item => `${item.name} ${item.description || ""}`.toLowerCase().includes(needle))
-      : tools
-  ), [tools, needle]);
-  const filteredSkills = useMemo(() => (
-    needle ? skills.filter(item => item.name.toLowerCase().includes(needle)) : skills
-  ), [skills, needle]);
-  const tool = useMemo(
-    () => tools.find(item => item.name === selectedTool) || null,
-    [tools, selectedTool],
-  );
-  const skill = useMemo(
-    () => skills.find(item => item.name === selectedSkill) || null,
-    [skills, selectedSkill],
+  const source = view === "tools" ? tools : skills;
+  const selected = useMemo(
+    () => source.find(item => item.name === selectedName) || null,
+    [source, selectedName],
   );
 
-  const askNora = () => onAskNora?.(
-    tab === "tools" ? "Create or update a Tool for: " : "Create or update a Skill for: ",
-  );
+  useEffect(() => {
+    if (selectedName && !source.some(item => item.name === selectedName)) setSelectedName("");
+  }, [selectedName, source]);
+
+  if (loading) {
+    return <div className="workspace-page"><div className="page-state"><span className="spinner" /> Loading Capabilities</div></div>;
+  }
 
   return (
-    <div className="capabilities-page redesign-page">
-      <header className="redesign-header">
-        <div className="redesign-header__leading">
-          <span className="eyebrow">Office capabilities</span>
-          <h1 className="redesign-header__title">Capabilities</h1>
-          <p className="redesign-header__subtitle">
-            Executable Tools and reusable Skill playbooks available to specialist Agents.
-          </p>
+    <div className="workspace-page capabilities-page">
+      <header className="page-header">
+        <div className="page-header__copy">
+          <span className="eyebrow">What Agents can know and do</span>
+          <h1>Capabilities</h1>
+          <p>Tools execute actions. Skills provide methodology and context. Nora manages both as the office evolves.</p>
         </div>
-        <div className="capabilities-page__header-actions">
-          <button type="button" className="secondary-button" onClick={load}>
-            <IconRefresh size={15} /> Refresh
+        <div className="page-header__actions">
+          <button type="button" className="icon-button" onClick={load} aria-label="Refresh Capabilities">
+            <IconRefresh size={18} />
           </button>
-          <button type="button" className="primary-button" onClick={askNora}>
-            {tab === "tools" ? <IconTool size={15} /> : <IconSparkles size={15} />}
-            Ask Nora
+          <button
+            type="button"
+            className="button button--primary"
+            onClick={() => onAskNora?.(`Create a new ${view === "tools" ? "Tool" : "Skill"} that: `)}
+          >
+            <IconSparkles size={15} /> Ask Nora to create
           </button>
         </div>
       </header>
 
-      <nav className="redesign-tabs" aria-label="Capability type">
+      <div className="segmented-control page-tabs" role="tablist" aria-label="Capability type">
         <button
           type="button"
-          className={tab === "tools" ? "redesign-tabs__tab redesign-tabs__tab--active" : "redesign-tabs__tab"}
+          className={view === "tools" ? "segmented-control__item segmented-control__item--active" : "segmented-control__item"}
           onClick={() => {
-            setTab("tools");
-            setQuery("");
+            setView("tools");
+            setSelectedName("");
           }}
         >
-          Tools
+          Tools · {tools.length}
         </button>
         <button
           type="button"
-          className={tab === "skills" ? "redesign-tabs__tab redesign-tabs__tab--active" : "redesign-tabs__tab"}
+          className={view === "skills" ? "segmented-control__item segmented-control__item--active" : "segmented-control__item"}
           onClick={() => {
-            setTab("skills");
-            setQuery("");
+            setView("skills");
+            setSelectedName("");
           }}
         >
-          Skills
+          Skills · {skills.length}
         </button>
-      </nav>
+      </div>
 
-      <div className="capabilities-page__body">
-        <aside className="capabilities-page__catalog">
-          <label className="capabilities-page__search">
-            <IconSearch size={16} />
-            <input
-              className="capabilities-page__search-input"
-              value={query}
-              onChange={event => setQuery(event.target.value)}
-              placeholder={tab === "tools" ? "Search tools" : "Find a skill"}
-              aria-label={tab === "tools" ? "Search tools" : "Search skills"}
-            />
-          </label>
+      <div className="capability-layout">
+        <section className="capability-list">
+          {!source.length ? (
+            <div className="empty-state">
+              {view === "tools" ? <IconTool size={28} stroke={1.4} /> : <IconBook2 size={28} stroke={1.4} />}
+              <strong>No {view}</strong>
+              <span>Ask Nora to create one when the office needs a new capability.</span>
+            </div>
+          ) : source.map(item => (
+            <button
+              key={item.name}
+              type="button"
+              className={`capability-row ${selectedName === item.name ? "capability-row--active" : ""}`}
+              onClick={() => setSelectedName(item.name)}
+            >
+              <span className="capability-row__icon">
+                {view === "tools" ? <IconTool size={17} /> : <IconBook2 size={17} />}
+              </span>
+              <span className="capability-row__copy">
+                <strong>{item.name}</strong>
+                <span>{view === "tools" ? (item.description || "Tool") : ((item.content || "Skill").split("\n")[0] || "Skill")}</span>
+              </span>
+              {view === "tools" && item.requiresApproval && (
+                <span className="capability-row__approval"><IconLock size={13} /> approval</span>
+              )}
+            </button>
+          ))}
+        </section>
 
-          {loading ? (
-            <StateView variant="loading" />
-          ) : error ? (
-            <StateView variant="error" message={error} />
-          ) : tab === "tools" && !filteredTools.length ? (
-            <StateView variant="empty" icon={IconTool} title="No tools" />
-          ) : tab === "skills" && !filteredSkills.length ? (
-            <StateView variant="empty" icon={IconSparkles} title="No skills" />
-          ) : (
-            <ul className="capabilities-page__list">
-              {(tab === "tools" ? filteredTools : filteredSkills).map(item => {
-                const selected = tab === "tools" ? selectedTool === item.name : selectedSkill === item.name;
-                const Icon = tab === "tools" ? IconTool : IconSparkles;
-
-                return (
-                  <li key={item.name}>
-                    <button
-                      type="button"
-                      className={
-                        `capabilities-page__item ${selected ? "capabilities-page__item--active" : ""}`
-                      }
-                      onClick={() => (
-                        tab === "tools" ? setSelectedTool(item.name) : setSelectedSkill(item.name)
-                      )}
-                    >
-                      <Icon size={16} />
-                      <span className="capabilities-page__item-body">
-                        <strong className="capabilities-page__item-name">{item.name}</strong>
-                        {tab === "tools" && (
-                          <small className="capabilities-page__item-meta">
-                            {item.provider || "native"}{item.requiresApproval ? " · approval" : ""}
-                          </small>
-                        )}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </aside>
-
-        <section className="capabilities-page__detail">
-          {tab === "tools" && !tool && (
-            <StateView variant="empty" icon={IconTool} title="Select a tool" />
-          )}
-          {tab === "skills" && !skill && (
-            <StateView variant="empty" icon={IconSparkles} title="Select a skill" />
-          )}
-
-          {tab === "tools" && tool && (
+        <aside className="capability-inspector panel">
+          {!selected ? (
+            <div className="empty-state empty-state--compact">
+              {view === "tools" ? <IconTool size={24} stroke={1.4} /> : <IconBook2 size={24} stroke={1.4} />}
+              <strong>Select a {view === "tools" ? "Tool" : "Skill"}</strong>
+              <span>Its definition will appear here.</span>
+            </div>
+          ) : view === "tools" ? (
             <>
-              <header className="capabilities-page__detail-header">
+              <div className="panel__header">
                 <div>
-                  <span className="eyebrow">{tool.provider || "native"}</span>
-                  <h2 className="capabilities-page__detail-title">{tool.name}</h2>
-                  <p className="muted-copy">{tool.description || "No description."}</p>
+                  <span className="eyebrow">Tool</span>
+                  <h2>{selected.name}</h2>
                 </div>
-                <div className="capabilities-page__detail-meta">
-                  <StatusBadge tone={tool.requiresApproval ? "warning" : "success"}>
-                    {tool.requiresApproval ? "Approval required" : "No approval"}
-                  </StatusBadge>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={() => onAskNora?.(`Create or update the Tool ${tool.name}.`)}
-                  >
-                    <IconTool size={15} /> Ask Nora to update
-                  </button>
-                </div>
-              </header>
-
-              <section className="capabilities-page__contract">
-                <h3 className="capabilities-page__contract-title">
-                  <IconBraces size={15} /> Input contract
-                </h3>
-                <pre className="capabilities-page__code">{JSON.stringify(tool.input || {}, null, 2)}</pre>
-              </section>
-
-              {tool.output != null && (
-                <section className="capabilities-page__contract">
-                  <h3 className="capabilities-page__contract-title">
-                    <IconBraces size={15} /> Output contract
-                  </h3>
-                  <pre className="capabilities-page__code">{JSON.stringify(tool.output, null, 2)}</pre>
-                </section>
-              )}
-
-              {tool.description && (
-                <section className="capabilities-page__contract">
-                  <h3 className="capabilities-page__contract-title">
-                    <IconShieldCheck size={15} /> Description
-                  </h3>
-                  <div className="capabilities-page__content">
-                    <MarkdownMessage content={tool.description} />
-                  </div>
-                </section>
-              )}
+                {selected.requiresApproval && <span className="status-pill status-pill--blocked"><IconLock size={12} /> Carlos approval</span>}
+              </div>
+              <p className="capability-inspector__description">{selected.description || "No description."}</p>
+              <div className="definition-list">
+                <div><span>Provider</span><strong>{selected.provider || "—"}</strong></div>
+                <div><span>Model</span><strong>{selected.model || "—"}</strong></div>
+                <div><span>Authority</span><strong>{selected.requiresApproval ? "Carlos must approve" : "Agent may execute"}</strong></div>
+              </div>
+              <div className="capability-contract">
+                <h3>Input</h3>
+                <pre className="data-block">{JSON.stringify(selected.input || {}, null, 2)}</pre>
+                <h3>Output</h3>
+                <pre className="data-block">{JSON.stringify(selected.output ?? null, null, 2)}</pre>
+              </div>
+              <button
+                type="button"
+                className="button button--quiet capability-inspector__action"
+                onClick={() => onAskNora?.(`Review and update Tool ${selected.name}: `)}
+              >
+                <IconSparkles size={15} /> Ask Nora to modify
+              </button>
             </>
-          )}
-
-          {tab === "skills" && skill && (
+          ) : (
             <>
-              <header className="capabilities-page__detail-header">
+              <div className="panel__header">
                 <div>
                   <span className="eyebrow">Skill</span>
-                  <h2 className="capabilities-page__detail-title">{skill.name}</h2>
+                  <h2>{selected.name}</h2>
                 </div>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => onAskNora?.(`Create or update the Skill ${skill.name}.`)}
-                >
-                  <IconSparkles size={15} /> Ask Nora to update
-                </button>
-              </header>
-              <div className="capabilities-page__content">
-                <MarkdownMessage content={skill.content} />
               </div>
+              <div className="skill-content">{selected.content || "No Skill content."}</div>
+              <button
+                type="button"
+                className="button button--quiet capability-inspector__action"
+                onClick={() => onAskNora?.(`Review and update Skill ${selected.name}: `)}
+              >
+                <IconSparkles size={15} /> Ask Nora to modify
+              </button>
             </>
           )}
-        </section>
+        </aside>
       </div>
     </div>
   );

@@ -1,74 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  IconAlertTriangle,
+  IconActivity,
   IconArrowLeft,
-  IconBolt,
-  IconCircleCheck,
+  IconPlayerPlay,
   IconPlayerSkipForward,
   IconRefresh,
   IconReload,
-  IconRoute,
-  IconX,
+  IconSparkles,
+  IconSquare,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
 
 import api, { endpoints } from "../api";
 import ProcessGraph from "../components/ProcessGraph";
-import StateView from "../components/StateView";
-import StatusBadge from "../components/StatusBadge";
 
-const STATUS_FILTERS = ["all", "running", "blocked", "failed", "completed", "cancelled"];
-const OPERATIONS_EVENT_TYPES = new Set([
-  "nora.request_failed",
-  "nora.task_execution_failed",
-  "nora.workflow_review_failed",
-  "nora.workflow_started",
-  "nora.tool_saved",
-  "nora.skill_saved",
-  "nora.process_saved",
-  "nora.schedule_created",
-  "nora.plan_completed",
-  "process.load_failed",
-  "workflow.load_failed",
-  "workflow.interrupted",
-  "tool.load_failed",
-  "schedule.load_failed",
-  "event.load_failed",
-  "schedule.workflow_failed",
-  "workflow.created",
-  "workflow.completed",
-  "workflow.cancelled",
-  "workflow.stalled",
-  "attempt.failed",
-  "attempt.cancelled",
-  "task.failed",
-  "task.blocked",
-  "approval.requested",
-  "approval.approved",
-  "approval.rejected",
-  "approval.consumed",
-  "schedule.created",
-  "schedule.triggered",
-  "schedule.failed",
-]);
-
-const statusTone = {
-  running: "info",
-  blocked: "warning",
-  failed: "danger",
-  completed: "success",
-  cancelled: "neutral",
-};
-
-const eventTone = event => {
-  if (event.type.endsWith("failed") || event.type === "workflow.stalled") return "danger";
-  if (event.type.endsWith("blocked") || event.type === "approval.requested") return "warning";
-  if (event.type.endsWith("completed") || event.type.endsWith("created")) return "success";
-  if (event.type.endsWith("saved") || event.type === "nora.plan_completed") return "success";
-  if (event.type === "approval.approved" || event.type === "approval.consumed") return "success";
-  if (event.type === "approval.rejected") return "danger";
-  return "info";
-};
+const STATUS_ORDER = ["running", "blocked", "failed", "completed", "cancelled", "pending"];
 
 const formatTime = value => {
   if (!value) return "—";
@@ -76,193 +22,101 @@ const formatTime = value => {
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
 };
 
-const eventTitle = event => {
-  const titles = {
-    "nora.request_failed": "Nora request failed",
-    "nora.task_execution_failed": "Task setup failed",
-    "nora.workflow_review_failed": "Workflow review failed",
-    "nora.workflow_started": "Nora started workflow",
-    "nora.tool_saved": "Tool saved",
-    "nora.skill_saved": "Skill saved",
-    "nora.process_saved": "Process saved",
-    "nora.schedule_created": "Nora created schedule",
-    "nora.plan_completed": "Creation plan completed",
-    "process.load_failed": "Process load failed",
-    "workflow.load_failed": "Workflow load failed",
-    "workflow.interrupted": "Workflow interrupted by restart",
-    "tool.load_failed": "Tool load failed",
-    "schedule.load_failed": "Schedule load failed",
-    "event.load_failed": "Event load failed",
-    "schedule.workflow_failed": "Scheduled workflow failed",
-    "workflow.created": "Workflow created",
-    "workflow.completed": "Workflow completed",
-    "workflow.cancelled": "Workflow cancelled",
-    "workflow.stalled": "Workflow stalled",
-    "attempt.failed": "Task attempt failed",
-    "attempt.cancelled": "Task attempt cancelled",
-    "task.failed": "Task failed",
-    "task.blocked": "Task blocked",
-    "approval.requested": "Authorization requested",
-    "approval.approved": "Authorization approved",
-    "approval.rejected": "Authorization rejected",
-    "approval.consumed": "Authorization consumed",
-    "schedule.created": "Schedule created",
-    "schedule.triggered": "Schedule triggered",
-    "schedule.failed": "Schedule failed",
-  };
+const workflowTitle = workflow => workflow.process || workflow.purpose || workflow.id;
 
-  return titles[event.type] || event.type;
-};
+const taskStatusMap = workflow => Object.fromEntries(
+  Object.entries(workflow?.tasks || {}).map(([id, task]) => [id, task.status]),
+);
 
-const eventDetail = event => {
-  if (event.error) return event.error;
-  if (event.reason) return event.reason;
-  if (event.taskId) return `${event.taskId}${event.workflowId ? ` · ${event.workflowId}` : ""}`;
-  if (event.workflowId) return event.workflowId;
-  if (event.scheduleId) return `${event.scheduleId}${event.process ? ` · ${event.process}` : ""}`;
-  if (event.approvalId) return `${event.approvalId}${event.action ? ` · ${event.action}` : ""}`;
-  if (event.tool) return event.tool;
-  if (event.skill) return event.skill;
-  if (event.process) return event.process;
-  if (event.filename) return event.filename;
-  if (Array.isArray(event.steps)) return event.steps.map(step => step.name || step.id || step.type).join(", ");
-  if (event.conversationId) {
-    const phase = event.phase ? ` · ${event.phase}` : "";
-    const action = event.action ? ` · ${event.action}` : "";
-    return `${event.conversationId}${phase}${action}`;
-  }
-  return "Carlos Office runtime";
-};
-
-const AttemptDetail = ({ attempt }) => {
-  const fields = {
-    id: attempt.id,
-    workflowId: attempt.workflowId,
-    taskId: attempt.taskId,
-    attempt: attempt.attempt,
-    agent: attempt.agent,
-    provider: attempt.provider,
-    model: attempt.model,
-    status: attempt.status,
-    approvalId: attempt.approvalId,
-    startedAt: formatTime(attempt.startedAt),
-    endedAt: formatTime(attempt.endedAt),
-    blockedReason: attempt.blockedReason,
-    error: attempt.error,
-    input: attempt.input,
-    tools: attempt.tools,
-    skills: attempt.skills,
-    output: attempt.output,
-  };
-
-  return (
-    <div className="operations-attempts__item">
-      <header className="operations-attempts__head">
-        <StatusBadge tone={statusTone[attempt.status] || "neutral"}>
-          #{attempt.attempt} {attempt.status}
-        </StatusBadge>
-        <small className="operations-attempts__head-meta">{attempt.agent || "—"}</small>
-        <small className="operations-attempts__head-meta">
-          {attempt.provider && attempt.model ? `${attempt.provider} · ${attempt.model}` : "—"}
-        </small>
-        <small className="operations-attempts__time">
-          {formatTime(attempt.startedAt)} → {formatTime(attempt.endedAt)}
-        </small>
-      </header>
-      <pre className="operations-result">{JSON.stringify(fields, null, 2)}</pre>
-    </div>
-  );
-};
+const isTerminal = status => ["completed", "failed", "cancelled"].includes(status);
 
 export default function OperationsPage({ onAskNora, openRequest }) {
   const [workflows, setWorkflows] = useState([]);
-  const [events, setEvents] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [filter, setFilter] = useState("all");
-  const [selectedId, setSelectedId] = useState(null);
+  const [selectedId, setSelectedId] = useState("");
   const [inspect, setInspect] = useState(null);
+  const [events, setEvents] = useState([]);
+  const [activeAgents, setActiveAgents] = useState([]);
   const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [filter, setFilter] = useState("active");
+  const [detailTab, setDetailTab] = useState("tasks");
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
-  const [promoteOpen, setPromoteOpen] = useState(false);
-  const [promoteDraft, setPromoteDraft] = useState({ name: "", purpose: "" });
 
-  const loadOverview = useCallback(async () => {
+  const loadOverview = useCallback(async ({ quiet = false } = {}) => {
     try {
-      const [workflowResponse, eventResponse] = await Promise.all([
+      const [workflowResponse, activeResponse] = await Promise.all([
         api.get(endpoints.workflows()),
-        api.get(endpoints.events(), { params: { limit: 100 } }),
+        api.get(endpoints.agentsActive()),
       ]);
       setWorkflows(workflowResponse.data || []);
-      setEvents((eventResponse.data || []).filter(event => OPERATIONS_EVENT_TYPES.has(event.type)).slice(0, 20));
-      setError("");
-    } catch (fetchError) {
-      setError(fetchError.response?.data?.error || "Could not load Operations.");
+      setActiveAgents(activeResponse.data || []);
+    } catch (error) {
+      if (!quiet) toast.error(error.response?.data?.error || "Could not load Operations.");
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   }, []);
 
-  const loadInspect = useCallback(async id => {
-    if (!id) {
-      setInspect(null);
-      return;
-    }
-
+  const loadDetail = useCallback(async id => {
+    if (!id) return;
     try {
-      setInspect((await api.get(endpoints.workflowInspect(id))).data);
-    } catch (fetchError) {
-      setInspect(null);
-      toast.error(fetchError.response?.data?.error || "Could not inspect workflow.");
+      const [inspectResponse, eventResponse, activeResponse] = await Promise.all([
+        api.get(endpoints.workflowInspect(id)),
+        api.get(endpoints.events(), { params: { workflowId: id, limit: 100 } }),
+        api.get(endpoints.agentsActive()),
+      ]);
+      setInspect(inspectResponse.data || null);
+      setEvents(eventResponse.data || []);
+      setActiveAgents(activeResponse.data || []);
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Could not inspect Workflow.");
     }
   }, []);
 
   useEffect(() => {
     loadOverview();
-    const timer = setInterval(loadOverview, 5000);
+    const timer = setInterval(() => loadOverview({ quiet: true }), 5000);
     return () => clearInterval(timer);
   }, [loadOverview]);
 
   useEffect(() => {
     if (!selectedId) return undefined;
-    loadInspect(selectedId);
-    const timer = setInterval(() => loadInspect(selectedId), 4000);
+    loadDetail(selectedId);
+    const timer = setInterval(() => loadDetail(selectedId), 4000);
     return () => clearInterval(timer);
-  }, [selectedId, loadInspect]);
+  }, [selectedId, loadDetail]);
 
   useEffect(() => {
     if (!openRequest?.workflowId) return;
     setSelectedId(openRequest.workflowId);
     setSelectedTaskId("");
-    setLoading(false);
-  }, [openRequest?.token, openRequest?.workflowId]);
+  }, [openRequest]);
 
-  const filtered = useMemo(
-    () => workflows.filter(item => filter === "all" || item.status === filter),
-    [workflows, filter],
-  );
-  const workflow = useMemo(
-    () => inspect?.workflow || workflows.find(item => item.id === selectedId) || null,
-    [inspect, workflows, selectedId],
-  );
-  const task = useMemo(() => workflow?.tasks?.[selectedTaskId] || null, [workflow, selectedTaskId]);
+  const sortedWorkflows = useMemo(() => [...workflows].sort((left, right) => {
+    const statusDelta = STATUS_ORDER.indexOf(left.status) - STATUS_ORDER.indexOf(right.status);
+    if (statusDelta !== 0) return statusDelta;
+    return String(right.createdAt || right.updatedAt || "").localeCompare(String(left.createdAt || left.updatedAt || ""));
+  }), [workflows]);
 
-  const openWorkflow = id => {
-    setSelectedId(id);
-    setSelectedTaskId("");
-  };
+  const filtered = useMemo(() => sortedWorkflows.filter(workflow => {
+    if (filter === "active") return ["running", "blocked", "pending"].includes(workflow.status);
+    if (filter === "history") return isTerminal(workflow.status);
+    return true;
+  }), [sortedWorkflows, filter]);
 
-  const act = async (label, action) => {
+  const workflow = inspect?.workflow || workflows.find(item => item.id === selectedId) || null;
+  const selectedTask = workflow?.tasks?.[selectedTaskId] || null;
+  const workflowAgents = activeAgents.filter(agent => agent.workflowId === workflow?.id);
+
+  const runAction = async (label, request) => {
     if (!workflow) return;
     setBusy(label);
-
     try {
-      await action();
-      await loadInspect(workflow.id);
-      await loadOverview();
+      await request();
+      await Promise.all([loadDetail(workflow.id), loadOverview({ quiet: true })]);
       toast.success(`${label} complete.`);
-    } catch (fetchError) {
-      toast.error(fetchError.response?.data?.error || `${label} failed.`);
+    } catch (error) {
+      toast.error(error.response?.data?.error || `${label} failed.`);
     } finally {
       setBusy("");
     }
@@ -271,429 +125,315 @@ export default function OperationsPage({ onAskNora, openRequest }) {
   const reviewTask = async () => {
     if (!workflow || !selectedTaskId) return;
     setBusy("Review");
-
     try {
-      const review = (
+      const result = (
         await api.post(endpoints.workflowTaskReview(workflow.id, selectedTaskId))
       ).data;
-
-      if (review?.action === "retry") {
+      if (result?.action === "retry") {
         await api.post(endpoints.workflowRun(workflow.id));
-        toast.success("Task reviewed and retry started.");
+        toast.success("Nora reviewed the failure and started a retry.");
       } else {
-        toast.message(
-          review?.reason
-            ? `Task escalated: ${review.reason}`
-            : "Task requires Carlos's attention.",
-        );
+        toast.message(result?.reason || "Nora escalated this Task to Carlos.");
       }
-
-      await loadInspect(workflow.id);
-      await loadOverview();
-    } catch (reviewError) {
-      toast.error(reviewError.response?.data?.error || "Task review failed.");
-    } finally {
-      setBusy("");
-    }
-  };
-
-  const promote = async event => {
-    event.preventDefault();
-    if (!promoteDraft.name.trim()) return toast.error("Name the new Process.");
-
-    setBusy("promote");
-    try {
-      await api.post(endpoints.workflowPromote(workflow.id), {
-        name: promoteDraft.name.trim(),
-        purpose: promoteDraft.purpose.trim() || null,
-      });
-      toast.success("Workflow promoted to Process.");
-      setPromoteOpen(false);
-      setPromoteDraft({ name: "", purpose: "" });
-      await loadOverview();
-    } catch (fetchError) {
-      toast.error(fetchError.response?.data?.error || "Promotion failed.");
+      await Promise.all([loadDetail(workflow.id), loadOverview({ quiet: true })]);
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Task review failed.");
     } finally {
       setBusy("");
     }
   };
 
   if (loading) {
-    return <div className="operations-page redesign-page"><StateView variant="loading" /></div>;
-  }
-
-  if (error && !workflows.length && !events.length) {
-    return (
-      <div className="operations-page redesign-page">
-        <StateView
-          variant="error"
-          message={error}
-          actions={(
-            <button type="button" className="secondary-button" onClick={loadOverview}>
-              <IconRefresh size={15} /> Retry
-            </button>
-          )}
-        />
-      </div>
-    );
+    return <div className="workspace-page"><div className="page-state"><span className="spinner" /> Loading Operations</div></div>;
   }
 
   if (workflow) {
-    const statuses = Object.fromEntries(
-      Object.entries(workflow.tasks || {}).map(([id, item]) => [id, item.status]),
-    );
+    const statuses = taskStatusMap(workflow);
+    const attempts = selectedTask?.attempts || [];
     const approvals = inspect?.approvals || [];
-    const resumable = workflow.status === "blocked";
-    const attempts = task?.attempts || [];
 
     return (
-      <div className="operations-studio redesign-page">
-        <header className="redesign-header">
-          <div className="redesign-header__leading">
+      <div className="workspace-page operations-studio">
+        <header className="page-header">
+          <div className="page-header__leading">
             <button
               type="button"
-              className="icon-button redesign-header__back"
+              className="icon-button"
               onClick={() => {
-                setSelectedId(null);
+                setSelectedId("");
                 setInspect(null);
+                setSelectedTaskId("");
               }}
-              aria-label="Back to workflow list"
+              aria-label="Back to Operations"
             >
               <IconArrowLeft size={18} />
             </button>
-            <span className="eyebrow">Workflow runtime</span>
-            <h1 className="redesign-header__title">{workflow.process || "Ad-hoc workflow"}</h1>
-            <p className="redesign-header__subtitle">
-              {workflow.id} · {" "}
-              <StatusBadge tone={statusTone[workflow.status] || "neutral"}>{workflow.status}</StatusBadge>
-            </p>
+            <div className="page-header__copy">
+              <span className="eyebrow">Workflow execution</span>
+              <h1>{workflowTitle(workflow)}</h1>
+              <p>{workflow.id}</p>
+            </div>
           </div>
-          <div className="operations-studio__header-actions">
-            {resumable && (
+          <div className="page-header__actions">
+            <span className={`status-pill status-pill--${workflow.status}`}>{workflow.status}</span>
+            {workflow.status === "running" && (
               <button
                 type="button"
-                className="secondary-button"
-                onClick={() => act("Resume", () => api.post(endpoints.workflowResume(workflow.id), {}))}
+                className="button button--danger"
                 disabled={!!busy}
+                onClick={() => runAction("Cancel", () => api.post(endpoints.workflowCancel(workflow.id)))}
               >
-                <IconReload size={15} /> Resume
+                <IconSquare size={14} /> Cancel
               </button>
             )}
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => act("Restart", () => api.post(endpoints.workflowRestart(workflow.id)))}
-              disabled={!!busy || workflow.status === "running"}
-            >
-              <IconRefresh size={15} /> Restart
-            </button>
-            <button
-              type="button"
-              className="danger-button"
-              onClick={() => act("Cancel", () => api.post(endpoints.workflowCancel(workflow.id)))}
-              disabled={!!busy || workflow.status === "cancelled"}
-            >
-              <IconX size={15} /> Cancel
-            </button>
-            <button
-              type="button"
-              className="primary-button"
-              onClick={() => setPromoteOpen(true)}
-              disabled={!!busy || workflow.status !== "completed"}
-            >
-              <IconRoute size={15} /> Promote
-            </button>
+            {workflow.status === "blocked" && (
+              <button
+                type="button"
+                className="button button--primary"
+                disabled={!!busy}
+                onClick={() => runAction("Resume", () => api.post(endpoints.workflowResume(workflow.id), {}))}
+              >
+                <IconPlayerPlay size={14} /> Resume
+              </button>
+            )}
+            {isTerminal(workflow.status) && workflow.status !== "completed" && (
+              <button
+                type="button"
+                className="button button--quiet"
+                disabled={!!busy}
+                onClick={() => runAction("Restart", () => api.post(endpoints.workflowRestart(workflow.id)))}
+              >
+                <IconReload size={14} /> Restart
+              </button>
+            )}
           </div>
         </header>
 
-        <div className="operations-studio__body">
-          <div className="operations-studio__graph">
-            <ProcessGraph
-              tasks={workflow.tasks}
-              edges={workflow.edges}
-              start={workflow.start}
-              end={workflow.end}
-              statuses={statuses}
-              selectedId={selectedTaskId}
-              onSelect={node => setSelectedTaskId(node.id)}
-            />
-          </div>
-
-          <aside className="operations-studio__inspector">
-            {!!approvals.length && (
-              <section className="operations-studio__inspector-section">
-                <span className="eyebrow">Pending authorizations</span>
-                <ul className="operations-approvals">
-                  {approvals.map(approval => (
-                    <li key={approval.id} className="operations-approvals__item">
-                      <strong className="operations-approvals__title">
-                        {approval.context?.tool || approval.action || "Action"}
-                      </strong>
-                      <small className="operations-approvals__meta">
-                        Requested {formatTime(approval.createdAt)}
-                      </small>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-
-            {task && (
-              <section className="operations-studio__inspector-section">
-                <span className="eyebrow">Task · {task.type}</span>
-                <h2 className="operations-studio__inspector-title">{task.objective || selectedTaskId}</h2>
-                <StatusBadge tone={statusTone[task.status] || "neutral"}>{task.status}</StatusBadge>
-                <dl className="meta-list">
-                  <div className="meta-list__row">
-                    <dt className="meta-list__term">Objective</dt>
-                    <dd className="meta-list__value">{task.objective || "—"}</dd>
-                  </div>
-                  <div className="meta-list__row">
-                    <dt className="meta-list__term">Inputs</dt>
-                    <dd className="meta-list__value">{(task.inputs || []).join(", ") || "—"}</dd>
-                  </div>
-                  <div className="meta-list__row">
-                    <dt className="meta-list__term">Output</dt>
-                    <dd className="meta-list__value">{task.output || "—"}</dd>
-                  </div>
-                  <div className="meta-list__row">
-                    <dt className="meta-list__term">Completion</dt>
-                    <dd className="meta-list__value">{task.completion || "—"}</dd>
-                  </div>
-                  <div className="meta-list__row">
-                    <dt className="meta-list__term">Tools</dt>
-                    <dd className="meta-list__value">{(task.tools || []).join(", ") || "—"}</dd>
-                  </div>
-                  <div className="meta-list__row">
-                    <dt className="meta-list__term">Skills</dt>
-                    <dd className="meta-list__value">{(task.skills || []).join(", ") || "—"}</dd>
-                  </div>
-                  <div className="meta-list__row">
-                    <dt className="meta-list__term">Agent</dt>
-                    <dd className="meta-list__value">{task.agent || "—"}</dd>
-                  </div>
-                  <div className="meta-list__row">
-                    <dt className="meta-list__term">Provider</dt>
-                    <dd className="meta-list__value">{task.provider || "—"}</dd>
-                  </div>
-                  <div className="meta-list__row">
-                    <dt className="meta-list__term">Model</dt>
-                    <dd className="meta-list__value">{task.model || "—"}</dd>
-                  </div>
-                </dl>
-
-                {!!attempts.length && (
-                  <div className="operations-attempts">
-                    <span className="eyebrow">Attempts · {attempts.length}</span>
-                    {attempts.map(attempt => <AttemptDetail key={attempt.id} attempt={attempt} />)}
-                  </div>
-                )}
-
-                <div className="operations-task-actions">
-                  {task.status === "blocked" && (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => act(
-                        "Skip",
-                        () => api.post(endpoints.workflowTaskSkip(workflow.id, selectedTaskId)),
-                      )}
-                      disabled={!!busy}
-                    >
-                      <IconPlayerSkipForward size={15} /> Skip
-                    </button>
-                  )}
-                  {task.status === "failed" && (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={reviewTask}
-                      disabled={!!busy}
-                    >
-                      <IconRefresh size={15} /> Review
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={() => onAskNora?.(
-                      `Workflow ${workflow.id} task ${task.objective || selectedTaskId} needs revision. Update it.`,
-                    )}
-                  >
-                    <IconBolt size={15} /> Ask Nora
-                  </button>
-                </div>
-              </section>
-            )}
-
-            {workflow.result != null && (
-              <section className="operations-studio__inspector-section">
-                <span className="eyebrow">Result</span>
-                <pre className="operations-result">{JSON.stringify(workflow.result, null, 2)}</pre>
-              </section>
-            )}
-          </aside>
+        <div className="operations-summary">
+          <div><span>Status</span><strong>{workflow.status}</strong></div>
+          <div><span>Tasks</span><strong>{Object.keys(workflow.tasks || {}).length}</strong></div>
+          <div><span>Running Agents</span><strong>{workflowAgents.length}</strong></div>
+          <div><span>Approvals</span><strong>{approvals.filter(item => item.status === "pending").length} pending</strong></div>
         </div>
 
-        {promoteOpen && (
-          <div
-            className="dialog"
-            onClick={() => setPromoteOpen(false)}
-            role="dialog"
-            aria-modal="true"
+        <div className="segmented-control page-tabs" role="tablist" aria-label="Workflow detail">
+          <button
+            type="button"
+            className={detailTab === "tasks" ? "segmented-control__item segmented-control__item--active" : "segmented-control__item"}
+            onClick={() => setDetailTab("tasks")}
           >
-            <form
-              className="dialog__panel"
-              onClick={event => event.stopPropagation()}
-              onSubmit={promote}
-            >
-              <h2 className="dialog__title">Promote to Process</h2>
-              <p className="dialog__body">
-                Save this workflow as a reusable Process definition. Nora will clean runtime state.
-              </p>
-              <label className="operations-promote__field">
-                <span>Name</span>
-                <input
-                  value={promoteDraft.name}
-                  onChange={event => setPromoteDraft({ ...promoteDraft, name: event.target.value })}
-                  required
-                />
-              </label>
-              <label className="operations-promote__field">
-                <span>Purpose (optional)</span>
-                <textarea
-                  rows={3}
-                  value={promoteDraft.purpose}
-                  onChange={event => setPromoteDraft({ ...promoteDraft, purpose: event.target.value })}
-                />
-              </label>
-              <div className="dialog__actions">
-                <button type="button" className="secondary-button" onClick={() => setPromoteOpen(false)}>
-                  Cancel
-                </button>
-                <button type="submit" className="primary-button" disabled={!!busy}>
-                  <IconCircleCheck size={15} /> Promote
-                </button>
+            Tasks
+          </button>
+          <button
+            type="button"
+            className={detailTab === "activity" ? "segmented-control__item segmented-control__item--active" : "segmented-control__item"}
+            onClick={() => setDetailTab("activity")}
+          >
+            Activity
+          </button>
+          <button
+            type="button"
+            className={detailTab === "data" ? "segmented-control__item segmented-control__item--active" : "segmented-control__item"}
+            onClick={() => setDetailTab("data")}
+          >
+            Data
+          </button>
+        </div>
+
+        {detailTab === "tasks" && (
+          <div className="studio-layout operations-studio__tasks">
+            <section className="studio-layout__canvas">
+              <ProcessGraph
+                tasks={workflow.tasks}
+                edges={workflow.edges}
+                start={workflow.start}
+                statuses={statuses}
+                selectedId={selectedTaskId}
+                onSelect={node => setSelectedTaskId(node.id)}
+              />
+            </section>
+            <aside className="inspector-panel">
+              {!selectedTask ? (
+                <div className="inspector-panel__empty">
+                  <IconActivity size={24} stroke={1.4} />
+                  <strong>Select a Task</strong>
+                  <span>Inspect its runtime state, Agent, attempts, and result.</span>
+                </div>
+              ) : (
+                <>
+                  <header className="inspector-panel__header">
+                    <span className={`status-pill status-pill--${selectedTask.status}`}>{selectedTask.status}</span>
+                    <h2>{selectedTask.objective || selectedTaskId}</h2>
+                    <code>{selectedTaskId}</code>
+                  </header>
+                  <div className="definition-list">
+                    <div><span>Agent</span><strong>{selectedTask.agent || "Nora selects"}</strong></div>
+                    <div><span>Tools</span><strong>{(selectedTask.tools || []).join(", ") || "—"}</strong></div>
+                    <div><span>Skills</span><strong>{(selectedTask.skills || []).join(", ") || "—"}</strong></div>
+                    <div><span>Attempts</span><strong>{attempts.length}</strong></div>
+                    {selectedTask.blockedReason && <div><span>Blocked</span><strong>{selectedTask.blockedReason}</strong></div>}
+                    {selectedTask.error && <div><span>Error</span><strong>{selectedTask.error}</strong></div>}
+                  </div>
+
+                  {attempts.length > 0 && (
+                    <div className="attempt-list">
+                      <h3>Attempts</h3>
+                      {[...attempts].reverse().map(attempt => (
+                        <details key={attempt.id} className="attempt-card">
+                          <summary>
+                            <span>#{attempt.attempt}</span>
+                            <strong>{attempt.agent || "Agent"}</strong>
+                            <span className={`status-pill status-pill--${attempt.status}`}>{attempt.status}</span>
+                          </summary>
+                          <div className="attempt-card__body">
+                            <span>{attempt.provider && attempt.model ? `${attempt.provider} · ${attempt.model}` : "Model not recorded"}</span>
+                            <span>{formatTime(attempt.startedAt)} → {formatTime(attempt.endedAt)}</span>
+                            {attempt.output != null && <pre>{typeof attempt.output === "string" ? attempt.output : JSON.stringify(attempt.output, null, 2)}</pre>}
+                            {attempt.error && <pre>{attempt.error}</pre>}
+                          </div>
+                        </details>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="inspector-panel__actions">
+                    {["failed", "blocked"].includes(selectedTask.status) && (
+                      <button type="button" className="button button--primary" onClick={reviewTask} disabled={!!busy}>
+                        <IconSparkles size={14} /> Nora review
+                      </button>
+                    )}
+                    {!isTerminal(selectedTask.status) && selectedTask.type === "task" && (
+                      <button
+                        type="button"
+                        className="button button--quiet"
+                        disabled={!!busy}
+                        onClick={() => runAction(
+                          "Skip",
+                          () => api.post(endpoints.workflowTaskSkip(workflow.id, selectedTaskId)),
+                        )}
+                      >
+                        <IconPlayerSkipForward size={14} /> Skip Task
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </aside>
+          </div>
+        )}
+
+        {detailTab === "activity" && (
+          <section className="operations-activity panel">
+            <div className="panel__header">
+              <div><span className="eyebrow">Runtime timeline</span><h2>Activity</h2></div>
+              <button type="button" className="icon-button" onClick={() => loadDetail(workflow.id)} aria-label="Refresh activity">
+                <IconRefresh size={17} />
+              </button>
+            </div>
+            {!events.length ? (
+              <div className="empty-state empty-state--compact"><IconActivity size={24} /><strong>No recorded events</strong></div>
+            ) : (
+              <div className="event-list">
+                {events.map((event, index) => (
+                  <div key={`${event.id || event.at || "event"}-${index}`} className="event-row">
+                    <span className="event-row__dot" />
+                    <div>
+                      <strong>{event.type}</strong>
+                      <span>{event.taskId || event.tool || event.action || event.reason || "Workflow event"}</span>
+                    </div>
+                    <small>{formatTime(event.at || event.createdAt)}</small>
+                  </div>
+                ))}
               </div>
-            </form>
+            )}
+          </section>
+        )}
+
+        {detailTab === "data" && (
+          <div className="operations-data">
+            <section className="panel">
+              <div className="panel__header"><div><span className="eyebrow">Workflow contract</span><h2>Inputs</h2></div></div>
+              <pre className="data-block">{JSON.stringify(workflow.inputs || {}, null, 2)}</pre>
+            </section>
+            <section className="panel">
+              <div className="panel__header"><div><span className="eyebrow">Runtime settings</span><h2>Config</h2></div></div>
+              <pre className="data-block">{JSON.stringify(workflow.config || {}, null, 2)}</pre>
+            </section>
+            <button
+              type="button"
+              className="button button--quiet"
+              onClick={() => onAskNora?.(`Review Workflow ${workflow.id} and tell me what should be improved or promoted into a reusable Process.`)}
+            >
+              <IconSparkles size={15} /> Ask Nora about this Workflow
+            </button>
           </div>
         )}
       </div>
     );
   }
 
+  const activeCount = workflows.filter(item => ["running", "blocked", "pending"].includes(item.status)).length;
+
   return (
-    <div className="operations-page redesign-page">
-      <header className="redesign-header">
-        <div className="redesign-header__leading">
-          <span className="eyebrow">Live workflow runtime</span>
-          <h1 className="redesign-header__title">Operations</h1>
-          <p className="redesign-header__subtitle">
-            Monitor Workflows and durable runtime failures. Promote completed Workflows into Processes.
-          </p>
+    <div className="workspace-page operations-page">
+      <header className="page-header">
+        <div className="page-header__copy">
+          <span className="eyebrow">Inspect and control execution</span>
+          <h1>Operations</h1>
+          <p>Workflows are actual runs. Open one to inspect Tasks, Agent processes, attempts, events, and results.</p>
         </div>
-        <button type="button" className="secondary-button" onClick={loadOverview}>
-          <IconRefresh size={15} /> Refresh
-        </button>
+        <div className="page-header__actions">
+          <span className="status-pill status-pill--running">{activeCount} active</span>
+          <button type="button" className="icon-button" onClick={() => loadOverview()} aria-label="Refresh Operations">
+            <IconRefresh size={18} />
+          </button>
+        </div>
       </header>
 
-      {!!events.length && (
-        <section className="operations-activity" aria-labelledby="operations-activity-title">
-          <header className="operations-activity__header">
-            <div>
-              <span className="eyebrow">Durable runtime log</span>
-              <h2 id="operations-activity-title" className="operations-activity__title">
-                Recent activity
-              </h2>
-            </div>
-            <small className="operations-activity__meta">
-              Latest {events.length} significant events
-            </small>
-          </header>
-          <ul className="operations-activity__list">
-            {events.map((event, index) => {
-              const canOpen = Boolean(
-                event.workflowId && workflows.some(item => item.id === event.workflowId),
-              );
-              const tone = eventTone(event);
-              const itemClass = index === 0
-                ? "operations-activity__item"
-                : "operations-activity__item operations-activity__item--separated";
-
-              return (
-                <li key={`${event.at}-${event.type}-${index}`} className={itemClass}>
-                  <button
-                    type="button"
-                    className="operations-activity__button"
-                    onClick={() => canOpen && openWorkflow(event.workflowId)}
-                    disabled={!canOpen}
-                  >
-                    <IconAlertTriangle
-                      size={15}
-                      className={`operations-activity__icon operations-activity__icon--${tone}`}
-                    />
-                    <span className="operations-activity__body">
-                      <strong className="operations-activity__event">{eventTitle(event)}</strong>
-                      <small className="operations-activity__detail">{eventDetail(event)}</small>
-                    </span>
-                    <time className="operations-activity__time" dateTime={event.at}>
-                      {formatTime(event.at)}
-                    </time>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      )}
-
-      <nav className="redesign-tabs" aria-label="Workflow status">
-        {STATUS_FILTERS.map(value => (
+      <div className="segmented-control page-tabs" role="tablist" aria-label="Workflow status">
+        {[
+          ["active", "Active"],
+          ["history", "History"],
+          ["all", "All"],
+        ].map(([id, label]) => (
           <button
-            key={value}
+            key={id}
             type="button"
-            className={
-              filter === value
-                ? "redesign-tabs__tab redesign-tabs__tab--active"
-                : "redesign-tabs__tab"
-            }
-            onClick={() => setFilter(value)}
+            className={filter === id ? "segmented-control__item segmented-control__item--active" : "segmented-control__item"}
+            onClick={() => setFilter(id)}
           >
-            {value}
+            {label}
           </button>
         ))}
-      </nav>
+      </div>
 
-      <section className="operations-list">
-        {!filtered.length ? (
-          <StateView
-            variant="empty"
-            icon={IconBolt}
-            title="No workflows"
-            message="Start a workflow from Chat or trigger a Schedule. Workflows appear here in real time."
-          />
-        ) : (
-          <ul className="workflow-list">
-            {filtered.map(item => (
-              <li key={item.id}>
-                <button
-                  type="button"
-                  className="workflow-list__item"
-                  onClick={() => openWorkflow(item.id)}
-                >
-                  <span className="workflow-list__body">
-                    <strong className="workflow-list__title">{item.process || "Ad-hoc workflow"}</strong>
-                    <small className="workflow-list__meta">
-                      {item.id} · {Object.keys(item.tasks || {}).length} tasks
-                    </small>
-                  </span>
-                  <StatusBadge tone={statusTone[item.status] || "neutral"}>{item.status}</StatusBadge>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      {!filtered.length ? (
+        <div className="empty-state">
+          <IconActivity size={28} stroke={1.4} />
+          <strong>{filter === "active" ? "Nothing is running" : "No Workflows here"}</strong>
+          <span>When Nora starts work, its Workflow appears here.</span>
+        </div>
+      ) : (
+        <div className="workflow-list">
+          {filtered.map(item => {
+            const runningAgents = activeAgents.filter(agent => agent.workflowId === item.id).length;
+            const tasks = Object.values(item.tasks || {});
+            const completeTasks = tasks.filter(task => task.status === "completed" || task.status === "skipped").length;
+            return (
+              <button key={item.id} type="button" className="workflow-row" onClick={() => setSelectedId(item.id)}>
+                <span className={`workflow-row__status workflow-row__status--${item.status}`} />
+                <span className="workflow-row__copy">
+                  <strong>{workflowTitle(item)}</strong>
+                  <small>{item.id}</small>
+                </span>
+                <span className="workflow-row__progress">{completeTasks}/{tasks.length} tasks</span>
+                <span className="workflow-row__agents">{runningAgents ? `${runningAgents} agent${runningAgents === 1 ? "" : "s"}` : "—"}</span>
+                <span className={`status-pill status-pill--${item.status}`}>{item.status}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
