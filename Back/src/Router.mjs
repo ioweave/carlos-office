@@ -5,6 +5,7 @@ const requestError = (message, statusCode = 400) => {
 };
 
 export const createRouter = ({
+  allowedOrigin,
   nora,
   processes,
   conversations,
@@ -15,19 +16,11 @@ export const createRouter = ({
   agents,
   tools,
   skills,
+  tasks,
 }) => {
-  const cors = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
-  };
-
-  const sendJson = (res, status, data) => {
-    res.writeHead(status, { ...cors, "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify(data));
-  };
-
-  const sendError = (res, status, message) => sendJson(res, status, { error: message });
+  if (!allowedOrigin || typeof allowedOrigin !== "string") {
+    throw new Error("Router requires one allowed frontend origin");
+  }
 
   const readJson = async req => {
     const chunks = [];
@@ -75,6 +68,23 @@ export const createRouter = ({
     const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
     const parts = partsFrom(url.pathname);
     const method = req.method ?? "GET";
+    const origin = req.headers.origin ?? null;
+
+    if (origin && origin !== allowedOrigin) {
+      res.writeHead(403, { "Content-Type": "application/json; charset=utf-8" });
+      return res.end(JSON.stringify({ error: "Origin not allowed" }));
+    }
+
+    const cors = {
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
+      ...(origin ? { "Access-Control-Allow-Origin": origin, Vary: "Origin" } : {}),
+    };
+    const sendJson = (status, data) => {
+      res.writeHead(status, { ...cors, "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify(data));
+    };
+    const sendError = (status, message) => sendJson(status, { error: message });
 
     if (method === "OPTIONS") {
       res.writeHead(204, cors);
@@ -83,23 +93,23 @@ export const createRouter = ({
 
     try {
       if (method === "GET" && parts[0] === "health" && parts.length === 1) {
-        return sendJson(res, 200, { ok: true });
+        return sendJson(200, { ok: true });
       }
 
       if (method === "GET" && parts[0] === "models" && parts.length === 1) {
-        return sendJson(res, 200, nora.listModels());
+        return sendJson(200, nora.listModels());
       }
 
       if (method === "GET" && parts[0] === "nora" && parts.length === 1) {
-        return sendJson(res, 200, nora.getNoraState());
+        return sendJson(200, nora.getNoraState());
       }
 
       if (method === "GET" && parts[0] === "events" && parts.length === 1) {
-        return sendJson(res, 200, listRecentEvents(url));
+        return sendJson(200, listRecentEvents(url));
       }
 
       if (method === "GET" && parts[0] === "conversations" && parts.length === 1) {
-        return sendJson(res, 200, conversations.listConversations());
+        return sendJson(200, conversations.listConversations());
       }
 
       if (method === "POST" && parts[0] === "conversations" && parts.length === 1) {
@@ -109,14 +119,12 @@ export const createRouter = ({
           provider: body.provider ?? null,
           model: body.model ?? null,
         });
-        return sendJson(res, 201, conversation);
+        return sendJson(201, conversation);
       }
 
       if (method === "GET" && parts[0] === "conversations" && parts.length === 2) {
         const conversation = await conversations.getConversation(parts[1]);
-        return conversation
-          ? sendJson(res, 200, conversation)
-          : sendError(res, 404, "Conversation not found");
+        return conversation ? sendJson(200, conversation) : sendError(404, "Conversation not found");
       }
 
       if (
@@ -130,7 +138,7 @@ export const createRouter = ({
           provider: body.provider,
           model: body.model,
         });
-        return sendJson(res, 200, conversation);
+        return sendJson(200, conversation);
       }
 
       if (
@@ -145,7 +153,7 @@ export const createRouter = ({
           content: body.content,
           artifacts: body.artifacts ?? [],
         });
-        return sendJson(res, 200, result);
+        return sendJson(200, result);
       }
 
       if (
@@ -154,7 +162,7 @@ export const createRouter = ({
         && parts[2] === "artifacts"
         && parts.length === 3
       ) {
-        return sendJson(res, 200, await artifacts.listArtifacts(parts[1]));
+        return sendJson(200, await artifacts.listArtifacts(parts[1]));
       }
 
       if (
@@ -173,7 +181,7 @@ export const createRouter = ({
             ? Buffer.from(body.content ?? "", "base64")
             : body.content ?? "",
         });
-        return sendJson(res, 201, artifact);
+        return sendJson(201, artifact);
       }
 
       if (
@@ -183,7 +191,7 @@ export const createRouter = ({
         && parts.length === 4
       ) {
         const artifact = await artifacts.getArtifact(parts[1], parts[3]);
-        if (!artifact) return sendError(res, 404, "Artifact not found");
+        if (!artifact) return sendError(404, "Artifact not found");
 
         const content = await artifacts.readArtifact(parts[1], parts[3]);
         res.writeHead(200, {
@@ -195,21 +203,21 @@ export const createRouter = ({
       }
 
       if (method === "GET" && parts[0] === "processes" && parts.length === 1) {
-        return sendJson(res, 200, processes.listProcesses());
+        return sendJson(200, processes.listProcesses());
       }
 
       if (method === "GET" && parts[0] === "processes" && parts.length === 2) {
         const process = processes.getProcess(parts[1]);
-        return process ? sendJson(res, 200, process) : sendError(res, 404, "Process not found");
+        return process ? sendJson(200, process) : sendError(404, "Process not found");
       }
 
       if (method === "GET" && parts[0] === "workflows" && parts.length === 1) {
-        return sendJson(res, 200, processes.listWorkflows());
+        return sendJson(200, processes.listWorkflows());
       }
 
       if (method === "GET" && parts[0] === "workflows" && parts.length === 2) {
         const workflow = processes.getWorkflow(parts[1]);
-        return workflow ? sendJson(res, 200, workflow) : sendError(res, 404, "Workflow not found");
+        return workflow ? sendJson(200, workflow) : sendError(404, "Workflow not found");
       }
 
       if (
@@ -219,11 +227,11 @@ export const createRouter = ({
         && parts.length === 3
       ) {
         const result = nora.inspectWorkflow(parts[1]);
-        return result ? sendJson(res, 200, result) : sendError(res, 404, "Workflow not found");
+        return result ? sendJson(200, result) : sendError(404, "Workflow not found");
       }
 
       if (method === "POST" && parts[0] === "workflows" && parts[2] === "run" && parts.length === 3) {
-        return sendJson(res, 200, await executeWorkflow(parts[1]));
+        return sendJson(200, await executeWorkflow(parts[1]));
       }
 
       if (
@@ -235,7 +243,7 @@ export const createRouter = ({
         const body = await readJson(req);
         await processes.resumeWorkflow(parts[1], body.taskIds ?? null);
         const execution = await executeWorkflow(parts[1]);
-        return sendJson(res, 200, execution.workflow);
+        return sendJson(200, execution.workflow);
       }
 
       if (
@@ -246,7 +254,7 @@ export const createRouter = ({
       ) {
         await processes.restartWorkflow(parts[1]);
         const execution = await executeWorkflow(parts[1]);
-        return sendJson(res, 200, execution.workflow);
+        return sendJson(200, execution.workflow);
       }
 
       if (
@@ -255,7 +263,8 @@ export const createRouter = ({
         && parts[2] === "cancel"
         && parts.length === 3
       ) {
-        return sendJson(res, 200, await processes.cancelWorkflow(parts[1]));
+        tasks.cancelWorkflowTasks(parts[1], "Workflow cancelled by Carlos");
+        return sendJson(200, await processes.cancelWorkflow(parts[1]));
       }
 
       if (
@@ -264,7 +273,7 @@ export const createRouter = ({
         && parts[2] === "inputs"
         && parts.length === 3
       ) {
-        return sendJson(res, 200, await processes.setWorkflowInputs(parts[1], await readJson(req)));
+        return sendJson(200, await processes.setWorkflowInputs(parts[1], await readJson(req)));
       }
 
       if (
@@ -273,7 +282,7 @@ export const createRouter = ({
         && parts[2] === "config"
         && parts.length === 3
       ) {
-        return sendJson(res, 200, await processes.setWorkflowConfig(parts[1], await readJson(req)));
+        return sendJson(200, await processes.setWorkflowConfig(parts[1], await readJson(req)));
       }
 
       if (
@@ -283,7 +292,7 @@ export const createRouter = ({
         && parts.length === 3
       ) {
         const body = await readJson(req);
-        return sendJson(res, 200, await processes.setWorkflowEdges(parts[1], body.edges));
+        return sendJson(200, await processes.setWorkflowEdges(parts[1], body.edges));
       }
 
       if (
@@ -292,7 +301,7 @@ export const createRouter = ({
         && parts[2] === "tasks"
         && parts.length === 4
       ) {
-        return sendJson(res, 200, await processes.editTask(parts[1], parts[3], await readJson(req)));
+        return sendJson(200, await processes.editTask(parts[1], parts[3], await readJson(req)));
       }
 
       if (
@@ -302,7 +311,7 @@ export const createRouter = ({
         && parts[4] === "skip"
         && parts.length === 5
       ) {
-        return sendJson(res, 200, await processes.skipTask(parts[1], parts[3]));
+        return sendJson(200, await processes.skipTask(parts[1], parts[3]));
       }
 
       if (
@@ -312,7 +321,7 @@ export const createRouter = ({
         && parts[4] === "review"
         && parts.length === 5
       ) {
-        return sendJson(res, 200, await nora.reviewFailedTask(parts[1], parts[3]));
+        return sendJson(200, await nora.reviewFailedTask(parts[1], parts[3]));
       }
 
       if (
@@ -322,11 +331,7 @@ export const createRouter = ({
         && parts.length === 4
       ) {
         const body = await readJson(req);
-        return sendJson(
-          res,
-          200,
-          await processes.addTask(parts[1], parts[3], body.task, body.edges ?? []),
-        );
+        return sendJson(200, await processes.addTask(parts[1], parts[3], body.task, body.edges ?? []));
       }
 
       if (
@@ -335,7 +340,7 @@ export const createRouter = ({
         && parts[2] === "tasks"
         && parts.length === 4
       ) {
-        return sendJson(res, 200, await processes.removeTask(parts[1], parts[3]));
+        return sendJson(200, await processes.removeTask(parts[1], parts[3]));
       }
 
       if (
@@ -346,14 +351,13 @@ export const createRouter = ({
       ) {
         const body = await readJson(req);
         return sendJson(
-          res,
           201,
           await nora.promoteWorkflow(parts[1], { name: body.name, purpose: body.purpose ?? null }),
         );
       }
 
       if (method === "GET" && parts[0] === "approvals" && parts.length === 1) {
-        return sendJson(res, 200, authorization.listApprovals(url.searchParams.get("status")));
+        return sendJson(200, authorization.listApprovals(url.searchParams.get("status")));
       }
 
       if (
@@ -362,7 +366,7 @@ export const createRouter = ({
         && parts[2] === "approve"
         && parts.length === 3
       ) {
-        return sendJson(res, 200, await authorization.approve(parts[1]));
+        return sendJson(200, await authorization.approve(parts[1]));
       }
 
       if (
@@ -371,15 +375,15 @@ export const createRouter = ({
         && parts[2] === "reject"
         && parts.length === 3
       ) {
-        return sendJson(res, 200, await authorization.reject(parts[1]));
+        return sendJson(200, await authorization.reject(parts[1]));
       }
 
       if (method === "GET" && parts[0] === "agents" && parts.length === 1) {
-        return sendJson(res, 200, agents.listBlueprints());
+        return sendJson(200, agents.listBlueprints());
       }
 
       if (method === "GET" && parts[0] === "agents" && parts[1] === "active" && parts.length === 2) {
-        return sendJson(res, 200, agents.listActiveAgents());
+        return sendJson(200, agents.listActiveAgents());
       }
 
       if (
@@ -390,14 +394,13 @@ export const createRouter = ({
       ) {
         const body = await readJson(req);
         return sendJson(
-          res,
           200,
           await nora.setAgentModel(parts[1], { provider: body.provider, model: body.model }),
         );
       }
 
       if (method === "GET" && parts[0] === "tools" && parts.length === 1) {
-        return sendJson(res, 200, tools.listTools().map(tool => ({
+        return sendJson(200, tools.listTools().map(tool => ({
           name: tool.name,
           description: tool.description ?? "",
           input: tool.input ?? {},
@@ -409,24 +412,24 @@ export const createRouter = ({
       }
 
       if (method === "GET" && parts[0] === "skills" && parts.length === 1) {
-        return sendJson(res, 200, skills.listSkills());
+        return sendJson(200, skills.listSkills());
       }
 
       if (method === "GET" && parts[0] === "schedules" && parts.length === 1) {
-        return sendJson(res, 200, schedules.listSchedules());
+        return sendJson(200, schedules.listSchedules());
       }
 
       if (method === "POST" && parts[0] === "schedules" && parts.length === 1) {
-        return sendJson(res, 201, await schedules.createSchedule(await readJson(req)));
+        return sendJson(201, await schedules.createSchedule(await readJson(req)));
       }
 
       if (method === "GET" && parts[0] === "schedules" && parts.length === 2) {
         const schedule = schedules.getSchedule(parts[1]);
-        return schedule ? sendJson(res, 200, schedule) : sendError(res, 404, "Schedule not found");
+        return schedule ? sendJson(200, schedule) : sendError(404, "Schedule not found");
       }
 
       if (method === "PATCH" && parts[0] === "schedules" && parts.length === 2) {
-        return sendJson(res, 200, await schedules.updateSchedule(parts[1], await readJson(req)));
+        return sendJson(200, await schedules.updateSchedule(parts[1], await readJson(req)));
       }
 
       if (
@@ -437,15 +440,15 @@ export const createRouter = ({
       ) {
         const workflow = await schedules.triggerSchedule(parts[1]);
         const execution = await executeWorkflow(workflow.id);
-        return sendJson(res, 201, execution.workflow);
+        return sendJson(201, execution.workflow);
       }
 
-      return sendError(res, 404, "Route not found");
+      return sendError(404, "Route not found");
     } catch (error) {
       console.error(error);
       const message = error instanceof Error ? error.message : String(error);
       const status = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
-      return sendError(res, status, message);
+      return sendError(status, message);
     }
   };
 };
