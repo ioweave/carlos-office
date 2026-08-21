@@ -9,6 +9,14 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "dev": "node --watch server.mjs"
+    "dev": "node --watch server.mjs",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "check": "node --check server.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "eslint": "^9.18.0",
+    "globals": "^15.14.0"
   }
 }
