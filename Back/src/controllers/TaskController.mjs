@@ -8,12 +8,13 @@ import {
   updateTaskAttempt,
 } from "./ProcessController.mjs";
 import { getAgent, getBlueprint, setAgentStatus } from "./AgentController.mjs";
-import { authorize, clearApproval, listApprovals } from "./AuthorizationController.mjs";
+import { authorize, consumeApproval, listApprovals } from "./AuthorizationController.mjs";
 import { recordEvent } from "./EventController.mjs";
 import { getTool } from "../registry/Tools.mjs";
 import { getSkill } from "../registry/Skills.mjs";
 
 const MAX_TOOL_ROUNDS = 12;
+const activeTaskControllers = new Map();
 let providers = new Map();
 
 export const setProviders = providerMap => {
@@ -22,6 +23,7 @@ export const setProviders = providerMap => {
 };
 
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
+const taskRunKey = (workflowId, taskId) => `${workflowId}\u0000${taskId}`;
 
 const requireWorkflow = workflowId => {
   const workflow = getWorkflow(workflowId);
@@ -190,6 +192,31 @@ const logSecondaryFailure = (stage, context, error) => {
   });
 };
 
+const cancellationMessage = signal => {
+  if (signal.reason instanceof Error) return signal.reason.message;
+  if (signal.reason) return String(signal.reason);
+  return "Workflow cancelled";
+};
+
+const throwIfCancelled = signal => {
+  if (!signal.aborted) return;
+  const error = signal.reason instanceof Error ? signal.reason : new Error(cancellationMessage(signal));
+  error.name = "AbortError";
+  throw error;
+};
+
+export const cancelWorkflowTasks = (workflowId, reason = "Workflow cancelled") => {
+  let cancelled = 0;
+
+  for (const [key, controller] of activeTaskControllers) {
+    if (!key.startsWith(`${workflowId}\u0000`) || controller.signal.aborted) continue;
+    controller.abort(new Error(reason));
+    cancelled += 1;
+  }
+
+  return cancelled;
+};
+
 export const runTask = async ({
   workflowId,
   taskId,
@@ -212,6 +239,13 @@ export const runTask = async ({
   if (previousAttempts.some(attempt => attempt.status === "running")) {
     throw new Error(`Task ${taskId} already has an active Attempt`);
   }
+
+  const runKey = taskRunKey(workflowId, taskId);
+  if (activeTaskControllers.has(runKey)) throw new Error(`Task ${taskId} already has an active execution`);
+
+  const controller = new AbortController();
+  const { signal } = controller;
+  activeTaskControllers.set(runKey, controller);
 
   const toolNames = tools === null ? [...(task.tools ?? [])] : [...tools];
   const skillNames = skills === null ? [...(task.skills ?? [])] : [...skills];
@@ -238,6 +272,7 @@ export const runTask = async ({
   let attemptStored = false;
 
   try {
+    throwIfCancelled(signal);
     await addTaskAttempt(workflowId, taskId, attempt);
     attemptStored = true;
     await setTaskStatus(workflowId, taskId, "running");
@@ -266,7 +301,9 @@ export const runTask = async ({
     let toolRounds = 0;
 
     while (true) {
-      const response = await provider.generate({ model, messages, tools: modelTools });
+      throwIfCancelled(signal);
+      const response = await provider.generate({ model, messages, tools: modelTools, signal });
+      throwIfCancelled(signal);
       if (!isObject(response)) throw new Error(`Provider ${providerName} returned an invalid response`);
 
       const content = typeof response.content === "string" ? response.content : "";
@@ -274,6 +311,7 @@ export const runTask = async ({
 
       if (!toolCalls.length) {
         if (!content.trim()) throw new Error(`Provider ${providerName} returned no usable Task output`);
+        throwIfCancelled(signal);
 
         const completed = await finishAttempt({
           workflowId,
@@ -300,6 +338,7 @@ export const runTask = async ({
       messages.push({ role: "assistant", content, toolCalls: structuredClone(toolCalls) });
 
       for (const toolCall of toolCalls) {
+        throwIfCancelled(signal);
         if (!toolCall || typeof toolCall.name !== "string") {
           throw new Error("Provider returned an invalid Tool call");
         }
@@ -354,9 +393,11 @@ export const runTask = async ({
             return blocked;
           }
 
-          clearApproval(approved.id);
+          throwIfCancelled(signal);
+          await consumeApproval(approved.id);
         }
 
+        throwIfCancelled(signal);
         const toolResult = await tool.execute(structuredClone(toolInput), {
           workflowId,
           taskId,
@@ -364,7 +405,9 @@ export const runTask = async ({
           agentId: agent.id,
           provider: tool.provider ?? null,
           model: tool.model ?? null,
+          signal,
         });
+        throwIfCancelled(signal);
         await recordEvent("tool.executed", {
           workflowId,
           taskId,
@@ -383,9 +426,56 @@ export const runTask = async ({
       }
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    let failed = null;
+    const cancelled = signal.aborted || getWorkflow(workflowId)?.status === "cancelled";
+    const message = cancelled ? cancellationMessage(signal) : error instanceof Error ? error.message : String(error);
 
+    if (cancelled) {
+      let result = null;
+      if (attemptStored) {
+        try {
+          result = await finishAttempt({
+            workflowId,
+            taskId,
+            attemptId: attempt.id,
+            status: "cancelled",
+            error: message,
+          });
+        } catch (finishError) {
+          logSecondaryFailure("Attempt cancellation finalization", {
+            workflowId,
+            taskId,
+            attemptId: attempt.id,
+          }, finishError);
+        }
+      }
+
+      try {
+        setAgentStatus(agent.id, "cancelled");
+      } catch (agentError) {
+        logSecondaryFailure("Agent cancellation state", { workflowId, taskId, agentId: agent.id }, agentError);
+      }
+
+      try {
+        await recordEvent("attempt.cancelled", {
+          workflowId,
+          taskId,
+          attemptId: attempt.id,
+          agentId: agent.id,
+          error: message,
+        });
+      } catch (eventError) {
+        logSecondaryFailure("Attempt cancellation event", { workflowId, taskId, attemptId: attempt.id }, eventError);
+      }
+
+      return result ?? {
+        ...structuredClone(attempt),
+        status: "cancelled",
+        endedAt: new Date().toISOString(),
+        error: message,
+      };
+    }
+
+    let failed = null;
     if (attemptStored) {
       try {
         failed = await finishAttempt({
@@ -431,5 +521,7 @@ export const runTask = async ({
       endedAt: new Date().toISOString(),
       error: message,
     };
+  } finally {
+    if (activeTaskControllers.get(runKey) === controller) activeTaskControllers.delete(runKey);
   }
 };
