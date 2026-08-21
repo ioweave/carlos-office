@@ -8,6 +8,7 @@ import StatusBadge from "../components/StatusBadge";
 const TABS = ["pending", "approved", "consumed", "rejected"];
 
 const formatTime = value => {
+  if (!value) return "—";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
 };
