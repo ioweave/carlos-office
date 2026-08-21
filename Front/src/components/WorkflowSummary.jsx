@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   IconActivity,
   IconArrowRight,
@@ -11,7 +11,7 @@ import {
 import useWorkflowPolling from "../hooks/useWorkflowPolling";
 import StatusBadge from "./StatusBadge";
 
-const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const SETTLED_STATUSES = new Set(["blocked", "completed", "failed", "cancelled"]);
 const statusTone = {
   running: "info",
   ready: "info",
@@ -46,12 +46,15 @@ const TaskRow = ({ task }) => {
 
 export default function WorkflowSummary({ workflowId, onOpenOperations, onSettled }) {
   const { snapshot, activity, error } = useWorkflowPolling(workflowId);
+  const lastSettledKey = useRef("");
   const workflowStatus = snapshot?.workflow?.status ?? "";
+  const settledKey = SETTLED_STATUSES.has(workflowStatus) ? `${workflowId}:${workflowStatus}` : "";
 
   useEffect(() => {
-    if (!snapshot?.workflow || !TERMINAL_STATUSES.has(workflowStatus)) return;
+    if (!settledKey || !snapshot?.workflow || lastSettledKey.current === settledKey) return;
+    lastSettledKey.current = settledKey;
     void onSettled?.(snapshot.workflow);
-  }, [workflowStatus, onSettled]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [settledKey, snapshot, onSettled]);
 
   if (!workflowId) return null;
   if (error && !snapshot) {
