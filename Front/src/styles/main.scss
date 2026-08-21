@@ -61,10 +61,11 @@ pre {
 }
 
 .office-app {
-  display: grid;
-  grid-template-columns: 214px minmax(0, 1fr);
+  display: flex;
   width: 100%;
-  height: 100%;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
   background: var(--color-bg);
 }
 
@@ -72,6 +73,7 @@ pre {
   display: flex;
   min-width: 0;
   min-height: 0;
+  flex: 1 1 auto;
   flex-direction: column;
   overflow: hidden;
 }
@@ -80,7 +82,10 @@ pre {
   position: relative;
   z-index: 20;
   display: flex;
+  width: 214px;
+  min-width: 214px;
   min-height: 0;
+  flex: 0 0 214px;
   flex-direction: column;
   border-right: 1px solid var(--color-border);
   background: var(--color-surface);
@@ -102,11 +107,12 @@ pre {
 }
 
 .office-nav__brand-mark {
-  display: grid;
+  display: flex;
   width: 34px;
   height: 34px;
   flex: 0 0 34px;
-  place-items: center;
+  align-items: center;
+  justify-content: center;
   border-radius: 9px;
   background: var(--color-text);
   color: var(--color-surface);
@@ -146,7 +152,7 @@ pre {
 }
 
 .office-nav__pages {
-  flex: 1;
+  flex: 1 1 auto;
 }
 
 .office-nav__utility {
@@ -234,16 +240,19 @@ pre {
 }
 
 .workspace-page {
+  display: flex;
   width: 100%;
-  height: 100%;
   min-width: 0;
   min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
   overflow: auto;
   background: var(--color-bg);
 }
 
 .page-header {
   display: flex;
+  flex: 0 0 auto;
   align-items: flex-start;
   justify-content: space-between;
   gap: 24px;
@@ -404,6 +413,8 @@ pre {
 }
 
 .page-tabs {
+  flex: 0 0 auto;
+  align-self: flex-start;
   margin: 18px 32px 0;
 }
 
@@ -574,19 +585,22 @@ pre {
 }
 
 .definition-list > div {
-  display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
+  display: flex;
   gap: 12px;
   padding: 10px 0;
   border-bottom: 1px solid var(--color-border);
 }
 
 .definition-list span {
+  width: 92px;
+  flex: 0 0 92px;
   color: var(--color-text-faint);
   font-size: 11px;
 }
 
 .definition-list strong {
+  min-width: 0;
+  flex: 1 1 auto;
   overflow-wrap: anywhere;
   font-size: 11px;
   font-weight: 650;
@@ -646,14 +660,15 @@ pre {
 }
 
 .agent-config__grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
   gap: 10px;
   margin-top: 14px;
 }
 
 .agent-config__field {
   display: flex;
+  min-width: 0;
+  flex: 1 1 0;
   flex-direction: column;
   gap: 5px;
 }
@@ -687,8 +702,10 @@ pre {
 }
 
 @media (max-width: 980px) {
-  .office-app {
-    grid-template-columns: 66px minmax(0, 1fr);
+  .office-nav {
+    width: 66px;
+    min-width: 66px;
+    flex-basis: 66px;
   }
 
   .office-nav__brand {
@@ -725,5 +742,9 @@ pre {
   .page-tabs {
     margin-left: 22px;
     margin-right: 22px;
+  }
+
+  .agent-config__grid {
+    flex-direction: column;
   }
 }
