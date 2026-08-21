@@ -1,7 +1,17 @@
-import { IconActivity, IconArrowRight, IconCircleCheck, IconCircleDot, IconCircleX, IconClock, IconLock } from "@tabler/icons-react";
+import { useEffect } from "react";
+import {
+  IconActivity,
+  IconArrowRight,
+  IconCircleCheck,
+  IconCircleDot,
+  IconCircleX,
+  IconClock,
+  IconLock,
+} from "@tabler/icons-react";
 import useWorkflowPolling from "../hooks/useWorkflowPolling";
 import StatusBadge from "./StatusBadge";
 
+const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const statusTone = {
   running: "info",
   ready: "info",
@@ -15,8 +25,15 @@ const statusTone = {
 
 const TaskRow = ({ task }) => {
   const tone = statusTone[task.status] || "neutral";
-  const Icon = task.status === "completed" ? IconCircleCheck : task.status === "failed" ? IconCircleX : task.status === "blocked" ? IconLock : IconCircleDot;
+  const Icon = task.status === "completed"
+    ? IconCircleCheck
+    : task.status === "failed"
+      ? IconCircleX
+      : task.status === "blocked"
+        ? IconLock
+        : IconCircleDot;
   const taskLabel = task.objective || task.id;
+
   return (
     <li className="workflow-summary__task">
       <span className="workflow-summary__task-icon"><Icon size={15} stroke={1.6} /></span>
@@ -27,14 +44,23 @@ const TaskRow = ({ task }) => {
   );
 };
 
-export default function WorkflowSummary({ workflowId, onOpenOperations }) {
+export default function WorkflowSummary({ workflowId, onOpenOperations, onSettled }) {
   const { snapshot, activity, error } = useWorkflowPolling(workflowId);
+  const workflowStatus = snapshot?.workflow?.status ?? "";
+
+  useEffect(() => {
+    if (!snapshot?.workflow || !TERMINAL_STATUSES.has(workflowStatus)) return;
+    void onSettled?.(snapshot.workflow);
+  }, [workflowStatus, onSettled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!workflowId) return null;
   if (error && !snapshot) {
     return (
       <aside className="workflow-summary workflow-summary--error">
-        <header className="workflow-summary__header"><IconActivity size={16} /><strong className="workflow-summary__title">Workflow</strong></header>
+        <header className="workflow-summary__header">
+          <IconActivity size={16} />
+          <strong className="workflow-summary__title">Workflow</strong>
+        </header>
         <p className="workflow-summary__error">{error}</p>
       </aside>
     );
@@ -42,7 +68,10 @@ export default function WorkflowSummary({ workflowId, onOpenOperations }) {
   if (!snapshot) {
     return (
       <aside className="workflow-summary">
-        <header className="workflow-summary__header"><span className="loader" /><strong className="workflow-summary__title">Loading workflow…</strong></header>
+        <header className="workflow-summary__header">
+          <span className="loader" />
+          <strong className="workflow-summary__title">Loading workflow…</strong>
+        </header>
       </aside>
     );
   }
@@ -79,7 +108,10 @@ export default function WorkflowSummary({ workflowId, onOpenOperations }) {
       {!!activity.length && (
         <div className="workflow-summary__activity" aria-label="Runtime activity">
           {activity.map(item => (
-            <div key={item.id} className={`workflow-summary__activity-item workflow-summary__activity-item--${item.tone}`}>
+            <div
+              key={item.id}
+              className={`workflow-summary__activity-item workflow-summary__activity-item--${item.tone}`}
+            >
               <IconClock size={12} />
               <span>{item.label}</span>
             </div>
