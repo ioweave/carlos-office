@@ -1,28 +1,24 @@
 const REQUEST_TIMEOUT_MS = 300_000;
 
-const normalizeBaseUrl = (value) => {
+const normalizeBaseUrl = value => {
   const url = (value || "http://localhost:11434/api").replace(/\/+$/, "");
   return url.endsWith("/api") ? url : `${url}/api`;
-}
+};
 
-const headers = (apiKey) => {
+const headers = apiKey => {
   const result = { "Content-Type": "application/json" };
   if (apiKey) result.Authorization = `Bearer ${apiKey}`;
   return result;
-}
+};
 
-const toJsonSchema = (input) => {
+const toJsonSchema = input => {
   if (input && typeof input === "object" && input.type === "object") return input;
 
   if (!input || typeof input !== "object" || Array.isArray(input)) {
-    return {
-      type: "object",
-      properties: {},
-    };
+    return { type: "object", properties: {} };
   }
 
   const properties = {};
-
   for (const [name, definition] of Object.entries(input)) {
     if (definition && typeof definition === "object") {
       properties[name] = definition;
@@ -34,13 +30,10 @@ const toJsonSchema = (input) => {
     };
   }
 
-  return {
-    type: "object",
-    properties,
-  };
-}
+  return { type: "object", properties };
+};
 
-const normalizeTools = (tools = []) => tools.map((tool) => ({
+const normalizeTools = (tools = []) => tools.map(tool => ({
   type: "function",
   function: {
     name: tool.name,
@@ -49,7 +42,7 @@ const normalizeTools = (tools = []) => tools.map((tool) => ({
   },
 }));
 
-const normalizeMessages = (messages = []) => messages.map((message) => {
+const normalizeMessages = (messages = []) => messages.map(message => {
   if (message.role === "tool") {
     return {
       role: "tool",
@@ -86,12 +79,15 @@ const normalizeToolCalls = (toolCalls = []) => toolCalls.map((call, index) => ({
 }));
 
 const request = async (url, options, apiKey) => {
+  const { signal: providedSignal = null, ...requestOptions } = options;
+  const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const signal = providedSignal ? AbortSignal.any([providedSignal, timeoutSignal]) : timeoutSignal;
   const response = await fetch(url, {
-    ...options,
-    signal: options.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    ...requestOptions,
+    signal,
     headers: {
       ...headers(apiKey),
-      ...(options.headers ?? {}),
+      ...(requestOptions.headers ?? {}),
     },
   });
 
@@ -101,7 +97,7 @@ const request = async (url, options, apiKey) => {
   }
 
   return response.json();
-}
+};
 
 export const createOllamaProvider = ({
   baseUrl = "http://localhost:11434/api",
@@ -113,14 +109,11 @@ export const createOllamaProvider = ({
     name: "ollama",
     models: [],
 
-    async generate({ model, messages, tools = [] }) {
+    async generate({ model, messages, tools = [], signal = null }) {
       if (!model || typeof model !== "string") {
         throw new Error("Ollama model must be a non-empty string");
       }
-
-      if (!Array.isArray(messages)) {
-        throw new Error("Ollama messages must be an array");
-      }
+      if (!Array.isArray(messages)) throw new Error("Ollama messages must be an array");
 
       const body = {
         model,
@@ -135,6 +128,7 @@ export const createOllamaProvider = ({
         {
           method: "POST",
           body: JSON.stringify(body),
+          signal,
         },
         apiKey,
       );
@@ -153,7 +147,7 @@ export const createOllamaProvider = ({
 
     async listModels() {
       const result = await request(`${apiUrl}/tags`, { method: "GET" }, apiKey);
-      return (result.models ?? []).map((model) => model.name ?? model.model);
+      return (result.models ?? []).map(model => model.name ?? model.model);
     },
 
     async refreshModels() {
@@ -163,4 +157,4 @@ export const createOllamaProvider = ({
   };
 
   return provider;
-}
+};
