@@ -127,6 +127,19 @@ export const createRouter = ({
         return conversation ? sendJson(200, conversation) : sendError(404, "Conversation not found");
       }
 
+      if (method === "PATCH" && parts[0] === "conversations" && parts.length === 2) {
+        const body = await readJson(req);
+        const conversation = await conversations.setConversationTitle(parts[1], body.title);
+        return sendJson(200, conversation);
+      }
+
+      if (method === "DELETE" && parts[0] === "conversations" && parts.length === 2) {
+        const deleted = await conversations.deleteConversation(parts[1]);
+        return deleted
+          ? sendJson(200, { id: parts[1], deleted: true })
+          : sendError(404, "Conversation not found");
+      }
+
       if (method === "PATCH" && parts[0] === "conversations" && parts[2] === "model" && parts.length === 3) {
         const body = await readJson(req);
         const conversation = await nora.setConversationModel(parts[1], {
