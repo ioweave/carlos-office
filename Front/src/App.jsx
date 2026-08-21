@@ -4,31 +4,35 @@ import api, { endpoints } from "./api";
 import Sidebar from "./components/Sidebar";
 import ChatPage from "./pages/ChatPage";
 import OfficeMapPage from "./pages/OfficeMapPage";
-import ToolsPage from "./pages/ToolsPage";
-import SkillsPage from "./pages/SkillsPage";
-import SettingsPage from "./pages/SettingsPage";
+import CapabilitiesPage from "./pages/CapabilitiesPage";
 import AuthorizationsPage from "./pages/AuthorizationsPage";
 import ProcessesPage from "./pages/ProcessesPage";
 import OperationsPage from "./pages/OperationsPage";
 
-const PAGES = ["chat", "map", "processes", "tools", "skills", "authorizations", "operations", "settings"];
+const PAGES = ["chat", "map", "processes", "operations", "authorizations", "capabilities"];
 
 const prefersDark = () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
 
+const migrateStoredPage = stored => {
+  if (stored === "agents") return "map";
+  if (["tools", "skills"].includes(stored)) return "capabilities";
+  if (stored === "settings") return "chat";
+  return PAGES.includes(stored) ? stored : "chat";
+};
+
 export default function App() {
-  const [active, setActiveState] = useState(() => {
-    const stored = localStorage.getItem("office-active-page") || "chat";
-    if (stored === "agents") return "map";
-    return PAGES.includes(stored) ? stored : "chat";
-  });
+  const [active, setActiveState] = useState(() => (
+    migrateStoredPage(localStorage.getItem("office-active-page") || "chat")
+  ));
   const [theme, setThemeState] = useState(localStorage.getItem("office-theme") || "system");
   const [systemDark, setSystemDark] = useState(prefersDark);
-  const [sidebarCollapsed, setSidebarCollapsedState] = useState(() => localStorage.getItem("office-sidebar-collapsed") === "true");
+  const [sidebarCollapsed, setSidebarCollapsedState] = useState(() => (
+    localStorage.getItem("office-sidebar-collapsed") === "true"
+  ));
   const [health, setHealth] = useState(null);
   const [nora, setNora] = useState({ provider: "", model: "" });
   const [agents, setAgents] = useState([]);
   const [activeAgents, setActiveAgents] = useState([]);
-  const [tools, setTools] = useState([]);
   const [loading, setLoading] = useState(true);
   const [chatRequest, setChatRequest] = useState(null);
   const [operationsRequest, setOperationsRequest] = useState(null);
@@ -52,16 +56,14 @@ export default function App() {
 
   const load = useCallback(async () => {
     try {
-      const [healthResponse, agentsResponse, toolsResponse, activeResponse, noraResponse] = await Promise.all([
+      const [healthResponse, agentsResponse, activeResponse, noraResponse] = await Promise.all([
         api.get(endpoints.health()),
         api.get(endpoints.agents()),
-        api.get(endpoints.tools()),
         api.get(endpoints.agentsActive()),
         api.get(endpoints.nora()),
       ]);
       setHealth(healthResponse.data);
       setAgents(agentsResponse.data || []);
-      setTools(toolsResponse.data || []);
       setActiveAgents(activeResponse.data || []);
       const noraState = noraResponse.data || {};
       setNora({ provider: noraState.provider || "", model: noraState.model || "" });
@@ -97,8 +99,6 @@ export default function App() {
     return () => clearInterval(timer);
   }, [load]);
 
-  // React to OS theme changes. systemDark drives `effective` through React state
-  // so every consumer (root data-theme, Sidebar, Toaster) re-renders on switch.
   useEffect(() => {
     const query = window.matchMedia("(prefers-color-scheme: dark)");
     const onChange = event => {
@@ -139,12 +139,17 @@ export default function App() {
 
   const workingCount = activeAgents.length;
   const connected = health?.ok === true;
-
   const secondaryPage = {
-    map: <OfficeMapPage agents={agents} activeAgents={activeAgents} onOpenConversation={openConversationFromMap} onOpenOperations={openOperations} onAgentSaved={updateAgentState} />,
-    tools: <ToolsPage tools={tools} onAskNora={askNora} />,
-    skills: <SkillsPage onAskNora={askNora} />,
-    settings: <SettingsPage health={health} theme={theme} setTheme={setTheme} />,
+    map: (
+      <OfficeMapPage
+        agents={agents}
+        activeAgents={activeAgents}
+        onOpenConversation={openConversationFromMap}
+        onOpenOperations={openOperations}
+        onAgentSaved={updateAgentState}
+      />
+    ),
+    capabilities: <CapabilitiesPage onAskNora={askNora} />,
     authorizations: <AuthorizationsPage />,
     processes: <ProcessesPage onAskNora={askNora} />,
     operations: <OperationsPage onAskNora={askNora} openRequest={operationsRequest} />,
@@ -158,7 +163,6 @@ export default function App() {
         connected={connected}
         nora={nora}
         effectiveTheme={effective}
-        theme={theme}
         setTheme={setTheme}
         collapsed={sidebarCollapsed}
         setCollapsed={setSidebarCollapsed}
@@ -173,7 +177,13 @@ export default function App() {
         ) : (
           <>
             <div className="office-shell__page" hidden={active !== "chat"}>
-              <ChatPage agents={agents} health={health} nora={nora} onNoraChange={setNora} openRequest={chatRequest} onOpenOperations={openOperations} />
+              <ChatPage
+                agents={agents}
+                health={health}
+                nora={nora}
+                openRequest={chatRequest}
+                onOpenOperations={openOperations}
+              />
             </div>
             {active !== "chat" && secondaryPage}
           </>
