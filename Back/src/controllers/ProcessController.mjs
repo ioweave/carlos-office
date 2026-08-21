@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,6 +14,7 @@ const workflowsDir = resolve(here, "../../ObsidianVault/90-System/Workflows");
 const processes = new Map();
 const workflows = new Map();
 const workflowWrites = new Map();
+const deletedWorkflowIds = new Set();
 const TASK_STATUSES = new Set([
   "pending",
   "ready",
@@ -98,8 +99,11 @@ const parseProcess = (content, filename) => {
 
 const persistWorkflow = async workflow => {
   const id = workflow.id;
+  if (deletedWorkflowIds.has(id)) throw new Error(`Workflow ${id} was deleted`);
+
   const previous = workflowWrites.get(id) ?? Promise.resolve();
   const next = previous.then(async () => {
+    if (deletedWorkflowIds.has(id)) return;
     await mkdir(workflowsDir, { recursive: true });
     await writeFile(workflowPath(id), JSON.stringify(workflow, null, 2), "utf8");
   });
@@ -115,6 +119,7 @@ const persistWorkflow = async workflow => {
 
 const commitWorkflow = async workflow => {
   await persistWorkflow(workflow);
+  if (deletedWorkflowIds.has(workflow.id)) throw new Error(`Workflow ${workflow.id} was deleted`);
   workflows.set(workflow.id, workflow);
 };
 
@@ -264,6 +269,7 @@ export const saveProcess = async process => {
 export const loadWorkflows = async () => {
   await mkdir(workflowsDir, { recursive: true });
   workflows.clear();
+  deletedWorkflowIds.clear();
 
   const files = await readdir(workflowsDir);
   for (const filename of files.filter(file => file.endsWith(".json"))) {
@@ -569,6 +575,21 @@ export const cancelWorkflow = async workflowId => {
   await commitWorkflow(draft);
   await recordEvent("workflow.cancelled", { workflowId });
   return structuredClone(draft);
+};
+
+export const deleteWorkflow = async workflowId => {
+  validateFileName(workflowId, "workflow ID");
+  if (!workflows.has(workflowId)) return false;
+
+  deletedWorkflowIds.add(workflowId);
+  workflows.delete(workflowId);
+
+  const pending = workflowWrites.get(workflowId);
+  if (pending) await pending.catch(() => {});
+  await rm(workflowPath(workflowId), { force: true });
+  workflowWrites.delete(workflowId);
+  await recordEvent("workflow.deleted", { workflowId });
+  return true;
 };
 
 export const setWorkflowResult = async (workflowId, result) => {
