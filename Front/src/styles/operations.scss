@@ -1,0 +1,335 @@
+// Operations page — durable activity, workflow runtime list, graph + task inspector, promote dialog.
+// Mobile-first; desktop split at the configured desktop breakpoint.
+
+@use "./config" as config;
+
+.operations-page {
+  overflow: auto;
+}
+
+.operations-activity {
+  border-block: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.operations-activity__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px 8px;
+}
+
+.operations-activity__title {
+  margin: 2px 0 0;
+  font-family: var(--font-headline);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.operations-activity__meta {
+  color: var(--color-text-faint);
+  font-size: 10px;
+}
+
+.operations-activity__list {
+  display: flex;
+  max-height: 260px;
+  flex-direction: column;
+  margin: 0;
+  padding: 0 8px 10px;
+  overflow: auto;
+  list-style: none;
+}
+
+.operations-activity__item {
+  flex: 0 0 auto;
+}
+
+.operations-activity__item--separated {
+  border-top: 1px solid var(--color-border);
+}
+
+.operations-activity__button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+}
+
+.operations-activity__button:hover {
+  background: var(--color-surface-soft);
+}
+
+.operations-activity__button:disabled {
+  cursor: default;
+}
+
+.operations-activity__icon {
+  flex: 0 0 auto;
+}
+
+.operations-activity__icon--info {
+  color: var(--color-info);
+}
+
+.operations-activity__icon--danger {
+  color: var(--color-danger);
+}
+
+.operations-activity__icon--warning {
+  color: var(--color-warning);
+}
+
+.operations-activity__icon--success {
+  color: var(--color-success);
+}
+
+.operations-activity__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.operations-activity__event {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.operations-activity__detail {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operations-activity__time {
+  flex: 0 0 auto;
+  color: var(--color-text-faint);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.operations-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+.workflow-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  gap: 6px;
+  list-style: none;
+}
+
+.workflow-list__item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  text-align: left;
+}
+
+.workflow-list__item:hover {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-soft);
+}
+
+.workflow-list__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.workflow-list__title {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-list__meta {
+  color: var(--color-text-faint);
+  font-size: 11px;
+}
+
+.operations-studio {
+  overflow: hidden;
+}
+
+.operations-studio__header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.operations-studio__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.operations-studio__graph {
+  flex: 1 1 auto;
+  min-height: 320px;
+  overflow: auto;
+  padding: 16px;
+  background: var(--color-surface-soft);
+}
+
+.operations-studio__inspector {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 16px;
+  overflow: auto;
+  padding: 16px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.operations-studio__inspector-title {
+  margin: 0;
+  font-family: var(--font-headline);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.operations-studio__inspector-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.operations-approvals {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  gap: 6px;
+  list-style: none;
+}
+
+.operations-approvals__item {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+  gap: 2px;
+}
+
+.operations-approvals__title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.operations-approvals__meta {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.operations-attempts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.operations-attempts__item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+}
+
+.operations-attempts__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.operations-attempts__head-meta {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.operations-attempts__time {
+  margin-inline-start: auto;
+  color: var(--color-text-faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.operations-task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.operations-result {
+  overflow: auto;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.operations-promote__field {
+  display: flex;
+  flex-direction: column;
+  margin-top: 12px;
+  gap: 4px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+@media (min-width: config.$screen-desktop) {
+  .operations-activity__header {
+    padding-inline: 24px;
+  }
+
+  .operations-activity__list {
+    padding-inline: 24px;
+  }
+
+  .operations-studio__body {
+    flex-direction: row;
+  }
+
+  .operations-studio__inspector {
+    flex: 0 0 360px;
+    border-top: 0;
+    border-left: 1px solid var(--color-border);
+  }
+}

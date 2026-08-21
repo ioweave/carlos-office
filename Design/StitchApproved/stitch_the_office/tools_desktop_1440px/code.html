@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CARLOS Office - Tools</title>
+<!-- Fonts -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<!-- Material Symbols -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Tailwind Config -->
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "inverse-primary": "#b5c4ff",
+                    "tertiary-fixed-dim": "#2ddec1",
+                    "tertiary-fixed": "#59fbdd",
+                    "primary": "#004edd",
+                    "on-secondary": "#ffffff",
+                    "on-primary": "#ffffff",
+                    "surface-container": "#edecff",
+                    "secondary": "#575e74",
+                    "surface-bright": "#fbf8ff",
+                    "primary-fixed": "#dce1ff",
+                    "outline": "#737686",
+                    "on-secondary-fixed-variant": "#3f465b",
+                    "on-surface": "#181a2b",
+                    "on-primary-fixed": "#00164e",
+                    "tertiary": "#006859",
+                    "on-error": "#ffffff",
+                    "on-tertiary": "#ffffff",
+                    "surface-container-low": "#f4f2ff",
+                    "error": "#ba1a1a",
+                    "inverse-surface": "#2d2f41",
+                    "surface-container-lowest": "#ffffff",
+                    "on-primary-container": "#fffbff",
+                    "on-tertiary-fixed-variant": "#005145",
+                    "background": "#fbf8ff",
+                    "surface-container-highest": "#e0e1f8",
+                    "on-secondary-container": "#5b6278",
+                    "primary-fixed-dim": "#b5c4ff",
+                    "surface-tint": "#0050e2",
+                    "tertiary-container": "#008471",
+                    "surface-dim": "#d7d8f0",
+                    "on-error-container": "#93000a",
+                    "secondary-fixed": "#dbe2fc",
+                    "error-container": "#ffdad6",
+                    "on-surface-variant": "#424655",
+                    "surface-container-high": "#e6e6fe",
+                    "on-tertiary-fixed": "#00201a",
+                    "secondary-container": "#d9dff9",
+                    "outline-variant": "#c3c6d7",
+                    "surface": "#fbf8ff",
+                    "on-secondary-fixed": "#141b2e",
+                    "surface-variant": "#e0e1f8",
+                    "secondary-fixed-dim": "#bfc6e0",
+                    "inverse-on-surface": "#f0efff",
+                    "on-primary-fixed-variant": "#003cae",
+                    "on-tertiary-container": "#f4fffa",
+                    "primary-container": "#2c68ff",
+                    "on-background": "#181a2b"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "spacing": {
+                    "lg": "24px",
+                    "xl": "48px",
+                    "sm": "8px",
+                    "base": "4px",
+                    "container-max": "1280px",
+                    "margin-mobile": "16px",
+                    "gutter": "16px",
+                    "md": "16px",
+                    "xs": "4px",
+                    "margin-desktop": "32px"
+            },
+            "fontFamily": {
+                    "headline-lg-mobile": ["Hanken Grotesk"],
+                    "body-md": ["Inter"],
+                    "label-sm": ["Inter"],
+                    "headline-md": ["Hanken Grotesk"],
+                    "label-caps": ["JetBrains Mono"],
+                    "headline-sm": ["Hanken Grotesk"],
+                    "body-lg": ["Inter"],
+                    "headline-lg": ["Hanken Grotesk"]
+            },
+            "fontSize": {
+                    "headline-lg-mobile": ["26px", {"lineHeight": "1.2", "fontWeight": "600"}],
+                    "body-md": ["14px", {"lineHeight": "1.5", "fontWeight": "400"}],
+                    "label-sm": ["12px", {"lineHeight": "1.2", "fontWeight": "500"}],
+                    "headline-md": ["24px", {"lineHeight": "1.3", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                    "label-caps": ["12px", {"lineHeight": "1.2", "letterSpacing": "0.05em", "fontWeight": "500"}],
+                    "headline-sm": ["18px", {"lineHeight": "1.4", "fontWeight": "600"}],
+                    "body-lg": ["16px", {"lineHeight": "1.6", "fontWeight": "400"}],
+                    "headline-lg": ["32px", {"lineHeight": "1.2", "letterSpacing": "-0.02em", "fontWeight": "600"}]
+            }
+          }
+        }
+      }
+    </script>
+<style>
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface h-screen w-full overflow-hidden flex font-body-md text-body-md">
+<!-- Navigation Drawer (Shared Component) -->
+<nav class="h-full w-72 border-r border-outline-variant bg-surface flex flex-col py-lg px-md z-50 shrink-0">
+<div class="mb-xl px-md">
+<h1 class="font-headline-lg text-headline-lg font-bold text-primary">CARLOS</h1>
+</div>
+<div class="flex flex-col gap-sm flex-1 overflow-y-auto scrollbar-hide">
+<!-- Inactive -->
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-container-low transition-colors duration-200 ease-in-out rounded-full group" href="#">
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors">chat</span>
+<span class="font-label-sm text-label-sm">Chat</span>
+</a>
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-container-low transition-colors duration-200 ease-in-out rounded-full group" href="#">
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors">map</span>
+<span class="font-label-sm text-label-sm">Office Map</span>
+</a>
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-container-low transition-colors duration-200 ease-in-out rounded-full group" href="#">
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors">account_tree</span>
+<span class="font-label-sm text-label-sm">Processes</span>
+</a>
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-container-low transition-colors duration-200 ease-in-out rounded-full group" href="#">
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors">psychology</span>
+<span class="font-label-sm text-label-sm">Skills</span>
+</a>
+<!-- Active Tab -->
+<a class="flex items-center gap-md px-md py-sm bg-surface-container-high text-primary rounded-full transition-all duration-200 ease-in-out" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">handyman</span>
+<span class="font-label-sm text-label-sm font-bold">Tools</span>
+</a>
+<!-- Inactive -->
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-container-low transition-colors duration-200 ease-in-out rounded-full group" href="#">
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors">verified_user</span>
+<span class="font-label-sm text-label-sm">Authorizations</span>
+</a>
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-container-low transition-colors duration-200 ease-in-out rounded-full group" href="#">
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors">settings_applications</span>
+<span class="font-label-sm text-label-sm">Operations</span>
+</a>
+</div>
+<div class="mt-auto pt-lg border-t border-outline-variant">
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-container-low transition-colors duration-200 ease-in-out rounded-full group" href="#">
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors">settings</span>
+<span class="font-label-sm text-label-sm">Settings</span>
+</a>
+</div>
+</nav>
+<!-- Main Content Canvas -->
+<main class="flex-1 flex flex-col h-full bg-surface-container-lowest relative min-w-0">
+<!-- TopAppBar (Shared Component) -->
+<header class="w-full flex justify-between items-center px-margin-desktop h-16 bg-surface border-b border-outline-variant shrink-0">
+<div class="flex items-center gap-md">
+<button class="text-on-surface-variant hover:bg-surface-container-low rounded-full p-2 transition-colors active:scale-95 flex items-center justify-center">
+<span class="material-symbols-outlined">menu</span>
+</button>
+<h2 class="font-headline-sm text-headline-sm text-primary">CARLOS Office</h2>
+</div>
+<div class="flex items-center gap-md">
+<button class="text-on-surface-variant hover:bg-surface-container-low rounded-full p-2 transition-colors active:scale-95 flex items-center justify-center">
+<span class="material-symbols-outlined">search</span>
+</button>
+</div>
+</header>
+<!-- Master/Detail Layout -->
+<div class="flex flex-1 overflow-hidden">
+<!-- Master View (Left List) -->
+<aside class="w-80 border-r border-outline-variant bg-surface flex flex-col shrink-0">
+<!-- Search/Filter -->
+<div class="p-md border-b border-outline-variant bg-surface-container-lowest">
+<div class="relative flex items-center">
+<span class="material-symbols-outlined absolute left-3 text-outline text-sm">search</span>
+<input class="w-full pl-10 pr-4 py-2 bg-surface border border-outline-variant rounded focus:border-primary focus:ring-0 font-body-md text-body-md text-on-surface placeholder-outline transition-colors outline-none" placeholder="Search tools..." type="text"/>
+</div>
+</div>
+<!-- Tool List -->
+<div class="flex-1 overflow-y-auto scrollbar-hide">
+<!-- Active Item -->
+<div class="p-md border-b border-outline-variant bg-surface-container-high cursor-pointer border-l-4 border-l-primary hover:bg-surface-container-high transition-colors">
+<div class="flex items-center gap-sm mb-1">
+<span class="material-symbols-outlined text-primary text-lg" style="font-variation-settings: 'FILL' 1;">travel_explore</span>
+<h3 class="font-label-sm text-label-sm text-primary font-bold">Web Search</h3>
+</div>
+<p class="font-body-md text-[13px] text-on-surface-variant line-clamp-2 mt-1">Performs a comprehensive web search to gather real-time information.</p>
+<div class="flex gap-2 mt-3">
+<span class="px-2 py-0.5 bg-surface-variant text-on-surface-variant rounded text-[10px] font-label-caps uppercase tracking-wider">Tavily</span>
+</div>
+</div>
+<!-- Inactive Items -->
+<div class="p-md border-b border-outline-variant bg-surface hover:bg-surface-container-low cursor-pointer border-l-4 border-l-transparent transition-colors">
+<div class="flex items-center gap-sm mb-1">
+<span class="material-symbols-outlined text-outline text-lg">description</span>
+<h3 class="font-label-sm text-label-sm text-on-surface">Read File</h3>
+</div>
+<p class="font-body-md text-[13px] text-on-surface-variant line-clamp-2 mt-1">Extracts text and metadata from specified documents in the repository.</p>
+<div class="flex gap-2 mt-3">
+<span class="px-2 py-0.5 bg-surface-variant text-on-surface-variant rounded text-[10px] font-label-caps uppercase tracking-wider">Internal</span>
+</div>
+</div>
+<div class="p-md border-b border-outline-variant bg-surface hover:bg-surface-container-low cursor-pointer border-l-4 border-l-transparent transition-colors">
+<div class="flex items-center gap-sm mb-1">
+<span class="material-symbols-outlined text-outline text-lg">edit_document</span>
+<h3 class="font-label-sm text-label-sm text-on-surface">Write File</h3>
+</div>
+<p class="font-body-md text-[13px] text-on-surface-variant line-clamp-2 mt-1">Creates or appends data to a designated file within the secure volume.</p>
+<div class="flex gap-2 mt-3">
+<span class="px-2 py-0.5 bg-error-container text-on-error-container rounded text-[10px] font-label-caps uppercase tracking-wider">Approval Req</span>
+</div>
+</div>
+<div class="p-md border-b border-outline-variant bg-surface hover:bg-surface-container-low cursor-pointer border-l-4 border-l-transparent transition-colors">
+<div class="flex items-center gap-sm mb-1">
+<span class="material-symbols-outlined text-outline text-lg">image</span>
+<h3 class="font-label-sm text-label-sm text-on-surface">Generate Image</h3>
+</div>
+<p class="font-body-md text-[13px] text-on-surface-variant line-clamp-2 mt-1">Generates high-resolution images based on detailed textual prompts.</p>
+<div class="flex gap-2 mt-3">
+<span class="px-2 py-0.5 bg-surface-variant text-on-surface-variant rounded text-[10px] font-label-caps uppercase tracking-wider">DALL-E 3</span>
+</div>
+</div>
+</div>
+</aside>
+<!-- Detail View (Right Canvas) -->
+<div class="flex-1 overflow-y-auto bg-surface-container-lowest p-margin-desktop">
+<div class="max-w-4xl mx-auto space-y-xl">
+<!-- Detail Header -->
+<div class="flex justify-between items-start border-b border-outline-variant pb-lg">
+<div>
+<div class="flex items-center gap-md mb-2">
+<div class="w-12 h-12 rounded-lg bg-surface-container-high flex items-center justify-center border border-outline-variant">
+<span class="material-symbols-outlined text-primary text-2xl" style="font-variation-settings: 'FILL' 1;">travel_explore</span>
+</div>
+<h1 class="font-headline-lg text-headline-lg text-on-surface">Web Search</h1>
+</div>
+<div class="flex flex-wrap gap-3 mt-4">
+<span class="inline-flex items-center gap-1 px-3 py-1 bg-surface-variant text-on-surface-variant rounded-full font-label-sm text-label-sm">
+<span class="material-symbols-outlined text-[14px]">cloud</span>
+                                    Provider: Tavily API
+                                </span>
+<span class="inline-flex items-center gap-1 px-3 py-1 bg-surface-variant text-on-surface-variant rounded-full font-label-sm text-label-sm">
+<span class="material-symbols-outlined text-[14px]">memory</span>
+                                    Model: Optimized Search
+                                </span>
+<span class="inline-flex items-center gap-1 px-3 py-1 bg-tertiary-container text-on-tertiary-container rounded-full font-label-sm text-label-sm">
+<span class="material-symbols-outlined text-[14px]">check_circle</span>
+                                    Approval: Not Required
+                                </span>
+</div>
+</div>
+<!-- Primary Action -->
+<button class="bg-primary text-on-primary px-6 py-3 rounded-lg font-label-sm text-label-sm flex items-center gap-2 hover:bg-primary-fixed-variant transition-colors shadow-sm">
+<span class="material-symbols-outlined text-[18px]">magic_button</span>
+                            Ask Nora to modify Tool
+                        </button>
+</div>
+<!-- Description -->
+<section>
+<h3 class="font-label-caps text-label-caps text-outline mb-4">Description</h3>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-3xl leading-relaxed">
+                            This tool securely interfaces with the Tavily search API to execute high-speed, targeted web queries. It is designed to return factual, cited summaries rather than raw HTML, making it optimal for autonomous agent ingestion. The tool automatically filters out ad-heavy or low-reputation domains to ensure data integrity.
+                        </p>
+</section>
+<!-- Schemas Area (Bento-ish Grid for Inputs/Outputs) -->
+<div class="grid grid-cols-1 xl:grid-cols-2 gap-lg">
+<!-- Input Schema -->
+<section class="border border-outline-variant rounded-xl bg-surface flex flex-col overflow-hidden">
+<div class="px-md py-sm bg-surface-container-lowest border-b border-outline-variant flex justify-between items-center">
+<h3 class="font-label-caps text-label-caps text-secondary font-bold">Input Schema</h3>
+<span class="text-xs text-outline font-label-caps">JSON</span>
+</div>
+<div class="p-md bg-[#1e1e1e] flex-1 overflow-x-auto">
+<pre class="font-label-caps text-label-caps text-[#d4d4d4] leading-relaxed"><code>{
+  <span class="text-[#9cdcfe]">"type"</span>: <span class="text-[#ce9178]">"object"</span>,
+  <span class="text-[#9cdcfe]">"properties"</span>: {
+    <span class="text-[#9cdcfe]">"query"</span>: {
+      <span class="text-[#9cdcfe]">"type"</span>: <span class="text-[#ce9178]">"string"</span>,
+      <span class="text-[#9cdcfe]">"description"</span>: <span class="text-[#ce9178]">"The exact search phrase to execute."</span>
+    },
+    <span class="text-[#9cdcfe]">"max_results"</span>: {
+      <span class="text-[#9cdcfe]">"type"</span>: <span class="text-[#ce9178]">"integer"</span>,
+      <span class="text-[#9cdcfe]">"default"</span>: <span class="text-[#b5cea8]">5</span>,
+      <span class="text-[#9cdcfe]">"description"</span>: <span class="text-[#ce9178]">"Maximum number of sources to return."</span>
+    }
+  },
+  <span class="text-[#9cdcfe]">"required"</span>: [<span class="text-[#ce9178]">"query"</span>]
+}</code></pre>
+</div>
+</section>
+<!-- Output Schema -->
+<section class="border border-outline-variant rounded-xl bg-surface flex flex-col overflow-hidden">
+<div class="px-md py-sm bg-surface-container-lowest border-b border-outline-variant flex justify-between items-center">
+<h3 class="font-label-caps text-label-caps text-secondary font-bold">Output Schema</h3>
+<span class="text-xs text-outline font-label-caps">JSON</span>
+</div>
+<div class="p-md bg-[#1e1e1e] flex-1 overflow-x-auto">
+<pre class="font-label-caps text-label-caps text-[#d4d4d4] leading-relaxed"><code>{
+  <span class="text-[#9cdcfe]">"type"</span>: <span class="text-[#ce9178]">"object"</span>,
+  <span class="text-[#9cdcfe]">"properties"</span>: {
+    <span class="text-[#9cdcfe]">"results"</span>: {
+      <span class="text-[#9cdcfe]">"type"</span>: <span class="text-[#ce9178]">"array"</span>,
+      <span class="text-[#9cdcfe]">"items"</span>: {
+        <span class="text-[#9cdcfe]">"type"</span>: <span class="text-[#ce9178]">"object"</span>,
+        <span class="text-[#9cdcfe]">"properties"</span>: {
+          <span class="text-[#9cdcfe]">"title"</span>: { <span class="text-[#9cdcfe]">"type"</span>: <span class="text-[#ce9178]">"string"</span> },
+          <span class="text-[#9cdcfe]">"url"</span>: { <span class="text-[#9cdcfe]">"type"</span>: <span class="text-[#ce9178]">"string"</span> },
+          <span class="text-[#9cdcfe]">"content"</span>: { <span class="text-[#9cdcfe]">"type"</span>: <span class="text-[#ce9178]">"string"</span> }
+        }
+      }
+    }
+  }
+}</code></pre>
+</div>
+</section>
+</div>
+</div>
+</div>
+</div>
+</main>
+</body></html>

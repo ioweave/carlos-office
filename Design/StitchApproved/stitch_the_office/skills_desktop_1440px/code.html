@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Skills - CARLOS Office</title>
+<!-- Google Fonts -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet"/>
+<!-- Material Symbols -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Design System Configuration -->
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "inverse-primary": "#b5c4ff",
+                    "tertiary-fixed-dim": "#2ddec1",
+                    "tertiary-fixed": "#59fbdd",
+                    "primary": "#004edd",
+                    "on-secondary": "#ffffff",
+                    "on-primary": "#ffffff",
+                    "surface-container": "#edecff",
+                    "secondary": "#575e74",
+                    "surface-bright": "#fbf8ff",
+                    "primary-fixed": "#dce1ff",
+                    "outline": "#737686",
+                    "on-secondary-fixed-variant": "#3f465b",
+                    "on-surface": "#181a2b",
+                    "on-primary-fixed": "#00164e",
+                    "tertiary": "#006859",
+                    "on-error": "#ffffff",
+                    "on-tertiary": "#ffffff",
+                    "surface-container-low": "#f4f2ff",
+                    "error": "#ba1a1a",
+                    "inverse-surface": "#2d2f41",
+                    "surface-container-lowest": "#ffffff",
+                    "on-primary-container": "#fffbff",
+                    "on-tertiary-fixed-variant": "#005145",
+                    "background": "#fbf8ff",
+                    "surface-container-highest": "#e0e1f8",
+                    "on-secondary-container": "#5b6278",
+                    "primary-fixed-dim": "#b5c4ff",
+                    "surface-tint": "#0050e2",
+                    "tertiary-container": "#008471",
+                    "surface-dim": "#d7d8f0",
+                    "on-error-container": "#93000a",
+                    "secondary-fixed": "#dbe2fc",
+                    "error-container": "#ffdad6",
+                    "on-surface-variant": "#424655",
+                    "surface-container-high": "#e6e6fe",
+                    "on-tertiary-fixed": "#00201a",
+                    "secondary-container": "#d9dff9",
+                    "outline-variant": "#c3c6d7",
+                    "surface": "#fbf8ff",
+                    "on-secondary-fixed": "#141b2e",
+                    "surface-variant": "#e0e1f8",
+                    "secondary-fixed-dim": "#bfc6e0",
+                    "inverse-on-surface": "#f0efff",
+                    "on-primary-fixed-variant": "#003cae",
+                    "on-tertiary-container": "#f4fffa",
+                    "primary-container": "#2c68ff",
+                    "on-background": "#181a2b"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "spacing": {
+                    "lg": "24px",
+                    "xl": "48px",
+                    "sm": "8px",
+                    "base": "4px",
+                    "container-max": "1280px",
+                    "margin-mobile": "16px",
+                    "gutter": "16px",
+                    "md": "16px",
+                    "xs": "4px",
+                    "margin-desktop": "32px"
+            },
+            "fontFamily": {
+                    "headline-lg-mobile": ["Hanken Grotesk"],
+                    "body-md": ["Inter"],
+                    "label-sm": ["Inter"],
+                    "headline-md": ["Hanken Grotesk"],
+                    "label-caps": ["JetBrains Mono"],
+                    "headline-sm": ["Hanken Grotesk"],
+                    "body-lg": ["Inter"],
+                    "headline-lg": ["Hanken Grotesk"]
+            },
+            "fontSize": {
+                    "headline-lg-mobile": ["26px", { "lineHeight": "1.2", "fontWeight": "600" }],
+                    "body-md": ["14px", { "lineHeight": "1.5", "fontWeight": "400" }],
+                    "label-sm": ["12px", { "lineHeight": "1.2", "fontWeight": "500" }],
+                    "headline-md": ["24px", { "lineHeight": "1.3", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                    "label-caps": ["12px", { "lineHeight": "1.2", "letterSpacing": "0.05em", "fontWeight": "500" }],
+                    "headline-sm": ["18px", { "lineHeight": "1.4", "fontWeight": "600" }],
+                    "body-lg": ["16px", { "lineHeight": "1.6", "fontWeight": "400" }],
+                    "headline-lg": ["32px", { "lineHeight": "1.2", "letterSpacing": "-0.02em", "fontWeight": "600" }]
+            }
+          }
+        }
+      }
+    </script>
+<style>
+        /* Custom scrollbar for minimalist technical feel */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background-color: #c3c6d7;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background-color: #737686;
+        }
+        .markdown-prose h2 { margin-top: 2rem; margin-bottom: 1rem; border-bottom: 1px solid #c3c6d7; padding-bottom: 0.5rem; }
+        .markdown-prose p { margin-bottom: 1rem; }
+        .markdown-prose ul { list-style-type: disc; padding-left: 1.5rem; margin-bottom: 1rem; }
+        .markdown-prose li { margin-bottom: 0.25rem; }
+        .markdown-prose code { background-color: #f4f2ff; padding: 0.2rem 0.4rem; border-radius: 0.25rem; font-family: 'JetBrains Mono', monospace; font-size: 0.85em; border: 1px solid #e0e1f8; color: #003cae; }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body-md overflow-hidden h-screen w-full flex flex-col selection:bg-primary-fixed selection:text-on-primary-fixed">
+<!-- TopAppBar -->
+<header class="fixed top-0 left-0 w-full z-40 flex justify-between items-center px-margin-desktop h-16 bg-surface border-b border-outline-variant">
+<div class="flex items-center gap-md">
+<button class="text-primary hover:bg-surface-container-low rounded-full p-sm transition-colors active:scale-95 duration-150 flex items-center justify-center">
+<span class="material-symbols-outlined" data-icon="menu">menu</span>
+</button>
+<span class="font-headline-md text-headline-md font-bold tracking-tight text-primary">CARLOS Office</span>
+</div>
+<div class="flex items-center gap-md">
+<button class="text-on-surface-variant hover:bg-surface-container-low rounded-full p-sm transition-colors active:scale-95 duration-150 flex items-center justify-center">
+<span class="material-symbols-outlined" data-icon="search">search</span>
+</button>
+</div>
+</header>
+<div class="flex flex-1 pt-16 h-full w-full relative">
+<!-- NavigationDrawer -->
+<aside class="fixed left-0 top-16 h-[calc(100vh-4rem)] w-72 bg-surface border-r border-outline-variant flex flex-col py-lg px-md z-30">
+<div class="font-headline-md text-headline-md font-bold text-primary mb-xl px-md uppercase tracking-widest hidden">CARLOS</div> <!-- Title specified in JSON but usually suppressed visually if TopNav handles brand, keeping logical structure clean -->
+<nav class="flex flex-col gap-sm flex-1">
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-container-low transition-colors duration-200 ease-in-out font-label-sm text-label-sm rounded-full" href="#">
+<span class="material-symbols-outlined" data-icon="chat">chat</span>
+                    Chat
+                </a>
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-container-low transition-colors duration-200 ease-in-out font-label-sm text-label-sm rounded-full" href="#">
+<span class="material-symbols-outlined" data-icon="map">map</span>
+                    Office Map
+                </a>
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-container-low transition-colors duration-200 ease-in-out font-label-sm text-label-sm rounded-full" href="#">
+<span class="material-symbols-outlined" data-icon="account_tree">account_tree</span>
+                    Processes
+                </a>
+<!-- ACTIVE NAV ITEM -->
+<a class="flex items-center gap-md px-md py-sm bg-surface-container-high text-primary rounded-full transition-all duration-200 ease-in-out font-label-sm text-label-sm font-semibold" href="#">
+<span class="material-symbols-outlined" data-icon="psychology" style="font-variation-settings: 'FILL' 1;">psychology</span>
+                    Skills
+                </a>
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-container-low transition-colors duration-200 ease-in-out font-label-sm text-label-sm rounded-full" href="#">
+<span class="material-symbols-outlined" data-icon="handyman">handyman</span>
+                    Tools
+                </a>
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-container-low transition-colors duration-200 ease-in-out font-label-sm text-label-sm rounded-full" href="#">
+<span class="material-symbols-outlined" data-icon="verified_user">verified_user</span>
+                    Authorizations
+                </a>
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-container-low transition-colors duration-200 ease-in-out font-label-sm text-label-sm rounded-full" href="#">
+<span class="material-symbols-outlined" data-icon="settings_applications">settings_applications</span>
+                    Operations
+                </a>
+</nav>
+<div class="mt-auto border-t border-outline-variant pt-sm">
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-container-low transition-colors duration-200 ease-in-out font-label-sm text-label-sm rounded-full" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+                    Settings
+                </a>
+</div>
+</aside>
+<!-- Main Content Area (Master/Detail Grid) -->
+<main class="ml-72 flex-1 flex h-full bg-surface-bright">
+<!-- MASTER PANE: Skill List -->
+<section class="w-96 flex-shrink-0 border-r border-outline-variant bg-surface flex flex-col h-full z-20">
+<!-- Master Header -->
+<div class="p-lg border-b border-outline-variant bg-surface-container-lowest sticky top-0">
+<div class="flex justify-between items-center mb-md">
+<h1 class="font-headline-sm text-headline-sm text-on-surface">Available Skills</h1>
+<span class="bg-surface-variant text-on-surface-variant font-label-caps text-label-caps px-2 py-1 rounded-sm">12 TOTAL</span>
+</div>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-sm">search</span>
+<input class="w-full pl-10 pr-4 py-2 bg-surface border border-outline-variant rounded-md text-body-md focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-shadow placeholder:text-outline" placeholder="Filter skills..." type="text"/>
+</div>
+</div>
+<!-- Skill List Items -->
+<div class="flex-1 overflow-y-auto">
+<!-- Active Item -->
+<button class="w-full text-left p-md border-b border-outline-variant bg-surface-container-lowest border-l-4 border-l-primary relative transition-colors group">
+<div class="flex justify-between items-start mb-xs">
+<span class="font-label-sm text-label-sm text-primary uppercase tracking-wider mb-1 block">Data &amp; Analysis</span>
+<span class="material-symbols-outlined text-primary text-[18px]">verified</span>
+</div>
+<h3 class="font-headline-sm text-headline-sm text-on-surface mb-1">Vendor Research</h3>
+<p class="font-body-md text-body-md text-on-surface-variant line-clamp-2">Systematic evaluation of third-party vendors based on security, compliance, and integration capabilities.</p>
+<div class="mt-sm flex gap-2">
+<span class="bg-surface-variant text-on-surface font-label-sm text-[10px] px-2 py-0.5 rounded-sm">v2.4</span>
+<span class="bg-surface-variant text-on-surface font-label-sm text-[10px] px-2 py-0.5 rounded-sm">High Usage</span>
+</div>
+</button>
+<!-- Inactive Item -->
+<button class="w-full text-left p-md border-b border-outline-variant bg-surface hover:bg-surface-container-low border-l-4 border-l-transparent transition-colors group">
+<div class="flex justify-between items-start mb-xs">
+<span class="font-label-sm text-label-sm text-outline uppercase tracking-wider mb-1 block">Engineering</span>
+</div>
+<h3 class="font-headline-sm text-headline-sm text-on-surface mb-1 group-hover:text-primary transition-colors">Technical Troubleshooting</h3>
+<p class="font-body-md text-body-md text-on-surface-variant line-clamp-2">Diagnostic routines for resolving common infrastructure and deployment anomalies in the staging environment.</p>
+<div class="mt-sm flex gap-2">
+<span class="bg-surface-variant text-on-surface font-label-sm text-[10px] px-2 py-0.5 rounded-sm">v1.1</span>
+</div>
+</button>
+<!-- Inactive Item -->
+<button class="w-full text-left p-md border-b border-outline-variant bg-surface hover:bg-surface-container-low border-l-4 border-l-transparent transition-colors group">
+<div class="flex justify-between items-start mb-xs">
+<span class="font-label-sm text-label-sm text-outline uppercase tracking-wider mb-1 block">Operations</span>
+</div>
+<h3 class="font-headline-sm text-headline-sm text-on-surface mb-1 group-hover:text-primary transition-colors">Content Review</h3>
+<p class="font-body-md text-body-md text-on-surface-variant line-clamp-2">Automated checking of internal documentation against brand guidelines and clarity standards.</p>
+<div class="mt-sm flex gap-2">
+<span class="bg-surface-variant text-on-surface font-label-sm text-[10px] px-2 py-0.5 rounded-sm">v3.0</span>
+</div>
+</button>
+<!-- Inactive Item -->
+<button class="w-full text-left p-md border-b border-outline-variant bg-surface hover:bg-surface-container-low border-l-4 border-l-transparent transition-colors group">
+<div class="flex justify-between items-start mb-xs">
+<span class="font-label-sm text-label-sm text-outline uppercase tracking-wider mb-1 block">Security</span>
+</div>
+<h3 class="font-headline-sm text-headline-sm text-on-surface mb-1 group-hover:text-primary transition-colors">Audit Log Parsing</h3>
+<p class="font-body-md text-body-md text-on-surface-variant line-clamp-2">Extracting actionable insights and anomalies from standard server audit logs.</p>
+</button>
+</div>
+</section>
+<!-- DETAIL PANE: MarkdownView & Action -->
+<section class="flex-1 flex flex-col h-full bg-surface-container-lowest relative z-10">
+<!-- Detail Header -->
+<header class="px-xl py-lg border-b border-outline-variant bg-surface-container-lowest flex justify-between items-end flex-shrink-0">
+<div>
+<div class="flex items-center gap-md mb-2">
+<span class="bg-primary-container text-on-primary-container font-label-caps text-label-caps px-3 py-1 rounded-sm">ACTIVE SKILL</span>
+<span class="text-outline font-label-sm text-label-sm flex items-center gap-1">
+<span class="material-symbols-outlined text-[16px]">update</span> Last modified 2 days ago
+                            </span>
+</div>
+<h2 class="font-headline-lg text-headline-lg text-on-surface">Vendor Research</h2>
+</div>
+<div class="flex gap-sm">
+<button class="flex items-center gap-2 px-4 py-2 border border-outline-variant bg-surface text-on-surface font-label-sm text-label-sm rounded-md hover:bg-surface-container-low transition-colors">
+<span class="material-symbols-outlined text-[18px]">history</span> View Logs
+                        </button>
+</div>
+</header>
+<!-- Markdown Content Area -->
+<div class="flex-1 overflow-y-auto px-xl py-xl bg-surface-bright">
+<div class="max-w-3xl mx-auto markdown-prose font-body-lg text-body-lg text-on-surface">
+<p class="text-on-surface-variant text-lg">This skill instructs Nora on how to systematically evaluate new third-party software vendors to ensure they meet our internal compliance, security, and operational standards.</p>
+<h2 class="font-headline-sm text-headline-sm text-primary">Core Objectives</h2>
+<ul>
+<li>Identify potential security risks associated with data handling and storage.</li>
+<li>Verify compliance with SOC2, GDPR, and internal data residency requirements.</li>
+<li>Assess integration capabilities with our current tech stack (primarily AWS, Snowflake, and Okta).</li>
+<li>Summarize pricing tiers and enterprise SLA commitments.</li>
+</ul>
+<h2 class="font-headline-sm text-headline-sm text-primary">Execution Steps</h2>
+<ol class="list-decimal pl-6 mb-4">
+<li class="mb-2"><strong>Initial Intake:</strong> Receive vendor name and target use-case from user.</li>
+<li class="mb-2"><strong>Public Data Gathering:</strong> Scrape public documentation, security portals (e.g., <code>trust.vendor.com</code>), and terms of service.</li>
+<li class="mb-2"><strong>Compliance Check:</strong> Cross-reference gathered data against the internal <code>compliance_matrix_v2.csv</code>.</li>
+<li class="mb-2"><strong>Report Generation:</strong> Format findings into the standard Vendor Review Markdown template.</li>
+</ol>
+<h2 class="font-headline-sm text-headline-sm text-primary">Required Context Parameters</h2>
+<p>When invoking this skill, ensure the following parameters are provided or requested from the user:</p>
+<div class="bg-surface-container border border-outline-variant rounded-lg p-md mb-6 font-label-sm text-label-sm">
+<div class="grid grid-cols-3 gap-4 border-b border-outline-variant pb-2 mb-2 text-on-surface-variant uppercase tracking-wider">
+<div>Parameter</div>
+<div>Type</div>
+<div>Required</div>
+</div>
+<div class="grid grid-cols-3 gap-4 py-2 border-b border-outline-variant border-dashed">
+<div class="font-mono text-primary-fixed-variant">vendor_name</div>
+<div>String</div>
+<div>Yes</div>
+</div>
+<div class="grid grid-cols-3 gap-4 py-2 border-b border-outline-variant border-dashed">
+<div class="font-mono text-primary-fixed-variant">primary_use_case</div>
+<div>Text</div>
+<div>Yes</div>
+</div>
+<div class="grid grid-cols-3 gap-4 py-2">
+<div class="font-mono text-primary-fixed-variant">data_classification</div>
+<div>Enum (Public, Internal, Confidential)</div>
+<div>No (Defaults to Confidential)</div>
+</div>
+</div>
+<h2 class="font-headline-sm text-headline-sm text-primary">Example Output Structure</h2>
+<pre class="bg-inverse-surface text-inverse-on-surface p-md rounded-md overflow-x-auto text-sm font-mono mt-2 mb-8"><code># Vendor Assessment: [Vendor Name]
+**Date:** YYYY-MM-DD
+**Risk Level:** [Low/Medium/High]
+
+## 1. Security &amp; Compliance
+- SOC2 Type II: [Status]
+- Data Residency: [Locations]
+
+## 2. Integration
+- SSO (SAML/OIDC): [Supported/Not Supported]
+- API Limits: [Details]</code></pre>
+<div class="h-32"></div> <!-- Spacer for bottom input -->
+</div>
+</div>
+<!-- Primary Action: Ask Nora -->
+<div class="absolute bottom-0 left-0 w-full p-xl bg-gradient-to-t from-surface-container-lowest via-surface-container-lowest to-transparent">
+<div class="max-w-3xl mx-auto">
+<div class="bg-surface border border-outline-variant rounded-xl shadow-[0_4px_24px_-8px_rgba(0,0,0,0.1)] flex flex-col overflow-hidden transition-all focus-within:border-primary focus-within:ring-1 focus-within:ring-primary">
+<div class="flex items-center px-4 pt-3 pb-1 gap-2 border-b border-outline-variant/50 bg-surface-container-low/50">
+<span class="material-symbols-outlined text-tertiary-container text-[18px]">auto_awesome</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">Ask Nora to modify this skill</span>
+</div>
+<div class="flex items-end p-2 pl-4">
+<textarea class="w-full bg-transparent border-none resize-none focus:ring-0 p-0 text-body-md font-body-md placeholder:text-outline" placeholder="e.g., 'Update the compliance check to include ISO 27001 requirements.'" rows="2"></textarea>
+<button class="ml-2 bg-primary text-on-primary p-2 rounded-lg hover:bg-primary-container transition-colors flex-shrink-0 flex items-center justify-center">
+<span class="material-symbols-outlined">send</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</section>
+</main>
+</div>
+</body></html>

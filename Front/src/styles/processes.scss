@@ -1,0 +1,215 @@
+// Processes page — read-only library, process studio graph + inspector, schedules.
+// Mobile-first; desktop split at 900px. Independent atomic BEM.
+
+@use "./config" as config;
+
+.processes-page {
+  overflow: auto;
+}
+
+.process-library {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+.process-library__list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 6px;
+  list-style: none;
+}
+
+.process-library__item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  text-align: left;
+}
+
+.process-library__item:hover {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-soft);
+}
+
+.process-library__item-icon {
+  display: grid;
+  place-items: center;
+  color: var(--color-accent);
+}
+
+.process-library__item-body {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 2px;
+}
+
+.process-library__item-name {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.process-library__item-meta {
+  color: var(--color-text-faint);
+  font-size: 11px;
+}
+
+.process-library__item-inputs {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.process-studio {
+  overflow: auto;
+}
+
+.process-studio__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.process-studio__graph {
+  flex: 1 1 auto;
+  min-height: 320px;
+  overflow: auto;
+  padding: 16px;
+  background: var(--color-surface-soft);
+}
+
+.process-studio__inspector {
+  flex: 0 0 auto;
+  padding: 16px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+  display: grid;
+  gap: 16px;
+}
+
+.process-studio__inspector-title {
+  margin: 0 0 4px;
+  font-family: var(--font-headline);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.process-studio__inspector-section {
+  display: grid;
+  gap: 8px;
+}
+
+.process-schedules {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+  display: grid;
+  gap: 20px;
+}
+
+.process-schedules__form {
+  display: grid;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  gap: 10px;
+}
+
+.process-schedules__form-title {
+  margin: 0;
+  font-family: var(--font-headline);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.process-schedules__form-field {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.process-schedules__form-submit {
+  justify-self: start;
+}
+
+.process-schedules__list-title {
+  margin: 0 0 10px;
+  font-family: var(--font-headline);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.schedule-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 6px;
+  list-style: none;
+}
+
+.schedule-list__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.schedule-list__body {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.schedule-list__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.schedule-list__meta {
+  color: var(--color-text-faint);
+  font-size: 11px;
+}
+
+.schedule-list__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+@media (min-width: config.$screen-desktop) {
+  .process-studio__body {
+    flex-direction: row;
+  }
+
+  .process-studio__inspector {
+    flex: 0 0 340px;
+    border-top: 0;
+    border-left: 1px solid var(--color-border);
+    overflow: auto;
+  }
+
+  .process-schedules {
+    grid-template-columns: minmax(0, 360px) minmax(0, 1fr);
+    align-items: start;
+  }
+}

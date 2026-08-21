@@ -1,0 +1,69 @@
+# Dependencies and generated builds
+node_modules/
+dist/
+build/
+out/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+
+# Tool and package-manager caches
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+.npm/
+.pnpm-store/
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+
+# Logs, process files and packaged output
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pids/
+*.pid
+*.seed
+*.pid.lock
+*.tgz
+report.*.json
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+Back/mcp.config.json
+Back/mcp.monitors.json
+Back/.google-workspace-mcp/
+Back/.mcp-auth/
+Back/.runtime/
+
+# Carlos Office private/user runtime data
+Back/ObsidianVault/00-Inbox/
+Back/ObsidianVault/15-Memory/
+Back/ObsidianVault/20-Agents/
+Back/ObsidianVault/30-Conversations/
+Back/ObsidianVault/40-Jobs/
+Back/ObsidianVault/45-Tasks/
+Back/ObsidianVault/50-Artifacts/
+Back/ObsidianVault/60-Workspace/
+Back/ObsidianVault/90-System/Events/
+Back/ObsidianVault/90-System/Processes/
+Back/ObsidianVault/90-System/Workflows/
+Back/ObsidianVault/90-System/Schedules/
+Back/ObsidianVault/90-System/Runtime/**
+!Back/ObsidianVault/90-System/Runtime/Agents/
+!Back/ObsidianVault/90-System/Runtime/Agents/*.md
+Back/ObsidianVault/90-System/Runtime/Agents/.Migrations/
+Back/ObsidianVault/**/Archive/
+Back/ObsidianVault/**/archive/
+/archive/
+
+# Project-specific generated output
+graphify-out/

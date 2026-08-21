@@ -1,0 +1,16 @@
+// Compile-time styling constants. Mobile-first; one breakpoint at 900px.
+$screen-desktop: 900px;
+
+$motion-fast: 140ms;
+$motion-standard: 220ms;
+$motion-slow: 420ms;
+$ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+$layer-base: 0;
+$layer-sticky: 20;
+$layer-overlay: 100;
+$layer-modal: 110;
+$layer-toast: 120;
+
+$overlay-subtle: 0.36;
+$overlay-strong: 0.82;

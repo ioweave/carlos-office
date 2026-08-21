@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Carlos Office - AI Vendor Research</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                            "error-container": "#ffdad6",
+                            "error": "#ba1a1a",
+                            "on-surface": "#181a2b",
+                            "tertiary-container": "#008471",
+                            "on-tertiary-fixed-variant": "#005145",
+                            "on-primary": "#ffffff",
+                            "tertiary": "#006859",
+                            "on-tertiary-container": "#f4fffa",
+                            "surface-container-high": "#e6e6fe",
+                            "secondary-fixed-dim": "#bfc6e0",
+                            "surface-container-highest": "#e0e1f8",
+                            "tertiary-fixed": "#59fbdd",
+                            "primary-fixed": "#dce1ff",
+                            "on-secondary-container": "#5b6278",
+                            "on-primary-fixed": "#00164e",
+                            "on-error-container": "#93000a",
+                            "surface-container-lowest": "#ffffff",
+                            "surface-variant": "#e0e1f8",
+                            "on-surface-variant": "#424655",
+                            "primary-fixed-dim": "#b5c4ff",
+                            "surface-bright": "#fbf8ff",
+                            "outline": "#737686",
+                            "on-background": "#181a2b",
+                            "surface-container-low": "#f4f2ff",
+                            "on-primary-fixed-variant": "#003cae",
+                            "surface": "#fbf8ff",
+                            "secondary-container": "#d9dff9",
+                            "outline-variant": "#c3c6d7",
+                            "on-primary-container": "#fffbff",
+                            "on-tertiary-fixed": "#00201a",
+                            "surface-dim": "#d7d8f0",
+                            "surface-container": "#edecff",
+                            "inverse-surface": "#2d2f41",
+                            "background": "#fbf8ff",
+                            "primary": "#004edd",
+                            "primary-container": "#2c68ff",
+                            "on-tertiary": "#ffffff",
+                            "surface-tint": "#0050e2",
+                            "on-secondary-fixed-variant": "#3f465b",
+                            "on-secondary": "#ffffff",
+                            "inverse-primary": "#b5c4ff",
+                            "on-secondary-fixed": "#141b2e",
+                            "secondary-fixed": "#dbe2fc",
+                            "on-error": "#ffffff",
+                            "secondary": "#575e74",
+                            "inverse-on-surface": "#f0efff",
+                            "tertiary-fixed-dim": "#2ddec1"
+                    },
+                    "borderRadius": {
+                            "DEFAULT": "0.125rem",
+                            "lg": "0.25rem",
+                            "xl": "0.5rem",
+                            "full": "0.75rem"
+                    },
+                    "spacing": {
+                            "xl": "48px",
+                            "container-max": "1280px",
+                            "gutter": "16px",
+                            "lg": "24px",
+                            "base": "4px",
+                            "sm": "8px",
+                            "margin-desktop": "32px",
+                            "margin-mobile": "16px",
+                            "md": "16px",
+                            "xs": "4px"
+                    },
+                    "fontFamily": {
+                            "headline-md": ["Hanken Grotesk"],
+                            "label-caps": ["JetBrains Mono"],
+                            "body-lg": ["Inter"],
+                            "body-md": ["Inter"],
+                            "headline-lg-mobile": ["Hanken Grotesk"],
+                            "headline-sm": ["Hanken Grotesk"],
+                            "headline-lg": ["Hanken Grotesk"],
+                            "label-sm": ["Inter"]
+                    },
+                    "fontSize": {
+                            "headline-md": ["24px", { "lineHeight": "1.3", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                            "label-caps": ["12px", { "lineHeight": "1.2", "letterSpacing": "0.05em", "fontWeight": "500" }],
+                            "body-lg": ["16px", { "lineHeight": "1.6", "fontWeight": "400" }],
+                            "body-md": ["14px", { "lineHeight": "1.5", "fontWeight": "400" }],
+                            "headline-lg-mobile": ["26px", { "lineHeight": "1.2", "fontWeight": "600" }],
+                            "headline-sm": ["18px", { "lineHeight": "1.4", "fontWeight": "600" }],
+                            "headline-lg": ["32px", { "lineHeight": "1.2", "letterSpacing": "-0.02em", "fontWeight": "600" }],
+                            "label-sm": ["12px", { "lineHeight": "1.2", "fontWeight": "500" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .icon-fill {
+            font-variation-settings: 'FILL' 1;
+        }
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #c3c6d7;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #737686;
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface h-screen overflow-hidden flex font-body-md">
+<!-- Top Navigation (Hidden on Desktop due to Sidebar, visible on Mobile if needed, but per prompt, desktop focus) -->
+<header class="hidden md:flex items-center justify-between px-margin-desktop h-16 w-full fixed top-0 bg-surface border-b border-outline-variant z-50">
+<div class="flex items-center gap-md">
+<span class="material-symbols-outlined cursor-pointer hover:bg-surface-container-low transition-colors rounded-full p-2">menu</span>
+<span class="font-headline-sm text-headline-sm font-semibold tracking-tight text-primary">CARLOS OFFICE</span>
+</div>
+<div class="flex items-center gap-md">
+<span class="material-symbols-outlined cursor-pointer hover:bg-surface-container-low transition-colors rounded-full p-2 text-on-surface-variant">search</span>
+</div>
+</header>
+<!-- Sidebar / NavigationDrawer -->
+<aside class="h-full w-72 fixed left-0 top-0 bg-surface border-r border-outline-variant flex flex-col gap-base p-md z-40 pt-20">
+<!-- Profile Header -->
+<div class="flex items-center gap-md p-md mb-lg">
+<div class="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center overflow-hidden border border-outline-variant">
+<span class="material-symbols-outlined text-on-surface-variant">person</span>
+</div>
+<div>
+<div class="font-headline-sm text-headline-sm text-primary">Carlos Operator</div>
+<div class="font-label-sm text-label-sm text-on-surface-variant">Lead Architect</div>
+<div class="font-label-sm text-label-sm text-tertiary flex items-center gap-1 mt-1">
+<div class="w-2 h-2 rounded-full bg-tertiary"></div> Active
+                </div>
+</div>
+</div>
+<!-- Navigation Tabs -->
+<nav class="flex flex-col gap-xs flex-1 overflow-y-auto">
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-container-low transition-all duration-200 ease-in-out rounded-lg" href="#">
+<span class="material-symbols-outlined">architecture</span>
+<span class="font-body-md text-body-md">Blueprints</span>
+</a>
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-container-low transition-all duration-200 ease-in-out rounded-lg" href="#">
+<span class="material-symbols-outlined">memory</span>
+<span class="font-body-md text-body-md">Runtime</span>
+</a>
+<a class="flex items-center gap-md px-md py-sm bg-primary-container text-on-primary-container font-semibold rounded-lg transition-all duration-200 ease-in-out" href="#">
+<span class="material-symbols-outlined icon-fill">description</span>
+<span class="font-body-md text-body-md">Artifacts</span>
+</a>
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-container-low transition-all duration-200 ease-in-out rounded-lg" href="#">
+<span class="material-symbols-outlined">account_tree</span>
+<span class="font-body-md text-body-md">Workflow</span>
+</a>
+<div class="mt-auto pt-lg">
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-container-low transition-all duration-200 ease-in-out rounded-lg" href="#">
+<span class="material-symbols-outlined">settings</span>
+<span class="font-body-md text-body-md">Settings</span>
+</a>
+</div>
+</nav>
+</aside>
+<!-- Main Content Area -->
+<main class="flex-1 ml-72 flex mt-16 h-[calc(100vh-64px)]">
+<!-- Center Chat Area -->
+<section class="flex-1 flex flex-col border-r border-outline-variant bg-surface relative bg-surface-container-low/30">
+<!-- Chat Header -->
+<div class="h-16 flex items-center justify-between px-lg border-b border-outline-variant bg-surface-container-lowest z-10 sticky top-0">
+<div class="flex items-center gap-md">
+<span class="material-symbols-outlined text-on-surface-variant cursor-pointer">chat_bubble</span>
+<h1 class="font-headline-sm text-headline-sm text-on-surface truncate max-w-md">AI Vendor Research: Q3 Enterprise Audio Models</h1>
+</div>
+<div class="flex items-center gap-sm">
+<div class="px-sm py-xs bg-surface-container border border-outline-variant rounded flex items-center gap-2 cursor-pointer hover:bg-surface-container-high transition-colors">
+<span class="font-label-sm text-label-sm text-on-surface-variant">Model:</span>
+<span class="font-body-md text-body-md font-medium">Carlos-Ops-v4</span>
+<span class="material-symbols-outlined text-sm">expand_more</span>
+</div>
+</div>
+</div>
+<!-- Chat Scroll Area -->
+<div class="flex-1 overflow-y-auto p-lg flex flex-col gap-xl">
+<!-- Initial User Prompt -->
+<div class="flex flex-col items-end gap-sm mb-lg">
+<div class="flex items-center gap-sm mb-xs">
+<span class="font-label-sm text-label-sm text-on-surface-variant">Nora • Today, 10:20 AM</span>
+<div class="w-8 h-8 rounded-full bg-secondary-container flex items-center justify-center text-secondary font-bold text-sm">N</div>
+</div>
+<div class="max-w-[80%] bg-surface-container-lowest border border-outline-variant/50 shadow-sm rounded-xl rounded-tr-none p-md">
+<p class="font-body-lg text-body-lg text-on-surface">I need a comprehensive comparison of current enterprise AI voice models suitable for automated customer support. Focus on latency, cost per 1k characters, emotional prosody capabilities, and multi-language support. Output the findings in a detailed markdown document and a structured JSON matrix for our pipeline.</p>
+<div class="mt-sm flex gap-2">
+<span class="px-2 py-1 bg-surface-container-low border border-outline-variant/30 rounded font-label-caps text-[10px] text-on-surface-variant">#RESEARCH</span>
+<span class="px-2 py-1 bg-surface-container-low border border-outline-variant/30 rounded font-label-caps text-[10px] text-on-surface-variant">#AUDIO</span>
+</div>
+</div>
+</div>
+<!-- AI Response / Workflow Summary -->
+<div class="flex justify-start mb-xl">
+<div class="max-w-[85%] flex flex-col gap-md">
+<div class="flex items-center gap-sm mb-xs">
+<div class="w-8 h-8 rounded-full bg-primary-container flex items-center justify-center text-on-primary-container font-bold text-sm">CO</div>
+<span class="font-label-sm text-label-sm text-on-surface-variant">Carlos Office • Today, 10:24 AM</span>
+</div>
+<div class="bg-surface-container-high/50 border border-outline-variant/30 rounded-xl rounded-tl-none p-md">
+<p class="font-body-lg text-body-lg text-on-surface">I've completed the analysis of the leading enterprise voice models (ElevenLabs, OpenAI TTS, Google Cloud TTS, and Azure AI Speech). I evaluated them against your criteria: latency, cost efficiency, emotional range, and language support.</p>
+<!-- Refined Workflow Component -->
+<div class="bg-surface-container-lowest border border-outline-variant/50 rounded-lg p-md mt-md shadow-sm">
+<div class="flex items-center justify-between mb-md">
+<h4 class="font-headline-sm text-headline-sm text-on-surface">Analysis Execution</h4>
+<span class="px-2 py-0.5 bg-tertiary/10 text-tertiary rounded-full text-[10px] font-bold uppercase tracking-wider">In Progress</span>
+</div>
+<div class="flex flex-col gap-md relative">
+<div class="absolute left-[11px] top-6 bottom-4 w-[1px] bg-outline-variant/30"></div>
+<div class="flex items-start gap-md relative z-10">
+<div class="w-6 h-6 rounded-full bg-surface border border-tertiary flex items-center justify-center mt-0.5">
+<span class="material-symbols-outlined text-[12px] text-tertiary icon-fill">check</span>
+</div>
+<div>
+<p class="font-body-md text-body-md font-medium text-on-surface">Data Gathering</p>
+<p class="text-[12px] text-on-surface-variant opacity-70">Pulled latest pricing and API latency metrics.</p>
+</div>
+</div>
+<div class="flex items-start gap-md relative z-10">
+<div class="w-6 h-6 rounded-full bg-surface border border-tertiary flex items-center justify-center mt-0.5">
+<span class="material-symbols-outlined text-[12px] text-tertiary icon-fill">check</span>
+</div>
+<div>
+<p class="font-body-md text-body-md font-medium text-on-surface">Feature Evaluation</p>
+<p class="text-[12px] text-on-surface-variant opacity-70">Assessed SSML support and emotional prosody tags.</p>
+</div>
+</div>
+<div class="flex items-start gap-md relative z-10">
+<div class="w-6 h-6 rounded-full bg-primary-container/20 border border-primary/30 flex items-center justify-center mt-0.5">
+<span class="material-symbols-outlined text-[12px] text-primary animate-spin">progress_activity</span>
+</div>
+<div>
+<p class="font-body-md text-body-md font-medium text-on-surface">Generating Artifacts</p>
+<p class="text-[12px] text-on-surface-variant opacity-70">Compiling findings into Markdown and JSON formats...</p>
+</div>
+</div>
+</div>
+</div>
+<p class="font-body-lg text-body-lg text-on-surface mt-md">The artifacts have been generated and are attached below.</p>
+<!-- Refined Artifacts -->
+<div class="flex flex-wrap gap-md mt-md">
+<div class="flex items-center gap-md p-sm pr-md border border-outline-variant/50 rounded-lg bg-surface-container-lowest hover:border-primary cursor-pointer transition-all shadow-sm group">
+<div class="w-10 h-10 bg-primary-container/10 rounded flex items-center justify-center text-primary">
+<span class="material-symbols-outlined">markdown</span>
+</div>
+<div>
+<p class="font-body-md text-body-md font-medium text-on-surface group-hover:text-primary">ai-voice-comparison.md</p>
+<p class="text-[10px] text-on-surface-variant uppercase tracking-widest">14 KB • Markdown</p>
+</div>
+</div>
+<div class="flex items-center gap-md p-sm pr-md border border-outline-variant/50 rounded-lg bg-surface-container-lowest hover:border-primary cursor-pointer transition-all shadow-sm group opacity-70">
+<div class="w-10 h-10 bg-secondary-container/10 rounded flex items-center justify-center text-secondary">
+<span class="material-symbols-outlined">data_object</span>
+</div>
+<div>
+<p class="font-body-md text-body-md font-medium text-on-surface group-hover:text-primary">performance-matrix.json</p>
+<p class="text-[10px] text-on-surface-variant uppercase tracking-widest">4 KB • JSON</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Another User Message -->
+<div class="flex flex-col items-end gap-sm mb-xl">
+<div class="flex items-center gap-sm mb-xs">
+<span class="font-label-sm text-label-sm text-on-surface-variant">Nora • Today, 10:26 AM</span>
+<div class="w-8 h-8 rounded-full bg-secondary-container flex items-center justify-center text-secondary font-bold text-sm">N</div>
+</div>
+<div class="max-w-[80%] bg-surface-container-lowest border border-outline-variant/50 shadow-sm rounded-xl rounded-tr-none p-md">
+<p class="font-body-lg text-body-lg text-on-surface">Looks solid. Can you highlight which provider offers the absolute lowest latency for streaming responses, even if the cost is slightly higher?</p>
+</div>
+</div>
+<!-- Final AI Response -->
+<div class="flex justify-start mb-xl">
+<div class="max-w-[85%] flex flex-col gap-md">
+<div class="flex items-center gap-sm mb-xs">
+<div class="w-8 h-8 rounded-full bg-primary-container flex items-center justify-center text-on-primary-container font-bold text-sm">CO</div>
+<span class="font-label-sm text-label-sm text-on-surface-variant">Carlos Office • Today, 10:28 AM</span>
+</div>
+<div class="bg-surface-container-high/50 border border-outline-variant/30 rounded-xl rounded-tl-none p-md">
+<p class="font-body-lg text-body-lg text-on-surface">Based on the analysis, <strong class="text-primary">ElevenLabs</strong> (specifically their Turbo v2.5 model) offers the lowest streaming latency, consistently clocking in at ~250-300ms First-Byte-to-Audio latency when using websockets.</p>
+<p class="font-body-lg text-body-lg text-on-surface mt-md">However, it is approximately 2.5x more expensive per 1k characters than Azure AI Speech, which averages ~400ms latency. I have updated the JSON matrix to flag ElevenLabs as <code class="bg-surface-container px-1 rounded text-sm">optimal_latency_provider: true</code>.</p>
+</div>
+</div>
+</div>
+</div>
+<!-- Chat Input Area -->
+<div class="p-lg bg-surface border-t border-outline-variant z-10"><div class="relative bg-surface-container-lowest border border-outline-variant/60 rounded-xl focus-within:border-primary focus-within:shadow-md transition-all overflow-hidden">
+<textarea class="w-full bg-transparent border-none focus:ring-0 resize-none font-body-md text-body-md p-md min-h-[100px]" placeholder="Ask Carlos Office about the analysis..."></textarea>
+<div class="flex items-center justify-between p-sm bg-surface-container-low/30 border-t border-outline-variant/30">
+<div class="flex gap-1">
+<button class="p-2 text-on-surface-variant hover:text-primary transition-colors rounded-lg hover:bg-surface-container-low"><span class="material-symbols-outlined text-sm">attach_file</span></button>
+<button class="p-2 text-on-surface-variant hover:text-primary transition-colors rounded-lg hover:bg-surface-container-low"><span class="material-symbols-outlined text-sm">mic</span></button>
+</div>
+<button class="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-sm text-label-sm font-semibold hover:bg-primary-container hover:text-on-primary-container transition-all flex items-center gap-2 shadow-sm">
+      Send <span class="material-symbols-outlined text-sm">send</span>
+</button>
+</div>
+</div>
+<div class="text-center mt-sm">
+<span class="font-label-caps text-[10px] text-on-surface-variant tracking-widest opacity-60">AI CAN MAKE MISTAKES. VERIFY IMPORTANT METRICS.</span>
+</div></div>
+</section>
+<!-- Right Artifact Preview Pane -->
+<aside class="w-[480px] bg-surface flex flex-col h-full z-20 shadow-[-4px_0_24px_rgba(0,0,0,0.02)] border-l border-outline-variant">
+<!-- Pane Header -->
+<div class="h-16 flex items-center justify-between px-md border-b border-outline-variant bg-surface-container-lowest">
+<div class="flex items-center gap-sm">
+<span class="material-symbols-outlined text-primary">markdown</span>
+<div class="flex flex-col">
+<span class="font-body-md text-body-md font-medium text-on-surface">ai-voice-comparison.md</span>
+<span class="font-label-sm text-[10px] text-on-surface-variant">Last updated: 10:24 AM • 14 KB</span>
+</div>
+</div>
+<div class="flex items-center gap-xs">
+<button class="p-1.5 text-on-surface-variant hover:bg-surface-container rounded transition-colors"><span class="material-symbols-outlined text-sm">download</span></button>
+<button class="p-1.5 text-on-surface-variant hover:bg-surface-container rounded transition-colors"><span class="material-symbols-outlined text-sm">open_in_new</span></button>
+<div class="w-px h-4 bg-outline-variant mx-1"></div>
+<button class="p-1.5 text-on-surface-variant hover:bg-error-container hover:text-error rounded transition-colors"><span class="material-symbols-outlined text-sm">close</span></button>
+</div>
+</div>
+<!-- File Type Switcher (Demonstrating UI capability) -->
+<div class="flex p-sm bg-surface-container-low border-b border-outline-variant gap-2">
+<button class="flex-1 py-1.5 px-3 bg-surface-container-lowest border border-outline-variant shadow-sm rounded text-center font-label-sm text-label-sm font-medium text-on-surface">Markdown Preview</button>
+<button class="flex-1 py-1.5 px-3 bg-transparent text-on-surface-variant hover:bg-surface-container rounded text-center font-label-sm text-label-sm transition-colors">Raw Source</button>
+</div>
+<!-- Preview Content Area -->
+<div class="flex-1 overflow-y-auto p-lg bg-surface-container-lowest prose prose-sm max-w-none">
+<h1 class="font-headline-md text-headline-md text-on-surface mb-md">Enterprise AI Voice Models: Q3 Analysis</h1>
+<p class="font-body-md text-body-md text-on-surface-variant mb-lg border-l-2 border-primary pl-md py-1 bg-surface-container-low/30">
+<strong>Executive Summary:</strong> Comparison of leading Text-to-Speech (TTS) providers optimized for conversational agents, focusing on latency, cost, and emotional intelligence.
+                </p>
+<h3 class="font-headline-sm text-headline-sm text-on-surface mb-sm mt-lg">1. Latency &amp; Performance</h3>
+<div class="border border-outline-variant rounded overflow-hidden mb-lg">
+<table class="w-full text-left border-collapse">
+<thead class="bg-surface-container-low font-label-sm text-label-sm text-on-surface-variant">
+<tr>
+<th class="p-sm border-b border-outline-variant font-medium">Provider</th>
+<th class="p-sm border-b border-outline-variant font-medium">Model</th>
+<th class="p-sm border-b border-outline-variant font-medium">Avg Latency (WS)</th>
+<th class="p-sm border-b border-outline-variant font-medium">Rating</th>
+</tr>
+</thead>
+<tbody class="font-body-md text-body-md text-on-surface">
+<tr class="hover:bg-surface-container-lowest">
+<td class="p-sm border-b border-outline-variant">ElevenLabs</td>
+<td class="p-sm border-b border-outline-variant font-mono text-xs">turbo_v2.5</td>
+<td class="p-sm border-b border-outline-variant text-tertiary font-medium">~250ms</td>
+<td class="p-sm border-b border-outline-variant">Excellent</td>
+</tr>
+<tr class="hover:bg-surface-container-lowest bg-surface-bright">
+<td class="p-sm border-b border-outline-variant">OpenAI</td>
+<td class="p-sm border-b border-outline-variant font-mono text-xs">tts-1</td>
+<td class="p-sm border-b border-outline-variant">~450ms</td>
+<td class="p-sm border-b border-outline-variant">Good</td>
+</tr>
+<tr class="hover:bg-surface-container-lowest">
+<td class="p-sm border-b border-outline-variant">Azure</td>
+<td class="p-sm border-b border-outline-variant font-mono text-xs">neural-v3</td>
+<td class="p-sm border-b border-outline-variant">~400ms</td>
+<td class="p-sm border-b border-outline-variant">Good</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h3 class="font-headline-sm text-headline-sm text-on-surface mb-sm mt-lg">2. Cost Analysis</h3>
+<p class="font-body-md text-body-md text-on-surface mb-md">Pricing normalized to cost per 1,000 characters for high-quality standard tiers.</p>
+<ul class="flex flex-col gap-sm mb-lg font-body-md text-body-md">
+<li class="flex items-center gap-md">
+<div class="w-1 h-1 rounded-full bg-outline"></div>
+<span class="w-24 text-on-surface-variant">ElevenLabs:</span>
+<span class="font-mono bg-surface-container px-1 py-0.5 rounded text-xs">$0.18 / 1k</span>
+</li>
+<li class="flex items-center gap-md">
+<div class="w-1 h-1 rounded-full bg-outline"></div>
+<span class="w-24 text-on-surface-variant">OpenAI:</span>
+<span class="font-mono bg-surface-container px-1 py-0.5 rounded text-xs">$0.015 / 1k</span>
+</li>
+<li class="flex items-center gap-md">
+<div class="w-1 h-1 rounded-full bg-outline"></div>
+<span class="w-24 text-on-surface-variant">Azure:</span>
+<span class="font-mono bg-surface-container px-1 py-0.5 rounded text-xs">$0.016 / 1k</span>
+</li>
+</ul>
+<h3 class="font-headline-sm text-headline-sm text-on-surface mb-sm mt-lg">3. Technical Notes (Prosody &amp; SSML)</h3>
+<div class="bg-surface-container-low p-md rounded border border-outline-variant font-body-md text-body-md">
+<p class="mb-2 text-on-surface"><strong>Azure</strong> offers the most robust SSML support, allowing precise control over pitch, rate, and specific emotional contours (e.g., `<mstts:express-as style="cheerful">`).</mstts:express-as></p>
+<p class="text-on-surface"><strong>ElevenLabs</strong> relies on implicit prosody inferred from context, which is highly natural but less deterministic for hard-coded script paths.</p>
+</div>
+<div class="mt-xl pt-lg border-t border-outline-variant flex justify-end">
+<button class="px-md py-sm bg-surface border border-outline-variant text-on-surface rounded font-label-sm text-label-sm font-medium hover:bg-surface-container transition-colors">
+                        Copy Markdown
+                    </button>
+</div>
+</div>
+</aside>
+</main>
+</body></html>

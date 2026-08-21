@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport"/>
+<title>Processes - Carlos Office</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600&amp;family=Inter:wght@400;500&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "secondary-fixed": "#dbe2fc",
+                    "secondary-fixed-dim": "#bfc6e0",
+                    "surface-bright": "#fbf8ff",
+                    "secondary-container": "#d9dff9",
+                    "inverse-on-surface": "#f0efff",
+                    "surface-container": "#edecff",
+                    "surface-container-lowest": "#ffffff",
+                    "on-tertiary": "#ffffff",
+                    "surface-container-high": "#e6e6fe",
+                    "on-error-container": "#93000a",
+                    "on-surface": "#181a2b",
+                    "outline-variant": "#c3c6d7",
+                    "tertiary-fixed": "#59fbdd",
+                    "on-secondary-container": "#5b6278",
+                    "on-secondary-fixed-variant": "#3f465b",
+                    "inverse-surface": "#2d2f41",
+                    "surface-variant": "#e0e1f8",
+                    "error": "#ba1a1a",
+                    "background": "#fbf8ff",
+                    "tertiary-container": "#008471",
+                    "on-tertiary-fixed": "#00201a",
+                    "on-primary-container": "#fffbff",
+                    "on-tertiary-container": "#f4fffa",
+                    "surface": "#fbf8ff",
+                    "outline": "#737686",
+                    "on-primary-fixed": "#00164e",
+                    "on-surface-variant": "#424655",
+                    "tertiary": "#006859",
+                    "primary-fixed": "#dce1ff",
+                    "primary-container": "#2c68ff",
+                    "secondary": "#575e74",
+                    "error-container": "#ffdad6",
+                    "primary-fixed-dim": "#b5c4ff",
+                    "on-primary-fixed-variant": "#003cae",
+                    "surface-tint": "#0050e2",
+                    "on-error": "#ffffff",
+                    "tertiary-fixed-dim": "#2ddec1",
+                    "surface-dim": "#d7d8f0",
+                    "on-tertiary-fixed-variant": "#005145",
+                    "on-secondary": "#ffffff",
+                    "surface-container-low": "#f4f2ff",
+                    "on-secondary-fixed": "#141b2e",
+                    "on-primary": "#ffffff",
+                    "primary": "#004edd",
+                    "inverse-primary": "#b5c4ff",
+                    "surface-container-highest": "#e0e1f8",
+                    "on-background": "#181a2b"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "spacing": {
+                    "margin-mobile": "16px",
+                    "base": "4px",
+                    "lg": "24px",
+                    "container-max": "1280px",
+                    "md": "16px",
+                    "xl": "48px",
+                    "gutter": "16px",
+                    "sm": "8px",
+                    "margin-desktop": "32px",
+                    "xs": "4px"
+            },
+            "fontFamily": {
+                    "label-caps": ["JetBrains Mono"],
+                    "body-md": ["Inter"],
+                    "headline-lg": ["Hanken Grotesk"],
+                    "label-sm": ["Inter"],
+                    "headline-lg-mobile": ["Hanken Grotesk"],
+                    "headline-md": ["Hanken Grotesk"],
+                    "body-lg": ["Inter"],
+                    "headline-sm": ["Hanken Grotesk"]
+            },
+            "fontSize": {
+                    "label-caps": ["12px", {"lineHeight": "1.2", "letterSpacing": "0.05em", "fontWeight": "500"}],
+                    "body-md": ["14px", {"lineHeight": "1.5", "fontWeight": "400"}],
+                    "headline-lg": ["32px", {"lineHeight": "1.2", "letterSpacing": "-0.02em", "fontWeight": "600"}],
+                    "label-sm": ["12px", {"lineHeight": "1.2", "fontWeight": "500"}],
+                    "headline-lg-mobile": ["26px", {"lineHeight": "1.2", "fontWeight": "600"}],
+                    "headline-md": ["24px", {"lineHeight": "1.3", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                    "body-lg": ["16px", {"lineHeight": "1.6", "fontWeight": "400"}],
+                    "headline-sm": ["18px", {"lineHeight": "1.4", "fontWeight": "600"}]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        body { -webkit-tap-highlight-color: transparent; }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .process-graph-connector {
+            position: absolute;
+            width: 2px;
+            background-color: theme('colors.outline-variant');
+            z-index: 0;
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface w-full h-full min-h-screen overflow-x-hidden font-body-md antialiased flex flex-col md:w-[390px] mx-auto relative border-x border-outline-variant/30">
+<!-- TopAppBar (From JSON) -->
+<header class="bg-surface dark:bg-inverse-surface fixed top-0 w-full md:w-[390px] z-50 border-b border-outline-variant dark:border-outline-variant/20 flat no shadows transition-colors duration-200 flex items-center justify-between px-margin-mobile md:px-margin-desktop h-16">
+<div class="flex items-center gap-xs">
+<button class="text-primary dark:text-inverse-primary hover:bg-surface-container dark:hover:bg-surface-container-high rounded-full p-2 transition-colors duration-200">
+<span class="material-symbols-outlined" data-icon="menu">menu</span>
+</button>
+<h1 class="font-headline-sm text-headline-sm font-bold tracking-tight text-primary dark:text-inverse-primary">CARLOS OFFICE</h1>
+</div>
+<button class="text-primary dark:text-inverse-primary hover:bg-surface-container dark:hover:bg-surface-container-high rounded-full p-2 transition-colors duration-200">
+<span class="material-symbols-outlined" data-icon="search">search</span>
+</button>
+</header>
+<!-- Main Content Area -->
+<main class="flex-1 mt-16 mb-20 px-margin-mobile flex flex-col gap-lg pb-10">
+<!-- Header & Search -->
+<div class="pt-sm flex flex-col gap-sm">
+<h2 class="font-headline-lg-mobile text-headline-lg-mobile text-on-surface">Processes</h2>
+<!-- SearchInput -->
+<div class="relative w-full">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[20px]" data-icon="search">search</span>
+<input class="w-full h-10 pl-10 pr-4 bg-surface-container-lowest border border-outline-variant rounded-DEFAULT focus:border-primary focus:ring-0 focus:outline-none font-body-md text-on-surface placeholder:text-on-surface-variant transition-colors" placeholder="Search processes..." type="text"/>
+</div>
+</div>
+<!-- Filter Chips -->
+<div class="flex gap-sm overflow-x-auto hide-scrollbar pb-xs">
+<button class="px-3 py-1.5 bg-primary-container text-on-primary-container rounded-full font-label-sm text-label-sm whitespace-nowrap">All Processes</button>
+<button class="px-3 py-1.5 bg-surface-variant text-on-surface-variant rounded-full font-label-sm text-label-sm whitespace-nowrap">HR Onboarding</button>
+<button class="px-3 py-1.5 bg-surface-variant text-on-surface-variant rounded-full font-label-sm text-label-sm whitespace-nowrap">IT Procurement</button>
+<button class="px-3 py-1.5 bg-surface-variant text-on-surface-variant rounded-full font-label-sm text-label-sm whitespace-nowrap">Facilities</button>
+</div>
+<!-- Process List -->
+<div class="flex flex-col border-t border-outline-variant" id="processList">
+<!-- ListRow 1 -->
+<div class="flex items-center justify-between py-md border-b border-outline-variant cursor-pointer active:bg-surface-container-low transition-colors" onclick="openGraph('Employee Onboarding')">
+<div class="flex flex-col gap-xs">
+<span class="font-body-md text-on-surface font-medium">Employee Onboarding</span>
+<div class="flex items-center gap-2">
+<span class="px-2 py-0.5 bg-tertiary-container/10 text-tertiary rounded-sm font-label-caps text-label-caps text-[10px]">ACTIVE</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">HR Dept</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-outline" data-icon="chevron_right">chevron_right</span>
+</div>
+<!-- ListRow 2 -->
+<div class="flex items-center justify-between py-md border-b border-outline-variant cursor-pointer active:bg-surface-container-low transition-colors" onclick="openGraph('Hardware Request')">
+<div class="flex flex-col gap-xs">
+<span class="font-body-md text-on-surface font-medium">Hardware Request</span>
+<div class="flex items-center gap-2">
+<span class="px-2 py-0.5 bg-primary-container/10 text-primary rounded-sm font-label-caps text-label-caps text-[10px]">DRAFT</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">IT Dept</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-outline" data-icon="chevron_right">chevron_right</span>
+</div>
+<!-- ListRow 3 -->
+<div class="flex items-center justify-between py-md border-b border-outline-variant cursor-pointer active:bg-surface-container-low transition-colors" onclick="openGraph('Quarterly Review')">
+<div class="flex flex-col gap-xs">
+<span class="font-body-md text-on-surface font-medium">Quarterly Review</span>
+<div class="flex items-center gap-2">
+<span class="px-2 py-0.5 bg-outline-variant/30 text-on-surface-variant rounded-sm font-label-caps text-label-caps text-[10px]">ARCHIVED</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">Management</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-outline" data-icon="chevron_right">chevron_right</span>
+</div>
+</div>
+<!-- ProcessGraph View (Initially Hidden) -->
+<div class="hidden flex-col gap-md" id="processGraphView">
+<div class="flex items-center gap-sm cursor-pointer" onclick="closeGraph()">
+<span class="material-symbols-outlined text-primary" data-icon="arrow_back">arrow_back</span>
+<span class="font-label-sm text-label-sm text-primary">Back to List</span>
+</div>
+<div class="flex flex-col gap-xs border-b border-outline-variant pb-sm">
+<h3 class="font-headline-sm text-headline-sm text-on-surface" id="graphTitle">Process Details</h3>
+<span class="font-body-md text-body-md text-on-surface-variant">Workflow topology</span>
+</div>
+<!-- Canvas Area for Graph -->
+<div class="relative w-full h-[400px] bg-surface-container-lowest border border-outline-variant rounded-DEFAULT overflow-hidden p-md flex flex-col items-center justify-start gap-xl pt-lg">
+<!-- Vertical Line Connector -->
+<div class="absolute top-[80px] bottom-[100px] left-1/2 -translate-x-1/2 w-[1px] bg-outline-variant z-0"></div>
+<!-- TaskNode 1 -->
+<div class="relative z-10 w-[200px] bg-surface border border-primary p-3 rounded-lg flex flex-col gap-2 cursor-pointer shadow-sm active:bg-surface-container-low" onclick="openBottomSheet('Initialize Request', 'Start the formal process by submitting the required documentation via the internal portal.')">
+<div class="flex items-center justify-between">
+<span class="font-label-caps text-label-caps text-primary">START</span>
+<span class="material-symbols-outlined text-[16px] text-primary" data-icon="play_circle">play_circle</span>
+</div>
+<span class="font-body-md text-on-surface font-medium text-center">Initialize Request</span>
+</div>
+<!-- TaskNode 2 -->
+<div class="relative z-10 w-[200px] bg-surface border border-outline-variant p-3 rounded-lg flex flex-col gap-2 cursor-pointer shadow-sm active:bg-surface-container-low" onclick="openBottomSheet('Manager Approval', 'Direct manager must review the request for budget compliance and operational necessity.')">
+<div class="flex items-center justify-between">
+<span class="font-label-caps text-label-caps text-on-surface-variant">STEP 2</span>
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant" data-icon="fact_check">fact_check</span>
+</div>
+<span class="font-body-md text-on-surface font-medium text-center">Manager Approval</span>
+</div>
+<!-- TaskNode 3 -->
+<div class="relative z-10 w-[200px] bg-surface border border-outline-variant p-3 rounded-lg flex flex-col gap-2 cursor-pointer shadow-sm active:bg-surface-container-low" onclick="openBottomSheet('Fulfillment', 'The designated department allocates resources and confirms completion of the request.')">
+<div class="flex items-center justify-between">
+<span class="font-label-caps text-label-caps text-on-surface-variant">END</span>
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant" data-icon="check_circle">check_circle</span>
+</div>
+<span class="font-body-md text-on-surface font-medium text-center">Fulfillment</span>
+</div>
+</div>
+</div>
+</main>
+<!-- BottomNavBar (From JSON) - Suppressed when in Process Graph view based on relevance check -->
+<nav class="lg:hidden flex justify-around items-center h-16 pb-safe w-full bg-surface/90 backdrop-blur-md fixed bottom-0 z-50 border-t border-outline-variant dark:border-outline-variant/20 flat no shadows" id="bottomNav">
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-on-surface-variant px-4 py-1 active:bg-surface-container-highest scale-95 active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined" data-icon="chat">chat</span>
+<span class="font-label-sm text-label-sm">Chat</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-on-surface-variant px-4 py-1 active:bg-surface-container-highest scale-95 active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined" data-icon="map">map</span>
+<span class="font-label-sm text-label-sm">Map</span>
+</a>
+<a class="flex flex-col items-center justify-center bg-secondary-container dark:bg-on-secondary-fixed-variant text-on-secondary-container dark:text-secondary-fixed rounded-full px-4 py-1 active:bg-surface-container-highest scale-95 active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined" data-icon="account_tree">account_tree</span>
+<span class="font-label-sm text-label-sm">Procs</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-on-surface-variant px-4 py-1 active:bg-surface-container-highest scale-95 active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined" data-icon="monitoring">monitoring</span>
+<span class="font-label-sm text-label-sm">Ops</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-on-surface-variant px-4 py-1 active:bg-surface-container-highest scale-95 active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span class="font-label-sm text-label-sm">Settings</span>
+</a>
+</nav>
+<!-- BottomSheet (Task Details) -->
+<div class="fixed inset-0 bg-on-surface/40 z-[60] hidden opacity-0 transition-opacity duration-300" id="bottomSheetOverlay" onclick="closeBottomSheet()"></div>
+<div class="fixed bottom-0 left-0 w-full md:w-[390px] md:left-auto bg-surface-container-lowest border-t border-outline-variant rounded-t-[16px] z-[70] transform translate-y-full transition-transform duration-300 ease-in-out p-md flex flex-col gap-md shadow-[0_-4px_24px_rgba(0,0,0,0.1)]" id="bottomSheet">
+<!-- Drag Handle -->
+<div class="w-12 h-1 bg-outline-variant rounded-full mx-auto mb-2"></div>
+<div class="flex items-center justify-between">
+<h4 class="font-headline-sm text-headline-sm text-on-surface" id="sheetTitle">Task Name</h4>
+<button class="p-1 rounded-full hover:bg-surface-container transition-colors" onclick="closeBottomSheet()">
+<span class="material-symbols-outlined text-on-surface-variant" data-icon="close">close</span>
+</button>
+</div>
+<p class="font-body-md text-body-md text-on-surface-variant" id="sheetDesc">Task description goes here.</p>
+<div class="flex flex-col gap-sm mt-sm">
+<div class="flex items-center justify-between border-b border-outline-variant pb-2">
+<span class="font-label-sm text-label-sm text-on-surface-variant">Assignee</span>
+<span class="font-body-md text-body-md text-on-surface font-medium">System Auto</span>
+</div>
+<div class="flex items-center justify-between border-b border-outline-variant pb-2">
+<span class="font-label-sm text-label-sm text-on-surface-variant">SLA Target</span>
+<span class="font-body-md text-body-md text-on-surface font-medium">24 Hours</span>
+</div>
+</div>
+<button class="w-full bg-primary text-on-primary font-label-sm text-label-sm py-3 rounded-DEFAULT mt-sm hover:bg-primary/90 transition-colors">
+            View Technical Logs
+        </button>
+</div>
+<script>
+        const processList = document.getElementById('processList');
+        const processGraphView = document.getElementById('processGraphView');
+        const graphTitle = document.getElementById('graphTitle');
+        const bottomNav = document.getElementById('bottomNav');
+        const bottomSheetOverlay = document.getElementById('bottomSheetOverlay');
+        const bottomSheet = document.getElementById('bottomSheet');
+        const sheetTitle = document.getElementById('sheetTitle');
+        const sheetDesc = document.getElementById('sheetDesc');
+
+        function openGraph(title) {
+            graphTitle.textContent = title;
+            processList.classList.add('hidden');
+            processGraphView.classList.remove('hidden');
+            processGraphView.classList.add('flex');
+            bottomNav.classList.add('hidden'); // Suppress nav in focused journey
+        }
+
+        function closeGraph() {
+            processGraphView.classList.add('hidden');
+            processGraphView.classList.remove('flex');
+            processList.classList.remove('hidden');
+            bottomNav.classList.remove('hidden');
+        }
+
+        function openBottomSheet(title, desc) {
+            sheetTitle.textContent = title;
+            sheetDesc.textContent = desc;
+            
+            bottomSheetOverlay.classList.remove('hidden');
+            // Small delay to allow display:block to apply before animating opacity
+            setTimeout(() => {
+                bottomSheetOverlay.classList.remove('opacity-0');
+                bottomSheet.classList.remove('translate-y-full');
+            }, 10);
+        }
+
+        function closeBottomSheet() {
+            bottomSheetOverlay.classList.add('opacity-0');
+            bottomSheet.classList.add('translate-y-full');
+            
+            setTimeout(() => {
+                bottomSheetOverlay.classList.add('hidden');
+            }, 300); // match transition duration
+        }
+    </script>
+</body></html>

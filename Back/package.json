@@ -1,0 +1,22 @@
+{
+  "name": "carlos-office-back",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "platform.mjs",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "start": "node platform.mjs",
+    "dev": "node --watch platform.mjs",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "check": "node --check platform.mjs && node --check src/runtime/nora.mjs && node --check src/runtime/agent.mjs && node --check src/runtime/Agent.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "eslint": "^9.18.0",
+    "globals": "^15.14.0"
+  }
+}

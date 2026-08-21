@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Carlos Suite - Operations</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600&amp;family=Inter:wght@400;500&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "secondary-fixed": "#dbe2fc",
+                    "secondary-fixed-dim": "#bfc6e0",
+                    "surface-bright": "#fbf8ff",
+                    "secondary-container": "#d9dff9",
+                    "inverse-on-surface": "#f0efff",
+                    "surface-container": "#edecff",
+                    "surface-container-lowest": "#ffffff",
+                    "on-tertiary": "#ffffff",
+                    "surface-container-high": "#e6e6fe",
+                    "on-error-container": "#93000a",
+                    "on-surface": "#181a2b",
+                    "outline-variant": "#c3c6d7",
+                    "tertiary-fixed": "#59fbdd",
+                    "on-secondary-container": "#5b6278",
+                    "on-secondary-fixed-variant": "#3f465b",
+                    "inverse-surface": "#2d2f41",
+                    "surface-variant": "#e0e1f8",
+                    "error": "#ba1a1a",
+                    "background": "#fbf8ff",
+                    "tertiary-container": "#008471",
+                    "on-tertiary-fixed": "#00201a",
+                    "on-primary-container": "#fffbff",
+                    "on-tertiary-container": "#f4fffa",
+                    "surface": "#fbf8ff",
+                    "outline": "#737686",
+                    "on-primary-fixed": "#00164e",
+                    "on-surface-variant": "#424655",
+                    "tertiary": "#006859",
+                    "primary-fixed": "#dce1ff",
+                    "primary-container": "#2c68ff",
+                    "secondary": "#575e74",
+                    "error-container": "#ffdad6",
+                    "primary-fixed-dim": "#b5c4ff",
+                    "on-primary-fixed-variant": "#003cae",
+                    "surface-tint": "#0050e2",
+                    "on-error": "#ffffff",
+                    "tertiary-fixed-dim": "#2ddec1",
+                    "surface-dim": "#d7d8f0",
+                    "on-tertiary-fixed-variant": "#005145",
+                    "on-secondary": "#ffffff",
+                    "surface-container-low": "#f4f2ff",
+                    "on-secondary-fixed": "#141b2e",
+                    "on-primary": "#ffffff",
+                    "primary": "#004edd",
+                    "inverse-primary": "#b5c4ff",
+                    "surface-container-highest": "#e0e1f8",
+                    "on-background": "#181a2b"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "spacing": {
+                    "margin-mobile": "16px",
+                    "base": "4px",
+                    "lg": "24px",
+                    "container-max": "1280px",
+                    "md": "16px",
+                    "xl": "48px",
+                    "gutter": "16px",
+                    "sm": "8px",
+                    "margin-desktop": "32px",
+                    "xs": "4px"
+            },
+            "fontFamily": {
+                    "label-caps": [
+                            "JetBrains Mono"
+                    ],
+                    "body-md": [
+                            "Inter"
+                    ],
+                    "headline-lg": [
+                            "Hanken Grotesk"
+                    ],
+                    "label-sm": [
+                            "Inter"
+                    ],
+                    "headline-lg-mobile": [
+                            "Hanken Grotesk"
+                    ],
+                    "headline-md": [
+                            "Hanken Grotesk"
+                    ],
+                    "body-lg": [
+                            "Inter"
+                    ],
+                    "headline-sm": [
+                            "Hanken Grotesk"
+                    ]
+            },
+            "fontSize": {
+                    "label-caps": [
+                            "12px",
+                            {
+                                    "lineHeight": "1.2",
+                                    "letterSpacing": "0.05em",
+                                    "fontWeight": "500"
+                            }
+                    ],
+                    "body-md": [
+                            "14px",
+                            {
+                                    "lineHeight": "1.5",
+                                    "fontWeight": "400"
+                            }
+                    ],
+                    "headline-lg": [
+                            "32px",
+                            {
+                                    "lineHeight": "1.2",
+                                    "letterSpacing": "-0.02em",
+                                    "fontWeight": "600"
+                            }
+                    ],
+                    "label-sm": [
+                            "12px",
+                            {
+                                    "lineHeight": "1.2",
+                                    "fontWeight": "500"
+                            }
+                    ],
+                    "headline-lg-mobile": [
+                            "26px",
+                            {
+                                    "lineHeight": "1.2",
+                                    "fontWeight": "600"
+                            }
+                    ],
+                    "headline-md": [
+                            "24px",
+                            {
+                                    "lineHeight": "1.3",
+                                    "letterSpacing": "-0.01em",
+                                    "fontWeight": "600"
+                            }
+                    ],
+                    "body-lg": [
+                            "16px",
+                            {
+                                    "lineHeight": "1.6",
+                                    "fontWeight": "400"
+                            }
+                    ],
+                    "headline-sm": [
+                            "18px",
+                            {
+                                    "lineHeight": "1.4",
+                                    "fontWeight": "600"
+                            }
+                    ]
+            }
+    },
+        },
+      }
+    </script>
+</head>
+<body class="bg-background text-on-background font-body-md h-screen overflow-hidden flex flex-col md:flex-row">
+<!-- TopAppBar (Mobile Only in this layout structure given the prompt requires a full screen desktop layout with a sidebar) -->
+<header class="md:hidden flex items-center justify-between px-margin-mobile h-16 w-full fixed top-0 w-full z-50 bg-surface dark:bg-inverse-surface border-b border-outline-variant dark:border-outline-variant/20 transition-colors duration-200">
+<button class="text-primary dark:text-inverse-primary hover:bg-surface-container dark:hover:bg-surface-container-high rounded-full p-2">
+<span class="material-symbols-outlined" data-icon="menu">menu</span>
+</button>
+<div class="font-headline-sm text-headline-sm font-bold tracking-tight text-primary dark:text-inverse-primary">CARLOS OFFICE</div>
+<button class="text-primary dark:text-inverse-primary hover:bg-surface-container dark:hover:bg-surface-container-high rounded-full p-2">
+<span class="material-symbols-outlined" data-icon="search">search</span>
+</button>
+</header>
+<!-- NavigationDrawer (Desktop) -->
+<nav class="hidden lg:flex flex-col gap-xs p-md h-full w-[280px] border-r border-outline-variant bg-surface dark:bg-inverse-surface flex-shrink-0 z-40 relative">
+<div class="mb-lg px-md pt-md">
+<h1 class="font-headline-md text-headline-md font-bold text-primary dark:text-inverse-primary">Carlos Suite</h1>
+</div>
+<ul class="flex flex-col gap-xs flex-1">
+<li>
+<a class="flex items-center gap-md px-md py-sm rounded-full text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-low dark:hover:bg-surface-container-high transition-all duration-200 ease-in-out font-label-sm text-label-sm" href="#">
+<span class="material-symbols-outlined" data-icon="chat">chat</span>
+                    Chat
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-md px-md py-sm rounded-full text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-low dark:hover:bg-surface-container-high transition-all duration-200 ease-in-out font-label-sm text-label-sm" href="#">
+<span class="material-symbols-outlined" data-icon="map">map</span>
+                    Office Map
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-md px-md py-sm rounded-full text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-low dark:hover:bg-surface-container-high transition-all duration-200 ease-in-out font-label-sm text-label-sm" href="#">
+<span class="material-symbols-outlined" data-icon="account_tree">account_tree</span>
+                    Processes
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-md px-md py-sm rounded-full text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-low dark:hover:bg-surface-container-high transition-all duration-200 ease-in-out font-label-sm text-label-sm" href="#">
+<span class="material-symbols-outlined" data-icon="psychology">psychology</span>
+                    Skills
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-md px-md py-sm rounded-full text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-low dark:hover:bg-surface-container-high transition-all duration-200 ease-in-out font-label-sm text-label-sm" href="#">
+<span class="material-symbols-outlined" data-icon="construction">construction</span>
+                    Tools
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-md px-md py-sm rounded-full text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-low dark:hover:bg-surface-container-high transition-all duration-200 ease-in-out font-label-sm text-label-sm" href="#">
+<span class="material-symbols-outlined" data-icon="verified_user">verified_user</span>
+                    Authorizations
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-md px-md py-sm rounded-full bg-secondary-container dark:bg-on-secondary-fixed-variant text-on-secondary-container dark:text-secondary-fixed transition-all duration-200 ease-in-out font-label-sm text-label-sm" href="#">
+<span class="material-symbols-outlined" data-icon="monitoring" data-weight="fill" style="font-variation-settings: 'FILL' 1;">monitoring</span>
+                    Operations
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-md px-md py-sm rounded-full text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-low dark:hover:bg-surface-container-high transition-all duration-200 ease-in-out font-label-sm text-label-sm mt-auto" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+                    Settings
+                </a>
+</li>
+</ul>
+</nav>
+<!-- Main Content Area: Three-region layout -->
+<main class="flex-1 flex overflow-hidden mt-16 md:mt-0 relative">
+<!-- Region 1: Workflow List (Left) -->
+<aside class="w-80 border-r border-outline-variant bg-surface flex flex-col h-full hidden lg:flex flex-shrink-0 z-30">
+<div class="p-md border-b border-outline-variant flex items-center justify-between">
+<h2 class="font-headline-sm text-headline-sm text-on-surface">Active Runs</h2>
+<span class="material-symbols-outlined text-outline cursor-pointer hover:text-primary transition-colors" data-icon="filter_list">filter_list</span>
+</div>
+<div class="flex-1 overflow-y-auto">
+<div class="divide-y divide-outline-variant">
+<!-- Workflow Item 1 (Active) -->
+<div class="p-md bg-surface-container-lowest border-l-2 border-primary cursor-pointer hover:bg-surface-container-lowest transition-colors">
+<div class="flex justify-between items-start mb-sm">
+<span class="font-label-caps text-label-caps text-primary">RUN-7742</span>
+<span class="flex h-2 w-2 relative">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+<span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+</span>
+</div>
+<h3 class="font-body-md text-body-md font-medium text-on-surface mb-xs">Monthly Financial Reconciliation</h3>
+<p class="font-label-sm text-label-sm text-on-surface-variant mb-md">Started 14 mins ago • User: J. Doe</p>
+<div class="w-full bg-surface-variant rounded-full h-1.5">
+<div class="bg-primary h-1.5 rounded-full" style="width: 45%"></div>
+</div>
+</div>
+<!-- Workflow Item 2 (Failed) -->
+<div class="p-md cursor-pointer hover:bg-surface-container-lowest transition-colors">
+<div class="flex justify-between items-start mb-sm">
+<span class="font-label-caps text-label-caps text-outline">RUN-7741</span>
+<span class="material-symbols-outlined text-error text-[16px]" data-icon="error">error</span>
+</div>
+<h3 class="font-body-md text-body-md text-on-surface mb-xs">Employee Onboarding Sequence</h3>
+<p class="font-label-sm text-label-sm text-on-surface-variant mb-md">Failed at Step 4 • Permission Denied</p>
+<div class="w-full bg-surface-variant rounded-full h-1.5">
+<div class="bg-error h-1.5 rounded-full" style="width: 60%"></div>
+</div>
+</div>
+<!-- Workflow Item 3 (Completed) -->
+<div class="p-md cursor-pointer hover:bg-surface-container-lowest transition-colors opacity-70">
+<div class="flex justify-between items-start mb-sm">
+<span class="font-label-caps text-label-caps text-outline">RUN-7740</span>
+<span class="material-symbols-outlined text-tertiary text-[16px]" data-icon="check_circle">check_circle</span>
+</div>
+<h3 class="font-body-md text-body-md text-on-surface mb-xs">Daily Backup &amp; Sync</h3>
+<p class="font-label-sm text-label-sm text-on-surface-variant mb-md">Completed • 2 hours ago</p>
+<div class="w-full bg-surface-variant rounded-full h-1.5">
+<div class="bg-tertiary h-1.5 rounded-full" style="width: 100%"></div>
+</div>
+</div>
+</div>
+</div>
+</aside>
+<!-- Region 2: Central ProcessGraph/Runtime View -->
+<section class="flex-1 flex flex-col h-full bg-background relative overflow-hidden z-20">
+<!-- Header for Graph Area -->
+<div class="h-16 px-lg flex items-center justify-between border-b border-outline-variant bg-surface/80 backdrop-blur-sm sticky top-0 z-10">
+<div class="flex items-center gap-md">
+<h2 class="font-headline-md text-headline-md text-on-surface">Monthly Financial Reconciliation</h2>
+<span class="font-label-caps text-label-caps bg-primary-container text-on-primary-container px-2 py-1 rounded">RUNNING</span>
+</div>
+<div class="flex gap-sm">
+<button class="flex items-center justify-center gap-xs px-md py-sm border border-outline-variant rounded bg-surface-container-lowest text-on-surface hover:bg-surface-container transition-colors font-label-sm text-label-sm">
+<span class="material-symbols-outlined text-[18px]" data-icon="pause">pause</span>
+                        Pause
+                    </button>
+<button class="flex items-center justify-center gap-xs px-md py-sm border border-outline-variant rounded bg-surface-container-lowest text-error hover:bg-error-container transition-colors font-label-sm text-label-sm">
+<span class="material-symbols-outlined text-[18px]" data-icon="stop">stop</span>
+                        Cancel
+                    </button>
+</div>
+</div>
+<!-- Graph Canvas Area (Simulated Node Graph) -->
+<div class="flex-1 relative overflow-auto p-lg bg-[#faf9fc]" style="background-image: radial-gradient(var(--tw-colors-outline-variant) 1px, transparent 1px); background-size: 24px 24px;">
+<!-- Node 1 -->
+<div class="absolute top-[50px] left-[100px] w-64 bg-surface-container-lowest border border-outline-variant rounded p-md shadow-sm">
+<div class="flex justify-between items-center border-b border-outline-variant pb-xs mb-sm">
+<span class="font-label-caps text-label-caps text-tertiary">COMPLETED</span>
+<span class="material-symbols-outlined text-tertiary text-[16px]" data-icon="done">done</span>
+</div>
+<div class="font-body-md text-body-md font-medium text-on-surface">Data Extraction</div>
+<div class="font-label-sm text-label-sm text-on-surface-variant mt-xs">Source: ERP System A</div>
+</div>
+<!-- SVG Connecting Line -->
+<svg class="absolute top-[90px] left-[356px] w-[100px] h-[20px]" preserveaspectratio="none">
+<path d="M0,10 L100,10" fill="none" stroke="var(--tw-colors-tertiary)" stroke-width="2"></path>
+</svg>
+<!-- Node 2 (Active) -->
+<div class="absolute top-[50px] left-[450px] w-64 bg-surface-container-lowest border-2 border-primary rounded p-md shadow-sm">
+<div class="flex justify-between items-center border-b border-outline-variant pb-xs mb-sm">
+<span class="font-label-caps text-label-caps text-primary">RUNNING</span>
+<span class="material-symbols-outlined text-primary text-[16px] animate-spin" data-icon="sync">sync</span>
+</div>
+<div class="font-body-md text-body-md font-medium text-on-surface">Data Transformation</div>
+<div class="font-label-sm text-label-sm text-on-surface-variant mt-xs">Applying mapping rules...</div>
+<div class="w-full bg-surface-variant rounded-full h-1 mt-sm">
+<div class="bg-primary h-1 rounded-full" style="width: 65%"></div>
+</div>
+</div>
+<!-- SVG Connecting Line -->
+<svg class="absolute top-[90px] left-[706px] w-[100px] h-[20px]" preserveaspectratio="none">
+<path d="M0,10 L100,10" fill="none" stroke="var(--tw-colors-outline-variant)" stroke-dasharray="4,4" stroke-width="2"></path>
+</svg>
+<!-- Node 3 (Pending) -->
+<div class="absolute top-[50px] left-[800px] w-64 bg-surface-container-lowest border border-outline-variant opacity-70 rounded p-md">
+<div class="flex justify-between items-center border-b border-outline-variant pb-xs mb-sm">
+<span class="font-label-caps text-label-caps text-outline">PENDING</span>
+<span class="material-symbols-outlined text-outline text-[16px]" data-icon="hourglass_empty">hourglass_empty</span>
+</div>
+<div class="font-body-md text-body-md text-on-surface">Upload to Data Warehouse</div>
+<div class="font-label-sm text-label-sm text-on-surface-variant mt-xs">Awaiting input</div>
+</div>
+</div>
+</section>
+<!-- Region 3: Detailed Inspector (Right) -->
+<aside class="w-96 border-l border-outline-variant bg-surface flex flex-col h-full hidden xl:flex flex-shrink-0 z-30">
+<!-- Inspector Header -->
+<div class="p-md border-b border-outline-variant flex items-center justify-between">
+<h3 class="font-headline-sm text-headline-sm text-on-surface">Inspector</h3>
+<button class="text-outline hover:text-on-surface transition-colors">
+<span class="material-symbols-outlined text-[20px]" data-icon="close">close</span>
+</button>
+</div>
+<div class="flex-1 overflow-y-auto">
+<!-- Node Context Details -->
+<div class="p-md border-b border-outline-variant">
+<div class="flex items-center gap-sm mb-md">
+<span class="material-symbols-outlined text-primary bg-primary-container p-sm rounded" data-icon="transform">transform</span>
+<div>
+<div class="font-body-md text-body-md font-medium text-on-surface">Data Transformation</div>
+<div class="font-label-caps text-label-caps text-on-surface-variant">NODE ID: TX-883</div>
+</div>
+</div>
+<div class="grid grid-cols-2 gap-y-sm mb-md">
+<div class="font-label-sm text-label-sm text-on-surface-variant">Status</div>
+<div class="font-label-sm text-label-sm text-primary font-medium flex items-center gap-xs"><span class="h-1.5 w-1.5 rounded-full bg-primary inline-block"></span> Running</div>
+<div class="font-label-sm text-label-sm text-on-surface-variant">Started</div>
+<div class="font-label-sm text-label-sm text-on-surface">10:42:15 AM</div>
+<div class="font-label-sm text-label-sm text-on-surface-variant">Duration</div>
+<div class="font-label-sm text-label-sm text-on-surface">00:02:45</div>
+<div class="font-label-sm text-label-sm text-on-surface-variant">Worker</div>
+<div class="font-label-sm text-label-sm text-on-surface">us-east-1-pool-a</div>
+</div>
+</div>
+<!-- Live Logs / History -->
+<div class="p-md">
+<h4 class="font-label-caps text-label-caps text-on-surface-variant mb-sm">LIVE LOGS</h4>
+<div class="bg-inverse-surface rounded p-sm font-label-caps text-label-caps text-inverse-on-surface h-64 overflow-y-auto leading-relaxed">
+<div class="text-outline-variant">[10:42:15] Initializing transformation engine...</div>
+<div class="text-outline-variant">[10:42:16] Loading mapping rules from schema v2.4</div>
+<div class="text-outline-variant">[10:42:20] Batch 1/5 processing started</div>
+<div class="text-tertiary-fixed">[10:43:05] Batch 1/5 completed successfully</div>
+<div class="text-outline-variant">[10:43:06] Batch 2/5 processing started</div>
+<div class="text-tertiary-fixed">[10:44:10] Batch 2/5 completed successfully</div>
+<div class="text-outline-variant">[10:44:12] Batch 3/5 processing started...</div>
+<div class="flex gap-xs items-center mt-xs"><span class="material-symbols-outlined text-[14px] animate-spin text-primary-fixed" data-icon="sync">sync</span> Processing records 5000-7500</div>
+</div>
+</div>
+</div>
+<!-- Inspector Actions Footer -->
+<div class="p-md border-t border-outline-variant bg-surface-container-lowest">
+<button class="w-full bg-surface-container border border-outline-variant text-on-surface font-label-sm text-label-sm py-sm rounded hover:bg-surface-variant transition-colors flex items-center justify-center gap-xs">
+<span class="material-symbols-outlined text-[16px]" data-icon="restart_alt">restart_alt</span>
+                    Restart Node
+                </button>
+</div>
+</aside>
+</main>
+<!-- BottomNavBar (Mobile Only) -->
+<nav class="lg:hidden flex justify-around items-center h-16 pb-safe w-full bg-surface/90 backdrop-blur-md fixed bottom-0 z-50 border-t border-outline-variant dark:border-outline-variant/20 transition-transform scale-95 active:scale-90">
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-on-surface-variant px-4 py-1 font-label-sm text-label-sm" href="#">
+<span class="material-symbols-outlined" data-icon="chat">chat</span>
+            Chat
+        </a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-on-surface-variant px-4 py-1 font-label-sm text-label-sm" href="#">
+<span class="material-symbols-outlined" data-icon="map">map</span>
+            Map
+        </a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-on-surface-variant px-4 py-1 font-label-sm text-label-sm" href="#">
+<span class="material-symbols-outlined" data-icon="account_tree">account_tree</span>
+            Procs
+        </a>
+<a class="flex flex-col items-center justify-center bg-secondary-container dark:bg-on-secondary-fixed-variant text-on-secondary-container dark:text-secondary-fixed rounded-full px-4 py-1 font-label-sm text-label-sm" href="#">
+<span class="material-symbols-outlined" data-icon="monitoring" data-weight="fill" style="font-variation-settings: 'FILL' 1;">monitoring</span>
+            Ops
+        </a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-on-surface-variant px-4 py-1 font-label-sm text-label-sm" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+            Settings
+        </a>
+</nav>
+</body></html>

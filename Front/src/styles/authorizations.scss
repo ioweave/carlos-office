@@ -1,0 +1,70 @@
+// Authorizations page — approvals inbox (pending/approved/rejected).
+// Mobile-first; independent atomic BEM.
+
+@use "./config" as config;
+
+.authorizations-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+.approval-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 8px;
+  list-style: none;
+}
+
+.approval-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.approval-card__icon {
+  display: grid;
+  place-items: center;
+  color: var(--color-warning);
+}
+
+.approval-card__body {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 6px;
+}
+
+.approval-card__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.approval-card__title {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-card__actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 6px;
+}
+
+@media (min-width: config.$screen-desktop) {
+  .approval-card__actions {
+    flex-direction: row;
+    align-items: center;
+  }
+}

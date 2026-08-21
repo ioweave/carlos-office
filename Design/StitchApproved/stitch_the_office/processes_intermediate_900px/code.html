@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Carlos Office - Processes</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Hanken+Grotesk:wght@600;700&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "secondary-fixed": "#dbe2fc",
+                        "secondary-fixed-dim": "#bfc6e0",
+                        "surface-bright": "#fbf8ff",
+                        "secondary-container": "#d9dff9",
+                        "inverse-on-surface": "#f0efff",
+                        "surface-container": "#edecff",
+                        "surface-container-lowest": "#ffffff",
+                        "on-tertiary": "#ffffff",
+                        "surface-container-high": "#e6e6fe",
+                        "on-error-container": "#93000a",
+                        "on-surface": "#181a2b",
+                        "outline-variant": "#c3c6d7",
+                        "tertiary-fixed": "#59fbdd",
+                        "on-secondary-container": "#5b6278",
+                        "on-secondary-fixed-variant": "#3f465b",
+                        "inverse-surface": "#2d2f41",
+                        "surface-variant": "#e0e1f8",
+                        "error": "#ba1a1a",
+                        "background": "#fbf8ff",
+                        "tertiary-container": "#008471",
+                        "on-tertiary-fixed": "#00201a",
+                        "on-primary-container": "#fffbff",
+                        "on-tertiary-container": "#f4fffa",
+                        "surface": "#fbf8ff",
+                        "outline": "#737686",
+                        "on-primary-fixed": "#00164e",
+                        "on-surface-variant": "#424655",
+                        "tertiary": "#006859",
+                        "primary-fixed": "#dce1ff",
+                        "primary-container": "#2c68ff",
+                        "secondary": "#575e74",
+                        "error-container": "#ffdad6",
+                        "primary-fixed-dim": "#b5c4ff",
+                        "on-primary-fixed-variant": "#003cae",
+                        "surface-tint": "#0050e2",
+                        "on-error": "#ffffff",
+                        "tertiary-fixed-dim": "#2ddec1",
+                        "surface-dim": "#d7d8f0",
+                        "on-tertiary-fixed-variant": "#005145",
+                        "on-secondary": "#ffffff",
+                        "surface-container-low": "#f4f2ff",
+                        "on-secondary-fixed": "#141b2e",
+                        "on-primary": "#ffffff",
+                        "primary": "#004edd",
+                        "inverse-primary": "#b5c4ff",
+                        "surface-container-highest": "#e0e1f8",
+                        "on-background": "#181a2b"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "margin-mobile": "16px",
+                        "base": "4px",
+                        "lg": "24px",
+                        "container-max": "1280px",
+                        "md": "16px",
+                        "xl": "48px",
+                        "gutter": "16px",
+                        "sm": "8px",
+                        "margin-desktop": "32px",
+                        "xs": "4px"
+                    },
+                    "fontFamily": {
+                        "label-caps": ["JetBrains Mono"],
+                        "body-md": ["Inter"],
+                        "headline-lg": ["Hanken Grotesk"],
+                        "label-sm": ["Inter"],
+                        "headline-lg-mobile": ["Hanken Grotesk"],
+                        "headline-md": ["Hanken Grotesk"],
+                        "body-lg": ["Inter"],
+                        "headline-sm": ["Hanken Grotesk"]
+                    },
+                    "fontSize": {
+                        "label-caps": ["12px", { "lineHeight": "1.2", "letterSpacing": "0.05em", "fontWeight": "500" }],
+                        "body-md": ["14px", { "lineHeight": "1.5", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "1.2", "letterSpacing": "-0.02em", "fontWeight": "600" }],
+                        "label-sm": ["12px", { "lineHeight": "1.2", "fontWeight": "500" }],
+                        "headline-lg-mobile": ["26px", { "lineHeight": "1.2", "fontWeight": "600" }],
+                        "headline-md": ["24px", { "lineHeight": "1.3", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "body-lg": ["16px", { "lineHeight": "1.6", "fontWeight": "400" }],
+                        "headline-sm": ["18px", { "lineHeight": "1.4", "fontWeight": "600" }]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .process-node {
+            transition: all 0.2s ease;
+        }
+        .process-node:hover {
+            stroke: #2163FF;
+            stroke-width: 2px;
+        }
+        .process-node.active {
+            fill: #2c68ff;
+            stroke: #ffffff;
+            stroke-width: 2px;
+        }
+        .process-line {
+            stroke: #c3c6d7;
+            stroke-width: 1.5px;
+            fill: none;
+        }
+        .process-line.active {
+            stroke: #2163FF;
+            stroke-dasharray: 4;
+            animation: dash 20s linear infinite;
+        }
+        @keyframes dash {
+            to { stroke-dashoffset: -1000; }
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background min-h-screen flex flex-col font-body-md overflow-hidden">
+<!-- TopAppBar -->
+<header class="bg-surface dark:bg-inverse-surface fixed top-0 w-full z-50 border-b border-outline-variant dark:border-outline-variant/20 flex items-center justify-between px-margin-mobile md:px-margin-desktop h-16 w-full">
+<div class="flex items-center gap-md">
+<button class="text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container dark:hover:bg-surface-container-high p-2 rounded-full transition-colors duration-200 lg:hidden">
+<span class="material-symbols-outlined" data-icon="menu">menu</span>
+</button>
+<h1 class="font-headline-sm text-headline-sm font-bold tracking-tight text-primary dark:text-inverse-primary">CARLOS OFFICE</h1>
+</div>
+<button class="text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container dark:hover:bg-surface-container-high p-2 rounded-full transition-colors duration-200">
+<span class="material-symbols-outlined" data-icon="search">search</span>
+</button>
+</header>
+<div class="flex flex-1 pt-16 h-screen">
+<!-- NavigationDrawer -->
+<nav class="bg-surface dark:bg-inverse-surface h-full w-[280px] border-r border-outline-variant hidden lg:flex flex-col gap-xs p-md">
+<div class="mb-lg px-4">
+<h2 class="font-headline-md text-headline-md font-bold text-primary dark:text-inverse-primary">Carlos Suite</h2>
+</div>
+<a class="flex items-center gap-md px-4 py-3 rounded-full text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-low dark:hover:bg-surface-container-high transition-all duration-200 ease-in-out" href="#">
+<span class="material-symbols-outlined" data-icon="chat">chat</span>
+<span class="font-label-sm text-label-sm">Chat</span>
+</a>
+<a class="flex items-center gap-md px-4 py-3 rounded-full text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-low dark:hover:bg-surface-container-high transition-all duration-200 ease-in-out" href="#">
+<span class="material-symbols-outlined" data-icon="map">map</span>
+<span class="font-label-sm text-label-sm">Office Map</span>
+</a>
+<a class="flex items-center gap-md px-4 py-3 rounded-full bg-secondary-container dark:bg-on-secondary-fixed-variant text-on-secondary-container dark:text-secondary-fixed transition-all duration-200 ease-in-out" href="#">
+<span class="material-symbols-outlined" data-icon="account_tree">account_tree</span>
+<span class="font-label-sm text-label-sm">Processes</span>
+</a>
+<a class="flex items-center gap-md px-4 py-3 rounded-full text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-low dark:hover:bg-surface-container-high transition-all duration-200 ease-in-out" href="#">
+<span class="material-symbols-outlined" data-icon="psychology">psychology</span>
+<span class="font-label-sm text-label-sm">Skills</span>
+</a>
+<a class="flex items-center gap-md px-4 py-3 rounded-full text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-low dark:hover:bg-surface-container-high transition-all duration-200 ease-in-out" href="#">
+<span class="material-symbols-outlined" data-icon="construction">construction</span>
+<span class="font-label-sm text-label-sm">Tools</span>
+</a>
+<a class="flex items-center gap-md px-4 py-3 rounded-full text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-low dark:hover:bg-surface-container-high transition-all duration-200 ease-in-out" href="#">
+<span class="material-symbols-outlined" data-icon="verified_user">verified_user</span>
+<span class="font-label-sm text-label-sm">Authorizations</span>
+</a>
+<a class="flex items-center gap-md px-4 py-3 rounded-full text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-low dark:hover:bg-surface-container-high transition-all duration-200 ease-in-out" href="#">
+<span class="material-symbols-outlined" data-icon="monitoring">monitoring</span>
+<span class="font-label-sm text-label-sm">Operations</span>
+</a>
+<a class="flex items-center gap-md px-4 py-3 rounded-full text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-low dark:hover:bg-surface-container-high transition-all duration-200 ease-in-out mt-auto" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span class="font-label-sm text-label-sm">Settings</span>
+</a>
+</nav>
+<!-- Main Content Area: Two-Pane Layout -->
+<main class="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+<!-- Left Pane: Process List -->
+<section class="w-full md:w-1/3 lg:w-[360px] flex flex-col border-r border-outline-variant bg-surface h-full overflow-y-auto">
+<div class="p-lg border-b border-outline-variant sticky top-0 bg-surface z-10">
+<h2 class="font-headline-md text-headline-md text-on-surface mb-2">Workflows</h2>
+<p class="font-body-md text-on-surface-variant">Active and pending operational paths.</p>
+</div>
+<div class="flex flex-col">
+<!-- Process Item 1 (Active) -->
+<div class="p-md border-b border-outline-variant bg-surface-container-lowest cursor-pointer hover:bg-surface-container-low transition-colors relative">
+<div class="absolute left-0 top-0 bottom-0 w-1 bg-primary"></div>
+<div class="flex justify-between items-start mb-2 pl-2">
+<h3 class="font-headline-sm text-headline-sm text-on-surface">Client Onboarding</h3>
+<span class="bg-surface-variant text-on-surface-variant font-label-sm text-label-sm px-2 py-1 rounded">Active</span>
+</div>
+<p class="font-body-md text-on-surface-variant pl-2 mb-3">Initiated 2 hrs ago by System.</p>
+<div class="flex gap-2 pl-2">
+<span class="bg-surface-container text-on-secondary-container font-label-caps text-label-caps px-2 py-1 rounded-sm">KYC</span>
+<span class="bg-surface-container text-on-secondary-container font-label-caps text-label-caps px-2 py-1 rounded-sm">AUTH</span>
+</div>
+</div>
+<!-- Process Item 2 -->
+<div class="p-md border-b border-outline-variant hover:bg-surface-container-low cursor-pointer transition-colors">
+<div class="flex justify-between items-start mb-2 pl-2">
+<h3 class="font-headline-sm text-headline-sm text-on-surface">Data Sync</h3>
+<span class="bg-surface-container text-on-surface-variant font-label-sm text-label-sm px-2 py-1 rounded">Pending</span>
+</div>
+<p class="font-body-md text-on-surface-variant pl-2 mb-3">Scheduled for 00:00 UTC.</p>
+<div class="flex gap-2 pl-2">
+<span class="bg-surface-container text-on-secondary-container font-label-caps text-label-caps px-2 py-1 rounded-sm">DB</span>
+<span class="bg-surface-container text-on-secondary-container font-label-caps text-label-caps px-2 py-1 rounded-sm">API</span>
+</div>
+</div>
+<!-- Process Item 3 -->
+<div class="p-md border-b border-outline-variant hover:bg-surface-container-low cursor-pointer transition-colors">
+<div class="flex justify-between items-start mb-2 pl-2">
+<h3 class="font-headline-sm text-headline-sm text-on-surface">Quarterly Audit</h3>
+<span class="bg-surface-variant text-on-surface-variant font-label-sm text-label-sm px-2 py-1 rounded">Draft</span>
+</div>
+<p class="font-body-md text-on-surface-variant pl-2 mb-3">Awaiting manager approval.</p>
+<div class="flex gap-2 pl-2">
+<span class="bg-surface-container text-on-secondary-container font-label-caps text-label-caps px-2 py-1 rounded-sm">FINANCE</span>
+</div>
+</div>
+</div>
+</section>
+<!-- Right Pane: Process Graph -->
+<section class="flex-1 bg-surface-container-lowest relative overflow-hidden flex flex-col">
+<!-- Graph Toolbar -->
+<div class="absolute top-md right-md z-10 flex gap-2">
+<button class="bg-surface text-on-surface border border-outline-variant rounded p-2 hover:bg-surface-container transition-colors shadow-sm">
+<span class="material-symbols-outlined text-sm" data-icon="zoom_in">zoom_in</span>
+</button>
+<button class="bg-surface text-on-surface border border-outline-variant rounded p-2 hover:bg-surface-container transition-colors shadow-sm">
+<span class="material-symbols-outlined text-sm" data-icon="zoom_out">zoom_out</span>
+</button>
+<button class="bg-surface text-on-surface border border-outline-variant rounded p-2 hover:bg-surface-container transition-colors shadow-sm">
+<span class="material-symbols-outlined text-sm" data-icon="center_focus_strong">center_focus_strong</span>
+</button>
+</div>
+<!-- SVG Graph Area -->
+<div class="flex-1 w-full h-full cursor-grab active:cursor-grabbing relative">
+<!-- Minimalist grid background -->
+<div class="absolute inset-0" style="background-image: radial-gradient(#c3c6d7 1px, transparent 1px); background-size: 24px 24px; opacity: 0.3;"></div>
+<svg class="relative z-0" height="100%" preserveaspectratio="xMidYMid meet" viewbox="0 0 800 600" width="100%">
+<!-- Edges -->
+<path class="process-line active" d="M 150 300 L 300 150"></path>
+<path class="process-line" d="M 150 300 L 300 450"></path>
+<path class="process-line active" d="M 300 150 L 500 300"></path>
+<path class="process-line" d="M 300 450 L 500 300"></path>
+<path class="process-line" d="M 500 300 L 700 300"></path>
+<!-- Nodes -->
+<!-- Node 1 -->
+<g class="cursor-pointer" transform="translate(150, 300)">
+<circle class="fill-surface stroke-outline-variant process-node" cx="0" cy="0" r="24"></circle>
+<text class="font-label-sm text-on-surface fill-on-surface" text-anchor="middle" x="0" y="40">Start</text>
+<text class="material-symbols-outlined text-on-surface-variant fill-on-surface-variant" style="font-size: 20px;" text-anchor="middle" x="0" y="5">play_arrow</text>
+</g>
+<!-- Node 2 (Active) -->
+<g class="cursor-pointer" transform="translate(300, 150)">
+<circle class="fill-primary-container stroke-primary process-node active shadow-sm" cx="0" cy="0" r="32"></circle>
+<text class="font-label-sm font-semibold text-primary fill-primary" text-anchor="middle" x="0" y="50">Identity Check</text>
+<text class="material-symbols-outlined text-on-primary-container fill-on-primary-container" style="font-size: 24px;" text-anchor="middle" x="0" y="6">fingerprint</text>
+</g>
+<!-- Node 3 -->
+<g class="cursor-pointer" transform="translate(300, 450)">
+<circle class="fill-surface stroke-outline-variant process-node" cx="0" cy="0" r="24"></circle>
+<text class="font-label-sm text-on-surface fill-on-surface" text-anchor="middle" x="0" y="40">Data Collection</text>
+<text class="material-symbols-outlined text-on-surface-variant fill-on-surface-variant" style="font-size: 20px;" text-anchor="middle" x="0" y="5">description</text>
+</g>
+<!-- Node 4 -->
+<g class="cursor-pointer" transform="translate(500, 300)">
+<circle class="fill-surface stroke-outline-variant process-node" cx="0" cy="0" r="24"></circle>
+<text class="font-label-sm text-on-surface fill-on-surface" text-anchor="middle" x="0" y="40">Verification</text>
+<text class="material-symbols-outlined text-on-surface-variant fill-on-surface-variant" style="font-size: 20px;" text-anchor="middle" x="0" y="5">verified</text>
+</g>
+<!-- Node 5 -->
+<g class="cursor-pointer" transform="translate(700, 300)">
+<circle class="fill-surface stroke-outline-variant process-node" cx="0" cy="0" r="24"></circle>
+<text class="font-label-sm text-on-surface fill-on-surface" text-anchor="middle" x="0" y="40">Complete</text>
+<text class="material-symbols-outlined text-on-surface-variant fill-on-surface-variant" style="font-size: 20px;" text-anchor="middle" x="0" y="5">check_circle</text>
+</g>
+</svg>
+</div>
+<!-- Floating Details Card (Glassmorphism approach) -->
+<div class="absolute bottom-lg right-lg w-80 bg-surface/90 backdrop-blur-md border border-outline-variant rounded-lg p-md shadow-[0_4px_24px_rgba(0,0,0,0.05)] z-20">
+<div class="flex justify-between items-start mb-4">
+<h4 class="font-headline-sm text-headline-sm text-on-surface">Identity Check</h4>
+<span class="bg-primary-container text-on-primary-container font-label-caps text-label-caps px-2 py-1 rounded">RUNNING</span>
+</div>
+<div class="space-y-3">
+<div class="flex justify-between border-b border-outline-variant pb-2">
+<span class="font-body-md text-on-surface-variant">System</span>
+<span class="font-label-sm text-on-surface">Auth_Module_v2</span>
+</div>
+<div class="flex justify-between border-b border-outline-variant pb-2">
+<span class="font-body-md text-on-surface-variant">Duration</span>
+<span class="font-label-sm text-on-surface">00:02:14</span>
+</div>
+<div class="flex justify-between pb-2">
+<span class="font-body-md text-on-surface-variant">Status</span>
+<span class="font-label-sm text-primary flex items-center gap-1">
+<span class="material-symbols-outlined text-[16px]" data-icon="sync">sync</span> Processing
+                            </span>
+</div>
+</div>
+<button class="mt-4 w-full bg-surface border border-outline-variant text-on-surface hover:bg-surface-container font-label-sm py-2 rounded transition-colors">
+                        View Logs
+                    </button>
+</div>
+</section>
+</main>
+</div>
+<!-- BottomNavBar (Mobile Only) -->
+<nav class="lg:hidden flex justify-around items-center h-16 pb-safe w-full bg-surface/90 backdrop-blur-md fixed bottom-0 w-full z-50 border-t border-outline-variant dark:border-outline-variant/20">
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-on-surface-variant px-4 py-1 active:bg-surface-container-highest scale-95 active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined mb-1" data-icon="chat">chat</span>
+<span class="font-label-sm text-label-sm">Chat</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-on-surface-variant px-4 py-1 active:bg-surface-container-highest scale-95 active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined mb-1" data-icon="map">map</span>
+<span class="font-label-sm text-label-sm">Map</span>
+</a>
+<a class="flex flex-col items-center justify-center bg-secondary-container dark:bg-on-secondary-fixed-variant text-on-secondary-container dark:text-secondary-fixed rounded-full px-4 py-1 scale-95 active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined mb-1" data-icon="account_tree">account_tree</span>
+<span class="font-label-sm text-label-sm">Procs</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-on-surface-variant px-4 py-1 active:bg-surface-container-highest scale-95 active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined mb-1" data-icon="monitoring">monitoring</span>
+<span class="font-label-sm text-label-sm">Ops</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-on-surface-variant px-4 py-1 active:bg-surface-container-highest scale-95 active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined mb-1" data-icon="settings">settings</span>
+<span class="font-label-sm text-label-sm">Settings</span>
+</a>
+</nav>
+<script>
+        // Simple script to handle node clicking interaction for demo purposes
+        document.addEventListener('DOMContentLoaded', () => {
+            const nodes = document.querySelectorAll('.cursor-pointer');
+            const detailCard = document.querySelector('.bottom-lg.right-lg');
+            
+            nodes.forEach(node => {
+                node.addEventListener('click', (e) => {
+                    // Reset all
+                    document.querySelectorAll('.process-node').forEach(n => {
+                        n.classList.remove('active');
+                        n.classList.remove('fill-primary-container', 'stroke-primary', 'shadow-sm');
+                        n.classList.add('fill-surface', 'stroke-outline-variant');
+                        
+                        const text = n.nextElementSibling;
+                        if(text) text.classList.remove('text-primary', 'fill-primary', 'font-semibold');
+                    });
+                    
+                    // Activate clicked
+                    const circle = node.querySelector('circle');
+                    if(circle) {
+                        circle.classList.add('active', 'fill-primary-container', 'stroke-primary', 'shadow-sm');
+                        circle.classList.remove('fill-surface', 'stroke-outline-variant');
+                        
+                        const text = circle.nextElementSibling;
+                        if(text) text.classList.add('text-primary', 'fill-primary', 'font-semibold');
+                    }
+                    
+                    // Small bounce animation on card to indicate update
+                    if(detailCard) {
+                        detailCard.classList.remove('scale-100');
+                        detailCard.classList.add('scale-95');
+                        setTimeout(() => {
+                            detailCard.classList.remove('scale-95');
+                            detailCard.classList.add('scale-100', 'transition-transform');
+                        }, 100);
+                    }
+                });
+            });
+        });
+    </script>
+</body></html>
