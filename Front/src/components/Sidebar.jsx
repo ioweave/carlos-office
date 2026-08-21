@@ -1,6 +1,5 @@
 import { useState } from "react";
 import {
-  IconAdjustments,
   IconBrain,
   IconChartHistogram,
   IconDots,
@@ -10,7 +9,6 @@ import {
   IconLayoutSidebarLeftExpand,
   IconMessages,
   IconMoon,
-  IconSparkles,
   IconSun,
   IconTool,
 } from "@tabler/icons-react";
@@ -21,15 +19,14 @@ const items = [
   { id: "map", label: "Office map", icon: IconBrain, primary: true },
   { id: "processes", label: "Processes", icon: IconGitBranch, primary: true },
   { id: "operations", label: "Operations", icon: IconChartHistogram, primary: true },
-  { id: "skills", label: "Skills", icon: IconSparkles, primary: false },
-  { id: "tools", label: "Tools", icon: IconTool, primary: false },
   { id: "authorizations", label: "Authorizations", icon: IconKey, primary: false },
-  { id: "settings", label: "Settings", icon: IconAdjustments, primary: false },
+  { id: "capabilities", label: "Capabilities", icon: IconTool, primary: false },
 ];
 
 const NavButton = ({ item, active, onSelect, collapsed }) => {
   const Icon = item.icon;
   const current = active === item.id;
+
   return (
     <button
       type="button"
@@ -40,12 +37,24 @@ const NavButton = ({ item, active, onSelect, collapsed }) => {
       title={collapsed ? item.label : undefined}
     >
       <Icon size={19} stroke={1.7} />
-      <span className={`office-nav__item-label ${collapsed ? "office-nav__item-label--collapsed" : ""}`}>{item.label}</span>
+      <span className={`office-nav__item-label ${collapsed ? "office-nav__item-label--collapsed" : ""}`}>
+        {item.label}
+      </span>
     </button>
   );
 };
 
-export default function Sidebar({ active, setActive, connected, nora, effectiveTheme, setTheme, collapsed, setCollapsed, workingCount }) {
+export default function Sidebar({
+  active,
+  setActive,
+  connected,
+  nora,
+  effectiveTheme,
+  setTheme,
+  collapsed,
+  setCollapsed,
+  workingCount,
+}) {
   const [moreOpen, setMoreOpen] = useState(false);
   const working = workingCount ?? 0;
 
@@ -55,15 +64,31 @@ export default function Sidebar({ active, setActive, connected, nora, effectiveT
   };
 
   const cycleTheme = () => setTheme(effectiveTheme === "dark" ? "light" : "dark");
+  const secondaryActive = items.some(item => !item.primary && item.id === active);
 
   return (
     <aside className={`office-nav ${collapsed ? "office-nav--collapsed" : ""}`}>
       <div className={`office-nav__header ${collapsed ? "office-nav__header--collapsed" : ""}`}>
-        <button type="button" className={`office-nav__brand ${collapsed ? "office-nav__brand--collapsed" : ""}`} onClick={() => setActive("chat")} aria-label="Open Carlos Office chat">
+        <button
+          type="button"
+          className={`office-nav__brand ${collapsed ? "office-nav__brand--collapsed" : ""}`}
+          onClick={() => setActive("chat")}
+          aria-label="Open Carlos Office chat"
+        >
           <span className="office-nav__mark">CO</span>
-          <span className="office-nav__brand-copy"><strong className="office-nav__brand-name">Carlos Office</strong><small className="office-nav__brand-tag">Multi-Agent OS</small></span>
+          <span className="office-nav__brand-copy">
+            <strong className="office-nav__brand-name">Carlos Office</strong>
+            <small className="office-nav__brand-tag">Multi-Agent OS</small>
+          </span>
         </button>
-        <button type="button" className="office-nav__toggle" onClick={() => setCollapsed(!collapsed)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
+        <button
+          type="button"
+          className="office-nav__toggle"
+          onClick={() => setCollapsed(!collapsed)}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!collapsed}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
           {collapsed ? <IconLayoutSidebarLeftExpand size={18} /> : <IconLayoutSidebarLeftCollapse size={18} />}
         </button>
       </div>
@@ -74,7 +99,7 @@ export default function Sidebar({ active, setActive, connected, nora, effectiveT
         ))}
         <button
           type="button"
-          className={`office-nav__more ${items.some(item => !item.primary && item.id === active) ? "office-nav__item--active" : ""}`}
+          className={`office-nav__more ${secondaryActive ? "office-nav__item--active" : ""}`}
           onClick={() => setMoreOpen(true)}
           aria-label="More navigation"
         >
@@ -89,15 +114,31 @@ export default function Sidebar({ active, setActive, connected, nora, effectiveT
         <div className="office-nav__status">
           <span className={`office-nav__status-dot ${connected ? "office-nav__status-dot--online" : ""}`} />
           <div className="office-nav__status-copy">
-            <strong className="office-nav__status-title">{working ? `${working} agent${working === 1 ? "" : "s"} working` : (connected ? "Office ready" : "Office unavailable")}</strong>
-            <span className="office-nav__status-detail">{nora?.provider && nora?.model ? `${nora.provider} · ${nora.model}` : (connected ? "Nora ready" : "Backend offline")}</span>
+            <strong className="office-nav__status-title">
+              {working
+                ? `${working} agent${working === 1 ? "" : "s"} working`
+                : (connected ? "Office ready" : "Office unavailable")}
+            </strong>
+            <span className="office-nav__status-detail">
+              {nora?.provider && nora?.model
+                ? `${nora.provider} · ${nora.model}`
+                : (connected ? "Nora ready" : "Backend offline")}
+            </span>
           </div>
         </div>
-        <button type="button" className="office-nav__theme" onClick={cycleTheme} aria-label={effectiveTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}>
+        <button
+          type="button"
+          className="office-nav__theme"
+          onClick={cycleTheme}
+          aria-label={effectiveTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+        >
           {effectiveTheme === "dark" ? <IconSun size={18} /> : <IconMoon size={18} />}
           <span>{effectiveTheme === "dark" ? "Light mode" : "Dark mode"}</span>
         </button>
-        <div className={`office-nav__workspace ${collapsed ? "office-nav__workspace--collapsed" : ""}`}><span className="office-nav__workspace-mark">C</span><strong className="office-nav__workspace-name">Carlos's Workspace</strong></div>
+        <div className={`office-nav__workspace ${collapsed ? "office-nav__workspace--collapsed" : ""}`}>
+          <span className="office-nav__workspace-mark">C</span>
+          <strong className="office-nav__workspace-name">Carlos's Workspace</strong>
+        </div>
       </div>
 
       <BottomSheet open={moreOpen} title="More" onClose={() => setMoreOpen(false)}>
@@ -105,6 +146,7 @@ export default function Sidebar({ active, setActive, connected, nora, effectiveT
           {items.filter(item => !item.primary).map(item => {
             const Icon = item.icon;
             const current = active === item.id;
+
             return (
               <button
                 key={item.id}
