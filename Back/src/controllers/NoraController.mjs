@@ -6,6 +6,7 @@ import {
   createConversation as persistConversation,
   getConversation,
   setConversationNoraModel,
+  setConversationTitle,
 } from "./ConversationController.mjs";
 import { listEvents, recordEvent } from "./EventController.mjs";
 import {
@@ -429,10 +430,22 @@ export const handleCarlosRequest = async ({
     const requestArtifacts = await loadRequestArtifacts(conversationId, artifacts);
     conversation = await getConversation(conversationId);
     const noraSelection = await ensureConversationSelection(conversation);
+    const needsConversationTitle = !conversation.title
+      && conversation.messages.filter(message => message.actor === "Carlos").length === 1;
+    const decisionInstruction = needsConversationTitle
+      ? [
+          getNoraRequestDecisionInstruction(),
+          "",
+          "This is the first Carlos message in an untitled Conversation.",
+          'Add a "conversationTitle" property to the same JSON decision object you return.',
+          "The title must summarize the actual subject or intent, not copy the request verbatim.",
+          "Use 3-7 concise words, omit URLs, and do not prefix it with Chat, Conversation, Carlos, or Nora.",
+        ].join("\n")
+      : getNoraRequestDecisionInstruction();
     phase = "decision";
 
     const decision = await askNoraForJson(
-      getNoraRequestDecisionInstruction(),
+      decisionInstruction,
       {
         conversation: conversationForModel(conversation),
         requestArtifacts,
@@ -449,6 +462,17 @@ export const handleCarlosRequest = async ({
     }
     if (decision.response != null && typeof decision.response !== "string") {
       throw new Error("Nora decision response must be a string when present");
+    }
+    if (needsConversationTitle) {
+      if (typeof decision.conversationTitle !== "string" || !decision.conversationTitle.trim()) {
+        throw new Error("Nora first-request decision must include a conversation title");
+      }
+
+      const title = decision.conversationTitle.replace(/\s+/g, " ").trim();
+      if (title.length > 120) throw new Error("Nora conversation title cannot exceed 120 characters");
+
+      const latestConversation = await getConversation(conversationId);
+      if (!latestConversation?.title) conversation = await setConversationTitle(conversationId, title);
     }
 
     action = decision.action;
