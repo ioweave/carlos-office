@@ -20,6 +20,7 @@ import {
   setTaskStatus,
   setWorkflowConfig,
   setWorkflowResult,
+  startWorkflow,
 } from "./ProcessController.mjs";
 import { getNora } from "../registry/Nora.mjs";
 import { listSkills } from "../registry/Skills.mjs";
@@ -102,7 +103,7 @@ const refreshNoraStatus = () => {
 
   for (const workflowId of [...state.activeWorkflows]) {
     const workflow = getWorkflow(workflowId);
-    if (!workflow || ["completed", "cancelled", "failed", "paused"].includes(workflow.status)) {
+    if (!workflow || ["pending", "completed", "cancelled", "failed", "paused"].includes(workflow.status)) {
       state.activeWorkflows.delete(workflowId);
       continue;
     }
@@ -351,46 +352,6 @@ const recordRequestFailure = async ({ conversationId, phase, action, error, work
   return message;
 };
 
-const finishConversationWorkflow = async ({ conversationId, workflowId, action }) => {
-  try {
-    const execution = await runWorkflow(workflowId);
-    const finalWorkflow = execution.workflow;
-
-    if (finalWorkflow.status === "completed") return;
-
-    const response = finalWorkflow.status === "blocked"
-      ? `Workflow ${workflowId} is blocked and requires attention.`
-      : finalWorkflow.status === "failed"
-        ? `Workflow ${workflowId} stopped because a Task failed.`
-        : finalWorkflow.status === "paused"
-          ? `Workflow ${workflowId} was stopped and can be resumed.`
-          : finalWorkflow.status === "cancelled"
-            ? `Workflow ${workflowId} was cancelled.`
-            : `Workflow ${workflowId} stopped in state ${finalWorkflow.status}.`;
-    await addWorkflowNoraMessage(conversationId, workflowId, response);
-  } catch (error) {
-    const failure = await recordRequestFailure({
-      conversationId,
-      workflowId,
-      phase: "workflow",
-      action,
-      error,
-    });
-
-    try {
-      await addWorkflowNoraMessage(conversationId, workflowId, `Workflow ${workflowId} could not complete. ${failure}`);
-    } catch (messageError) {
-      console.error("[nora] Could not persist background Workflow failure message.", {
-        conversationId,
-        workflowId,
-        message: errorMessage(messageError),
-      });
-    }
-  } finally {
-    refreshNoraStatus();
-  }
-};
-
 export const handleCarlosRequest = async ({
   conversationId,
   content = null,
@@ -577,9 +538,8 @@ export const handleCarlosRequest = async ({
     }
 
     activeWorkflowId = workflow.id;
-    state.activeWorkflows.add(workflow.id);
     await addWorkflow(conversationId, workflow.id);
-    await recordEvent("nora.workflow_started", {
+    await recordEvent("nora.workflow_prepared", {
       conversationId,
       workflowId: workflow.id,
       process: workflow.process,
@@ -587,11 +547,10 @@ export const handleCarlosRequest = async ({
 
     const message = await addNoraMessage(
       conversationId,
-      decision.response?.trim() || `Started Workflow ${workflow.id}. I will report back when it changes state.`,
+      `Prepared Workflow ${workflow.id}. Review or edit it in Operations, then run it when ready.`,
       workflow.id,
     );
 
-    void finishConversationWorkflow({ conversationId, workflowId: workflow.id, action });
     refreshNoraStatus();
     return { action, message, workflow: getWorkflow(workflow.id) };
   } catch (error) {
@@ -640,7 +599,10 @@ export const selectTaskExecution = async (workflowId, taskId) => {
 };
 
 export const runWorkflow = async workflowId => {
-  if (!getWorkflow(workflowId)) throw new Error(`Unknown Workflow: ${workflowId}`);
+  let workflow = getWorkflow(workflowId);
+  if (!workflow) throw new Error(`Unknown Workflow: ${workflowId}`);
+  if (workflow.status === "pending") workflow = await startWorkflow(workflowId);
+
   state.activeWorkflows.add(workflowId);
   refreshNoraStatus();
 
