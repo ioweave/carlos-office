@@ -103,7 +103,7 @@ const refreshNoraStatus = () => {
 
   for (const workflowId of [...state.activeWorkflows]) {
     const workflow = getWorkflow(workflowId);
-    if (!workflow || ["pending", "completed", "cancelled", "failed", "paused"].includes(workflow.status)) {
+    if (!workflow || ["completed", "cancelled", "failed", "paused"].includes(workflow.status)) {
       state.activeWorkflows.delete(workflowId);
       continue;
     }
@@ -352,6 +352,45 @@ const recordRequestFailure = async ({ conversationId, phase, action, error, work
   return message;
 };
 
+const finishConversationWorkflow = async ({ conversationId, workflowId, action }) => {
+  try {
+    const execution = await runWorkflow(workflowId);
+    const finalWorkflow = execution.workflow;
+    if (!finalWorkflow || finalWorkflow.status === "completed") return;
+
+    const response = finalWorkflow.status === "blocked"
+      ? `Workflow ${workflowId} is blocked and requires attention.`
+      : finalWorkflow.status === "failed"
+        ? `Workflow ${workflowId} stopped because a Task failed.`
+        : finalWorkflow.status === "paused"
+          ? `Workflow ${workflowId} was stopped and can be edited or resumed.`
+          : finalWorkflow.status === "cancelled"
+            ? `Workflow ${workflowId} was cancelled.`
+            : `Workflow ${workflowId} stopped in state ${finalWorkflow.status}.`;
+    await addWorkflowNoraMessage(conversationId, workflowId, response);
+  } catch (error) {
+    const failure = await recordRequestFailure({
+      conversationId,
+      workflowId,
+      phase: "workflow",
+      action,
+      error,
+    });
+
+    try {
+      await addWorkflowNoraMessage(conversationId, workflowId, `Workflow ${workflowId} could not complete. ${failure}`);
+    } catch (messageError) {
+      console.error("[nora] Could not persist background Workflow failure message.", {
+        conversationId,
+        workflowId,
+        message: errorMessage(messageError),
+      });
+    }
+  } finally {
+    refreshNoraStatus();
+  }
+};
+
 export const handleCarlosRequest = async ({
   conversationId,
   content = null,
@@ -380,14 +419,13 @@ export const handleCarlosRequest = async ({
   let activeWorkflowId = null;
 
   try {
-    if (!carlosMessage) {
-      carlosMessage = await addMessage(conversationId, { actor: "Carlos", content, artifacts });
-    }
+    if (!carlosMessage) carlosMessage = await addMessage(conversationId, { actor: "Carlos", content, artifacts });
     await recordEvent("nora.request_received", {
       conversationId,
       messageId: carlosMessage.id,
       replayed: Boolean(messageId),
     });
+
     const requestArtifacts = await loadRequestArtifacts(conversationId, artifacts);
     conversation = await getConversation(conversationId);
     const noraSelection = await ensureConversationSelection(conversation);
@@ -428,10 +466,8 @@ export const handleCarlosRequest = async ({
       if (typeof decision.conversationTitle !== "string" || !decision.conversationTitle.trim()) {
         throw new Error("Nora first-request decision must include a conversation title");
       }
-
       const title = decision.conversationTitle.replace(/\s+/g, " ").trim();
       if (title.length > 120) throw new Error("Nora conversation title cannot exceed 120 characters");
-
       const latestConversation = await getConversation(conversationId);
       if (!latestConversation?.title) conversation = await setConversationTitle(conversationId, title);
     }
@@ -441,7 +477,6 @@ export const handleCarlosRequest = async ({
       if (typeof decision.response !== "string" || !decision.response.trim()) {
         throw new Error(`Nora ${action} decision requires a response`);
       }
-
       const message = await addNoraMessage(conversationId, decision.response);
       refreshNoraStatus();
       return { action, message, workflow: null };
@@ -503,12 +538,8 @@ export const handleCarlosRequest = async ({
       return { action, message, workflow: null, plan: results };
     }
 
-    if (decision.config != null && !isObject(decision.config)) {
-      throw new Error("Nora Workflow config must be an object");
-    }
-    if (decision.inputs != null && !isObject(decision.inputs)) {
-      throw new Error("Nora Workflow inputs must be an object");
-    }
+    if (decision.config != null && !isObject(decision.config)) throw new Error("Nora Workflow config must be an object");
+    if (decision.inputs != null && !isObject(decision.inputs)) throw new Error("Nora Workflow inputs must be an object");
 
     const config = {
       ...(decision.config ?? {}),
@@ -538,8 +569,9 @@ export const handleCarlosRequest = async ({
     }
 
     activeWorkflowId = workflow.id;
+    state.activeWorkflows.add(workflow.id);
     await addWorkflow(conversationId, workflow.id);
-    await recordEvent("nora.workflow_prepared", {
+    await recordEvent("nora.workflow_started", {
       conversationId,
       workflowId: workflow.id,
       process: workflow.process,
@@ -547,10 +579,11 @@ export const handleCarlosRequest = async ({
 
     const message = await addNoraMessage(
       conversationId,
-      `Prepared Workflow ${workflow.id}. Review or edit it in Operations, then run it when ready.`,
+      decision.response?.trim() || `Started Workflow ${workflow.id}. I will report back when it changes state.`,
       workflow.id,
     );
 
+    void finishConversationWorkflow({ conversationId, workflowId: workflow.id, action });
     refreshNoraStatus();
     return { action, message, workflow: getWorkflow(workflow.id) };
   } catch (error) {
@@ -574,7 +607,6 @@ export const handleCarlosRequest = async ({
 
     refreshNoraStatus();
     if (!message) throw error;
-
     return {
       action: "failed",
       message,
