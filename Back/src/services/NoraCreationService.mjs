@@ -118,14 +118,15 @@ export const getNoraRequestDecisionInstruction = () => [
   "Allowed actions:",
   '- "respond": answer directly without a Workflow.',
   '- "clarify": ask Carlos only when information is genuinely required before safe execution.',
-  '- "process": instantiate an existing Process as a pending Workflow for review before execution.',
-  '- "adhoc": create a pending one-off Workflow for review before execution.',
+  '- "process": instantiate an existing Process and execute it as a Workflow.',
+  '- "adhoc": create and execute a one-off Workflow.',
   '- "create_process": create or update one reusable Process without executing it.',
   '- "create_schedule": create one Schedule for an existing Process.',
   '- "tool": create or update one reusable executable Tool.',
   '- "skill": create or update one reusable Markdown Skill.',
   '- "plan": perform 2-5 durable creation steps when one request requires multiple related capabilities.',
   "",
+  "Process and ad-hoc Workflows execute automatically after creation unless Carlos explicitly asks only to design or save a reusable Process.",
   "Use plan only for compound creation. Plan steps may be tool, skill, create_process, or create_schedule.",
   "When scheduled behavior needs a missing capability, create the Tool or Skill, then Process, then Schedule.",
   "Do not choose a Schedule ID. Carlos Office assigns Schedule IDs automatically.",
@@ -283,12 +284,8 @@ const prepareCreationPlan = async ({
   const plannedProcesses = new Set();
 
   for (const step of steps) {
-    if (step.type === "tool") {
-      addUniqueName(plannedTools, requireRegistryName(step.name, "Tool name"), "Tool");
-    }
-    if (step.type === "skill") {
-      addUniqueName(plannedSkills, requireRegistryName(step.name, "Skill name"), "Skill");
-    }
+    if (step.type === "tool") addUniqueName(plannedTools, requireRegistryName(step.name, "Tool name"), "Tool");
+    if (step.type === "skill") addUniqueName(plannedSkills, requireRegistryName(step.name, "Skill name"), "Skill");
     if (step.type === "create_process") {
       addUniqueName(plannedProcesses, requireText(step.process?.name, "Process name"), "Process");
     }
@@ -297,23 +294,13 @@ const prepareCreationPlan = async ({
   const prepared = [];
   for (const step of steps) {
     if (step.type === "tool") {
-      prepared.push({
-        type: "tool",
-        name: requireRegistryName(step.name, "Tool name"),
-        source: requireText(step.source, "Tool source"),
-      });
+      prepared.push({ type: "tool", name: requireRegistryName(step.name, "Tool name"), source: requireText(step.source, "Tool source") });
       continue;
     }
-
     if (step.type === "skill") {
-      prepared.push({
-        type: "skill",
-        name: requireRegistryName(step.name, "Skill name"),
-        content: requireText(step.content, "Skill content"),
-      });
+      prepared.push({ type: "skill", name: requireRegistryName(step.name, "Skill name"), content: requireText(step.content, "Skill content") });
       continue;
     }
-
     if (step.type === "create_process") {
       const initial = normalizeProcess(step.process);
       const graph = await ensureValidGeneratedGraph({
@@ -324,11 +311,7 @@ const prepareCreationPlan = async ({
       });
       const process = normalizeProcess({ ...initial, ...graph });
       validateProcessDefinition(process);
-      validateProcessDependencies(process, {
-        plannedTools,
-        plannedSkills,
-        validateModelSelection,
-      });
+      validateProcessDependencies(process, { plannedTools, plannedSkills, validateModelSelection });
       prepared.push({ type: "create_process", process });
       continue;
     }
@@ -352,12 +335,7 @@ export const executeCreationPlan = async ({
   modelSelection,
   validateModelSelection,
 }) => {
-  const prepared = await prepareCreationPlan({
-    steps,
-    askForJson,
-    modelSelection,
-    validateModelSelection,
-  });
+  const prepared = await prepareCreationPlan({ steps, askForJson, modelSelection, validateModelSelection });
   const results = [];
 
   for (const step of prepared) {
@@ -366,13 +344,11 @@ export const executeCreationPlan = async ({
       results.push({ type: "tool", name: tool.name });
       continue;
     }
-
     if (step.type === "skill") {
       const skill = await createOrUpdateSkill(step.name, step.content);
       results.push({ type: "skill", name: skill.name });
       continue;
     }
-
     if (step.type === "create_process") {
       const process = await saveProcess(step.process);
       await recordEvent("nora.process_saved", { process: process.name });
