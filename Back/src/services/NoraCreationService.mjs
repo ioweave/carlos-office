@@ -110,7 +110,7 @@ const validateProcessDependencies = (
   }
 };
 
-const workflowShape = '{"start":"start","end":"end","tasks":{"start":{"type":"start"},"inspect":{"type":"task","objective":"Inspect the relevant files and report findings","tools":["read-file"]},"end":{"type":"end"}},"edges":[["start","inspect"],["inspect","end"]]}';
+const workflowShape = '{"start":"start","end":"end","tasks":{"start":{"type":"start"},"inspect":{"type":"task","name":"Inspect files","objective":"Inspect the relevant files and report findings","tools":["read-file"]},"end":{"type":"end"}},"edges":[["start","inspect"],["inspect","end"]]}';
 
 export const getNoraRequestDecisionInstruction = () => [
   "Decide how Carlos's latest request should be handled.",
@@ -118,8 +118,8 @@ export const getNoraRequestDecisionInstruction = () => [
   "Allowed actions:",
   '- "respond": answer directly without a Workflow.',
   '- "clarify": ask Carlos only when information is genuinely required before safe execution.',
-  '- "process": instantiate an existing Process.',
-  '- "adhoc": create and execute a one-off Workflow.',
+  '- "process": instantiate an existing Process as a pending Workflow for review before execution.',
+  '- "adhoc": create a pending one-off Workflow for review before execution.',
   '- "create_process": create or update one reusable Process without executing it.',
   '- "create_schedule": create one Schedule for an existing Process.',
   '- "tool": create or update one reusable executable Tool.',
@@ -132,7 +132,9 @@ export const getNoraRequestDecisionInstruction = () => [
   "Never claim a notification or alarm capability exists unless it is available or created in the plan.",
   "Generated graph nodes may only be start, task, or end. Edges are [fromTaskId,toTaskId].",
   "The tasks object MUST contain the named start and end nodes with types start and end.",
-  "Every executable task MUST use type task and a non-empty objective. Do not use description instead of objective.",
+  "Every executable task MUST use type task, a concise name, and a non-empty objective. Do not use description instead of objective.",
+  "Task name is the atomic UI label: use 2-5 words, at most 50 characters, one clear action, and no paths, URLs, explanations, or completion criteria.",
+  "Task objective contains the detailed execution instruction and may be much longer than the name.",
   `Valid minimal Workflow graph: ${workflowShape}`,
   "Tasks do not name persistent specialist Agents. A Task may constrain provider/model, Tools, and Skills; otherwise Nora selects them at runtime.",
   "For a Tool, return complete valid ESM source with no Markdown fences.",
@@ -177,7 +179,8 @@ export const ensureValidGeneratedGraph = async ({
         '- nodes are only type "start", "task", or "end";',
         "- exactly one start node and exactly one end node;",
         "- tasks[start] has type start and tasks[end] has type end;",
-        "- every executable task has type task and a non-empty objective; never use description instead of objective;",
+        "- every executable task has type task, a concise 2-5 word name, and a non-empty objective; never use description instead of objective;",
+        "- Task names are at most 50 characters and contain no paths, URLs, explanations, or completion criteria;",
         "- every edge is [fromTaskId, toTaskId] and references existing nodes;",
         "- no self-edges or duplicate edges;",
         "- start has no incoming edges and end has no outgoing edges;",
