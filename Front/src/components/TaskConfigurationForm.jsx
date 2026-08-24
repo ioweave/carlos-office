@@ -164,6 +164,7 @@ export default function TaskConfigurationForm({
   const timeoutOptions = TASK_TIMEOUT_OPTIONS.some(option => option.value === draft.timeoutMs)
     ? TASK_TIMEOUT_OPTIONS
     : [{ value: draft.timeoutMs, label: `${Number(draft.timeoutMs) / 1000} seconds` }, ...TASK_TIMEOUT_OPTIONS];
+  const dirty = !sameDraft(draft, baseline);
   const validName = !workflowId || (Boolean(draft.name.trim()) && draft.name.trim().length <= 50);
   const valid = validName && Boolean(draft.objective.trim()) && (!draft.provider || Boolean(draft.model));
 
@@ -176,7 +177,7 @@ export default function TaskConfigurationForm({
   }));
 
   const taskPayload = () => ({
-    name: draft.name.trim(),
+    ...(workflowId ? { name: draft.name.trim() } : {}),
     objective: draft.objective.trim(),
     provider: draft.provider || null,
     model: draft.provider ? draft.model || null : null,
@@ -344,7 +345,7 @@ export default function TaskConfigurationForm({
       </div>
 
       <footer className="form-actions task-config__actions">
-        <span className="form-actions__status">{disabled ? "Workflow configuration is locked" : dirty ? "Unsaved changes" : "Up to date"}</span>
+        <span className="form-actions__status">{disabled ? "Stop the Workflow before editing" : dirty ? "Unsaved changes" : "Up to date"}</span>
         <div className="form-actions__buttons">
           {onRevise && (
             <button type="button" className="button button--quiet" onClick={onRevise} disabled={disabled}>
