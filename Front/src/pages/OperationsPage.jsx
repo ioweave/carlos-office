@@ -331,7 +331,7 @@ export default function OperationsPage({ onAskNora, openRequest }) {
       approval => approval.context?.workflowId === workflow.id,
     );
     const displayTitle = workflowTitle(workflow);
-    const savedPositions = workflow.layout || workflow.config?._ui?.layout;
+    const savedPositions = workflow.config?._ui?.layout || workflow.layout;
     const connectedEdges = selectedTaskId
       ? (workflow.edges || []).filter(([from, to]) => from === selectedTaskId || to === selectedTaskId)
       : [];
