@@ -53,7 +53,7 @@ const filePayload = file => new Promise((resolve, reject) => {
   reader.readAsDataURL(file);
 });
 
-export default function ChatPage({ health, nora, openRequest, onOpenOperations }) {
+export default function ChatPage({ nora, openRequest, onOpenOperations }) {
   const [conversations, setConversations] = useState([]);
   const [conversation, setConversation] = useState(null);
   const [artifacts, setArtifacts] = useState([]);
@@ -73,12 +73,10 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
   const chatThreadRef = useRef(null);
   const requestRef = useRef(null);
   const sendInFlightRef = useRef(false);
-  const renameCancelledRef = useRef(false);
   const messageEditCancelledRef = useRef(false);
 
   const providers = useMemo(() => models.map(item => item.provider), [models]);
   const modelsFor = provider => models.find(item => item.provider === provider)?.models || [];
-  const connected = health?.ok === true;
   const artifactById = useMemo(
     () => Object.fromEntries(artifacts.map(item => [item.id, item])),
     [artifacts],
@@ -118,6 +116,8 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
       setArtifacts(filesResponse.data || []);
       setModelDraft(record.nora || { provider: "", model: "" });
       setWorkflowId(record.workflows?.at(-1) || "");
+      setEditingConversationId("");
+      setTitleDraft("");
       setEditingMessageId("");
       setMessageDraft("");
       sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
@@ -183,36 +183,36 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
   };
 
   const beginRename = item => {
-    renameCancelledRef.current = false;
+    if (!item?.id) return;
     setEditingConversationId(item.id);
     setTitleDraft(conversationTitle(item));
   };
 
-  const finishRename = async item => {
-    if (renameCancelledRef.current) {
-      renameCancelledRef.current = false;
-      setEditingConversationId("");
-      setTitleDraft("");
-      return;
-    }
+  const cancelRename = () => {
+    setEditingConversationId("");
+    setTitleDraft("");
+  };
 
+  const finishRename = async item => {
     const currentTitle = conversationTitle(item);
     const nextTitle = titleDraft.trim();
-    if (!nextTitle || nextTitle === currentTitle) {
-      setEditingConversationId("");
-      setTitleDraft("");
+    if (!nextTitle) {
+      toast.error("Conversation title cannot be empty.");
+      return;
+    }
+    if (nextTitle === currentTitle) {
+      cancelRename();
       return;
     }
 
     try {
       const updated = (await api.patch(endpoints.conversation(item.id), { title: nextTitle })).data;
-      setConversations(current => current.map(entry => entry.id === item.id ? updated : entry));
+      upsertConversation(updated);
       if (conversation?.id === item.id) setConversation(updated);
     } catch (error) {
       toast.error(error.response?.data?.error || "Could not rename conversation.");
     } finally {
-      setEditingConversationId("");
-      setTitleDraft("");
+      cancelRename();
     }
   };
 
@@ -237,10 +237,7 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
         setModelDraft(nora || { provider: "", model: "" });
       }
 
-      if (editingConversationId === item.id) {
-        setEditingConversationId("");
-        setTitleDraft("");
-      }
+      if (editingConversationId === item.id) cancelRename();
 
       toast.success("Conversation deleted.");
     } catch (error) {
@@ -495,7 +492,7 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
     <div className="workspace-page chat-page">
       <aside className="chat-history">
         <header className="chat-history__header">
-          <h1>Chat</h1>
+          <h1>Conversations</h1>
           <button type="button" className="icon-button" onClick={startNew} aria-label="New conversation">
             <IconPlus size={18} />
           </button>
@@ -520,16 +517,15 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
                     value={titleDraft}
                     onChange={event => setTitleDraft(event.target.value)}
                     onFocus={event => event.currentTarget.select()}
-                    onBlur={() => finishRename(item)}
+                    onBlur={cancelRename}
                     onKeyDown={event => {
                       if (event.key === "Enter") {
                         event.preventDefault();
-                        event.currentTarget.blur();
+                        void finishRename(item);
                       }
                       if (event.key === "Escape") {
                         event.preventDefault();
-                        renameCancelledRef.current = true;
-                        event.currentTarget.blur();
+                        cancelRename();
                       }
                     }}
                     aria-label={`Rename ${conversationTitle(item)}`}
@@ -555,23 +551,21 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
                 <button
                   type="button"
                   className="conversation-row__open"
-                  onClick={() => openConversation(item.id)}
+                  onClick={event => {
+                    if (event.target.closest("[data-edit-conversation-title]")) {
+                      beginRename(item);
+                      return;
+                    }
+                    openConversation(item.id);
+                  }}
+                  aria-label={`Open ${conversationTitle(item)}`}
+                  title="Click the title to rename; click elsewhere to open"
                 >
-                  <strong>{conversationTitle(item)}</strong>
+                  <strong data-edit-conversation-title>{conversationTitle(item)}</strong>
                   <small>{item.messages?.at(-1)?.pending ? "Sending…" : formatTime(item.messages?.at(-1)?.at)}</small>
                 </button>
               )}
               <div className="conversation-row__actions">
-                <button
-                  type="button"
-                  className="conversation-row__action"
-                  onClick={() => beginRename(item)}
-                  disabled={editingConversationId === item.id}
-                  aria-label={`Rename ${conversationTitle(item)}`}
-                  title="Rename"
-                >
-                  <IconPencil size={14} />
-                </button>
                 <button
                   type="button"
                   className="conversation-row__action conversation-row__action--danger"
@@ -591,9 +585,50 @@ export default function ChatPage({ health, nora, openRequest, onOpenOperations }
       <section className="chat-workspace">
         <header className="page-header chat-workspace__header">
           <div className="page-header__copy">
-            <span className="eyebrow">Nora · Chief of Staff</span>
-            <h1>{conversation ? conversationTitle(conversation) : "New conversation"}</h1>
-            <p>{connected ? "Platform online" : "Platform offline"}</p>
+            {conversation && editingConversationId === conversation.id ? (
+              <input
+                autoFocus
+                value={titleDraft}
+                onChange={event => setTitleDraft(event.target.value)}
+                onFocus={event => event.currentTarget.select()}
+                onBlur={cancelRename}
+                onKeyDown={event => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void finishRename(conversation);
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    cancelRename();
+                  }
+                }}
+                aria-label={`Rename ${conversationTitle(conversation)}`}
+                style={{
+                  width: "min(720px, 100%)",
+                  minWidth: 0,
+                  padding: 0,
+                  border: 0,
+                  borderRadius: "2px",
+                  outline: "1px solid var(--color-accent)",
+                  outlineOffset: "3px",
+                  background: "transparent",
+                  color: "var(--color-text)",
+                  fontFamily: "var(--font-headline)",
+                  fontSize: "25px",
+                  fontWeight: 700,
+                  lineHeight: 1.15,
+                  letterSpacing: "-0.025em",
+                }}
+              />
+            ) : (
+              <h1
+                onClick={() => conversation && beginRename(conversation)}
+                title={conversation ? "Click to rename conversation" : undefined}
+                style={conversation ? { cursor: "text" } : undefined}
+              >
+                {conversation ? conversationTitle(conversation) : "New conversation"}
+              </h1>
+            )}
           </div>
           <div className="model-control">
             <select
