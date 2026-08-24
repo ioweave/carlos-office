@@ -38,6 +38,7 @@
   background: var(--color-border-strong);
 }
 
+.workflow-row__status--pending { background: var(--color-accent); }
 .workflow-row__status--running { background: var(--color-info); }
 .workflow-row__status--paused { background: var(--color-warning); }
 .workflow-row__status--blocked { background: var(--color-warning); }
@@ -158,6 +159,115 @@
   max-width: 300px;
   font-size: 10px;
   line-height: 1.5;
+}
+
+.inspector-panel__header--rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inspector-panel__header--rows h2 {
+  width: 100%;
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.inspector-panel__meta {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.inspector-panel__meta code {
+  display: block;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  margin: 0;
+  color: var(--color-text-faint);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operations-studio__tasks .definition-list strong {
+  overflow-wrap: anywhere;
+}
+
+.workflow-connections {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border);
+}
+
+.workflow-connections h3 {
+  margin: 0 0 8px;
+  font-size: 11px;
+}
+
+.workflow-connections__empty {
+  color: var(--color-text-faint);
+  font-size: 10px;
+}
+
+.workflow-connection-row,
+.workflow-connection-add {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.workflow-connection-row {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.workflow-connection-row code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-connection-row code:first-child {
+  flex: 1 1 0;
+}
+
+.workflow-connection-row code:nth-child(3) {
+  flex: 1 1 0;
+}
+
+.workflow-connection-row > span,
+.workflow-connection-add > span {
+  color: var(--color-text-faint);
+  font-size: 10px;
+}
+
+.workflow-connection-add {
+  margin-top: 9px;
+}
+
+.workflow-connection-add select {
+  min-width: 0;
+  flex: 1 1 0;
+  height: 32px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 9px;
+}
+
+.workflow-connection-add .button {
+  flex: 0 0 auto;
 }
 
 .attempt-list {
