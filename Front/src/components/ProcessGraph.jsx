@@ -134,7 +134,10 @@ export default function ProcessGraph({
   );
   const [positions, setPositions] = useState(initialPositions);
   const [draggingId, setDraggingId] = useState("");
+  const [panning, setPanning] = useState(false);
   const dragRef = useRef(null);
+  const panRef = useRef(null);
+  const suppressCanvasClickRef = useRef(false);
 
   useEffect(() => {
     if (!dragRef.current) setPositions(initialPositions);
@@ -160,7 +163,6 @@ export default function ProcessGraph({
       startX: event.clientX,
       startY: event.clientY,
       origin: positions[node.id],
-      position: positions[node.id],
       positions,
       moved: false,
     };
@@ -178,7 +180,6 @@ export default function ProcessGraph({
       y: Math.max(24, Math.round(drag.origin.y + dy)),
     };
 
-    drag.position = next;
     drag.positions = { ...drag.positions, [drag.id]: next };
     drag.moved = drag.moved || Math.abs(dx) > 2 || Math.abs(dy) > 2;
     setPositions(drag.positions);
@@ -209,12 +210,72 @@ export default function ProcessGraph({
     setPositions({ ...drag.positions, [drag.id]: drag.origin });
   };
 
+  const beginPan = event => {
+    if (event.button !== 0 || event.target.closest?.(".process-node-wrap")) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    panRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      scrollLeft: event.currentTarget.scrollLeft,
+      scrollTop: event.currentTarget.scrollTop,
+      moved: false,
+    };
+    setPanning(true);
+  };
+
+  const movePan = event => {
+    const pan = panRef.current;
+    if (!pan || pan.pointerId !== event.pointerId) return;
+    const dx = event.clientX - pan.startX;
+    const dy = event.clientY - pan.startY;
+    event.currentTarget.scrollLeft = pan.scrollLeft - dx;
+    event.currentTarget.scrollTop = pan.scrollTop - dy;
+    pan.moved = pan.moved || Math.abs(dx) > 3 || Math.abs(dy) > 3;
+  };
+
+  const endPan = event => {
+    const pan = panRef.current;
+    if (!pan || pan.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    suppressCanvasClickRef.current = pan.moved;
+    panRef.current = null;
+    setPanning(false);
+  };
+
+  const cancelPan = event => {
+    const pan = panRef.current;
+    if (!pan || pan.pointerId !== event.pointerId) return;
+    panRef.current = null;
+    setPanning(false);
+  };
+
+  const handleCanvasClick = () => {
+    if (suppressCanvasClickRef.current) {
+      suppressCanvasClickRef.current = false;
+      return;
+    }
+    onCanvasClick?.();
+  };
+
   if (!nodes.length) {
     return <div className="process-graph process-graph--empty">No graph data.</div>;
   }
 
   return (
-    <div className="process-graph" role="region" aria-label="Process graph" onClick={() => onCanvasClick?.()}>
+    <div
+      className={`process-graph process-graph--pannable ${panning ? "process-graph--panning" : ""}`}
+      role="region"
+      aria-label="Process graph"
+      onPointerDown={beginPan}
+      onPointerMove={movePan}
+      onPointerUp={endPan}
+      onPointerCancel={cancelPan}
+      onClick={handleCanvasClick}
+    >
       <div className="process-graph__canvas" style={{ width: geometry.width, height: geometry.height }}>
         <svg className="process-graph__edges" width={geometry.width} height={geometry.height} aria-hidden="true">
           {geometry.lines.map(line => <path key={`${line.from}-${line.to}`} d={line.path} />)}
