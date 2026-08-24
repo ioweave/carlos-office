@@ -164,8 +164,8 @@ export default function TaskConfigurationForm({
   const timeoutOptions = TASK_TIMEOUT_OPTIONS.some(option => option.value === draft.timeoutMs)
     ? TASK_TIMEOUT_OPTIONS
     : [{ value: draft.timeoutMs, label: `${Number(draft.timeoutMs) / 1000} seconds` }, ...TASK_TIMEOUT_OPTIONS];
-  const dirty = !sameDraft(draft, baseline);
-  const valid = Boolean(draft.name.trim()) && draft.name.trim().length <= 50 && (!draft.provider || Boolean(draft.model));
+  const validName = !workflowId || (Boolean(draft.name.trim()) && draft.name.trim().length <= 50);
+  const valid = validName && Boolean(draft.objective.trim()) && (!draft.provider || Boolean(draft.model));
 
   const update = changes => setDraft(current => ({ ...current, ...changes }));
   const toggle = (field, name) => setDraft(current => ({
@@ -226,17 +226,19 @@ export default function TaskConfigurationForm({
       <div className="task-config__body">
         {catalogLoading && <span className="task-config__loading">Loading configuration options…</span>}
         <div className="task-config__fields">
-          <label className="field">
-            <span>Name</span>
-            <input
-              type="text"
-              maxLength={50}
-              value={draft.name}
-              onChange={event => update({ name: event.target.value })}
-              placeholder="Atomic 2-5 word label"
-              disabled={disabled}
-            />
-          </label>
+          {workflowId && (
+            <label className="field">
+              <span>Name</span>
+              <input
+                type="text"
+                maxLength={50}
+                value={draft.name}
+                onChange={event => update({ name: event.target.value })}
+                placeholder="Atomic 2-5 word label"
+                disabled={disabled}
+              />
+            </label>
+          )}
 
           <label className="field">
             <span>Objective</span>
