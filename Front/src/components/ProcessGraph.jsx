@@ -7,7 +7,13 @@ const X_GAP = 130;
 const Y_GAP = 78;
 const PADDING = 72;
 
-const nodeLabel = (id, task) => task?.objective || task?.name || id;
+const humanizeId = id => String(id || "")
+  .replace(/[_-]+/g, " ")
+  .replace(/\s+/g, " ")
+  .trim()
+  .replace(/\b\w/g, character => character.toUpperCase());
+
+const nodeLabel = (id, task) => task?.name?.trim() || humanizeId(id) || id;
 
 const nodeTypeIcon = type => {
   if (type === "start") return IconPlayerPlay;
