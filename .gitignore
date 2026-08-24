@@ -1,0 +1,66 @@
+# Dependencies and generated builds
+node_modules/
+dist/
+build/
+out/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+
+# Tool and package-manager caches
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+.npm/
+.pnpm-store/
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+
+# Logs, process files and packaged output
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pids/
+*.pid
+*.seed
+*.pid.lock
+*.tgz
+report.*.json
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+Back/mcp.config.json
+Back/mcp.monitors.json
+Back/.google-workspace-mcp/
+Back/.mcp-auth/
+Back/.runtime/
+Back/.carlos-office/
+
+# Carlos Office private/user runtime data
+Back/ObsidianVault/Conversations/
+Back/ObsidianVault/Knowledge/
+Back/ObsidianVault/System/Events/
+Back/ObsidianVault/System/Processes/
+Back/ObsidianVault/System/Workflows/
+Back/ObsidianVault/System/Schedules/
+Back/ObsidianVault/System/Runtime/
+
+# One-time migration sources; Platform startup moves and removes them.
+Back/ObsidianVault/30-Conversations/
+Back/ObsidianVault/90-System/
+
+Back/ObsidianVault/**/Archive/
+Back/ObsidianVault/**/archive/
+/archive/
+
+# Project-specific generated output
+graphify-out/

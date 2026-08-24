@@ -1,0 +1,106 @@
+// Runtime-selectable theme tokens. Selected via the root `data-theme` attribute.
+// Technical Ocean (DESIGN.md): light blue-tinted surfaces, primary blue, teal tertiary, deep ocean for the map.
+
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-headline: "Hanken Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  --color-bg: #fbf8ff;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-surface-soft: #f4f2ff;
+  --color-surface-muted: #edecff;
+  --color-surface-dim: #e6e6fe;
+  --color-border: #c3c6d7;
+  --color-border-strong: #737686;
+  --color-text: #181a2b;
+  --color-text-muted: #424655;
+  --color-text-faint: #737686;
+  --color-text-inverse: #ffffff;
+  --color-accent: #2163ff;
+  --color-accent-strong: #004edd;
+  --color-accent-soft: rgba(33, 99, 255, 0.10);
+  --color-tertiary: #006859;
+  --color-tertiary-bright: #40e9cc;
+  --color-tertiary-soft: rgba(64, 233, 204, 0.12);
+  --color-success: #006859;
+  --color-success-bright: #40e9cc;
+  --color-warning: #a86400;
+  --color-warning-bright: #f0b74b;
+  --color-danger: #ba1a1a;
+  --color-danger-bright: #ef6b73;
+  --color-info: #003cae;
+  --map-bg: #10172a;
+  --map-ink: #e8f0f8;
+  --map-ink-muted: #8694a6;
+
+  --radius-xs: 4px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-round: 999px;
+
+  --density-xs: 4px;
+  --density-sm: 8px;
+  --density-md: 16px;
+  --density-lg: 24px;
+  --density-xl: 48px;
+  --margin-page: 16px;
+
+  --shadow-popover: 0 18px 60px rgba(16, 23, 42, 0.16);
+  --shadow-sm: 0 4px 16px rgba(16, 23, 42, 0.08);
+  --shadow-composer: 0 10px 30px rgba(16, 23, 42, 0.10);
+
+  --content-chat: 760px;
+  --content-wide: 1180px;
+
+  --motion-fast: 140ms;
+  --motion-standard: 220ms;
+  --motion-slow: 420ms;
+  --overlay-subtle: 0.36;
+  --overlay-strong: 0.82;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-headline: "Hanken Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  --color-bg: #10172a;
+  --color-surface: #1a2336;
+  --color-surface-raised: #1f2a40;
+  --color-surface-soft: #233150;
+  --color-surface-muted: #2a3650;
+  --color-surface-dim: #324063;
+  --color-border: #3b4866;
+  --color-border-strong: #5b6a8c;
+  --color-text: #f0efff;
+  --color-text-muted: #b5c0db;
+  --color-text-faint: #8492b3;
+  --color-text-inverse: #10172a;
+  --color-accent: #40a2ff;
+  --color-accent-strong: #2163ff;
+  --color-accent-soft: rgba(64, 162, 255, 0.14);
+  --color-tertiary: #40e9cc;
+  --color-tertiary-bright: #59fbdd;
+  --color-tertiary-soft: rgba(64, 233, 204, 0.16);
+  --color-success: #40e9cc;
+  --color-success-bright: #59fbdd;
+  --color-warning: #f0b74b;
+  --color-warning-bright: #f0b74b;
+  --color-danger: #ef6b73;
+  --color-danger-bright: #ff8a90;
+  --color-info: #6b9eff;
+  --map-bg: #070b16;
+  --map-ink: #e8f0f8;
+  --map-ink-muted: #8694a6;
+
+  --shadow-popover: 0 18px 60px rgba(0, 0, 0, 0.48);
+  --shadow-sm: 0 4px 16px rgba(0, 0, 0, 0.32);
+  --shadow-composer: 0 10px 30px rgba(0, 0, 0, 0.40);
+}
