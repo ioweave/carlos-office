@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   IconActivity,
   IconArrowLeft,
+  IconDeviceFloppy,
   IconEdit,
   IconGitBranch,
   IconPlayerPlay,
@@ -47,6 +48,11 @@ const slugTaskId = value => String(value || "")
   .replace(/[^a-z0-9]+/g, "-")
   .replace(/^-+|-+$/g, "")
   .slice(0, 36) || "task";
+const cloneLayout = layout => Object.fromEntries(Object.entries(layout || {}).map(([id, position]) => [
+  id,
+  { x: Number(position.x), y: Number(position.y) },
+]));
+const layoutKey = layout => JSON.stringify(layout || {});
 
 export default function OperationsPage({ onAskNora, openRequest }) {
   const { officeState, refresh } = useAppContext();
@@ -60,6 +66,8 @@ export default function OperationsPage({ onAskNora, openRequest }) {
   const [detailTab, setDetailTab] = useState("tasks");
   const [busy, setBusy] = useState("");
   const [edgeDraft, setEdgeDraft] = useState({ from: "", to: "" });
+  const [layoutBaseline, setLayoutBaseline] = useState({});
+  const [layoutDraft, setLayoutDraft] = useState({});
 
   const loadEvents = useCallback(async id => {
     if (!id) return;
@@ -72,6 +80,12 @@ export default function OperationsPage({ onAskNora, openRequest }) {
   }, []);
 
   const workflow = workflows.find(item => item.id === selectedId) || null;
+  const persistedLayout = workflow?.layout && Object.keys(workflow.layout).length
+    ? workflow.layout
+    : workflow?.config?._ui?.layout || {};
+  const persistedLayoutKey = layoutKey(persistedLayout);
+  const layoutDirty = layoutKey(layoutDraft) !== layoutKey(layoutBaseline);
+  const workflowEditable = Boolean(workflow && workflow.status !== "running");
 
   useEffect(() => {
     if (!selectedId || detailTab !== "activity") return;
@@ -84,6 +98,17 @@ export default function OperationsPage({ onAskNora, openRequest }) {
     setSelectedTaskId("");
     setEditingTask(false);
   }, [openRequest]);
+
+  useEffect(() => {
+    if (!workflow) {
+      setLayoutBaseline({});
+      setLayoutDraft({});
+      return;
+    }
+    const next = cloneLayout(persistedLayout);
+    setLayoutBaseline(next);
+    setLayoutDraft(next);
+  }, [workflow?.id, persistedLayoutKey]);
 
   useEffect(() => {
     if (!workflow) return;
@@ -109,7 +134,7 @@ export default function OperationsPage({ onAskNora, openRequest }) {
   const workflowAgents = activeAgents.filter(agent => agent.context?.workflowId === workflow?.id);
 
   const refreshCurrentDetail = async id => {
-    refresh();
+    await refresh();
     if (detailTab === "activity") await loadEvents(id);
   };
 
@@ -127,6 +152,14 @@ export default function OperationsPage({ onAskNora, openRequest }) {
     }
   };
 
+  const closeWorkflow = () => {
+    if (layoutDirty && !window.confirm("Discard unsaved layout changes?")) return;
+    setSelectedId("");
+    setSelectedTaskId("");
+    setEditingTask(false);
+    setEvents([]);
+  };
+
   const deleteWorkflow = async target => {
     if (!target || target.status === "running") return;
     if (!window.confirm(`Delete Workflow ${target.id}? Its execution record will be removed permanently.`)) return;
@@ -140,7 +173,7 @@ export default function OperationsPage({ onAskNora, openRequest }) {
         setEditingTask(false);
         setEvents([]);
       }
-      refresh();
+      await refresh();
       toast.success("Workflow deleted.");
     } catch (error) {
       toast.error(error.response?.data?.error || "Could not delete Workflow.");
@@ -206,23 +239,31 @@ export default function OperationsPage({ onAskNora, openRequest }) {
     void runAction("Cancel Task", () => api.post(endpoints.workflowTaskCancel(workflow.id, selectedTaskId)));
   };
 
-  const saveLayout = async layout => {
-    if (!workflow || workflow.status === "running") return;
-    const config = {
-      ...(workflow.config || {}),
-      _ui: { ...(workflow.config?._ui || {}), layout },
-    };
+  const saveLayout = async () => {
+    if (!workflow || !layoutDirty) return;
+    setBusy("Save Layout");
     try {
-      await api.patch(endpoints.workflowConfig(workflow.id), config);
-      refresh();
+      const config = {
+        ...(workflow.config || {}),
+        _ui: { ...(workflow.config?._ui || {}), layout: cloneLayout(layoutDraft) },
+      };
+      const updated = (await api.patch(endpoints.workflowConfig(workflow.id), config)).data;
+      const saved = cloneLayout(updated.layout || layoutDraft);
+      setLayoutBaseline(saved);
+      setLayoutDraft(saved);
+      await refresh();
+      toast.success("Workflow layout saved.");
     } catch (error) {
       toast.error(error.response?.data?.error || "Could not save Workflow layout.");
-      refresh();
+    } finally {
+      setBusy("");
     }
   };
 
+  const resetLayout = () => setLayoutDraft(cloneLayout(layoutBaseline));
+
   const addTask = async () => {
-    if (!workflow || workflow.status !== "pending") return;
+    if (!workflow || !workflowEditable) return;
     const name = window.prompt("Task name (2-5 words)", "New Task")?.trim();
     if (!name) return;
     const objective = window.prompt("Task objective", `Complete ${name.toLowerCase()}.`)?.trim();
@@ -266,18 +307,18 @@ export default function OperationsPage({ onAskNora, openRequest }) {
 
       setSelectedTaskId(taskId);
       setEditingTask(true);
-      refresh();
+      await refresh();
       toast.success(`Task ${name} added.`);
     } catch (error) {
       toast.error(error.response?.data?.error || "Could not add Task.");
-      refresh();
+      await refresh();
     } finally {
       setBusy("");
     }
   };
 
   const removeSelectedTask = async () => {
-    if (!workflow || workflow.status !== "pending" || !selectedTask || selectedTask.type !== "task") return;
+    if (!workflow || !workflowEditable || !selectedTask || selectedTask.type !== "task") return;
     if (!window.confirm(`Remove Task "${taskTitle(selectedTaskId, selectedTask)}"? Connections will be bridged automatically.`)) return;
 
     setBusy("Remove Task");
@@ -285,8 +326,8 @@ export default function OperationsPage({ onAskNora, openRequest }) {
       await api.delete(endpoints.workflowTask(workflow.id, selectedTaskId));
       setSelectedTaskId("");
       setEditingTask(false);
-      refresh();
-      toast.success("Task removed.");
+      await refresh();
+      toast.success("Task removed. Existing Attempts were archived when present.");
     } catch (error) {
       toast.error(error.response?.data?.error || "Could not remove Task.");
     } finally {
@@ -295,12 +336,12 @@ export default function OperationsPage({ onAskNora, openRequest }) {
   };
 
   const addEdge = async () => {
-    if (!workflow || workflow.status !== "pending" || !edgeDraft.from || !edgeDraft.to) return;
+    if (!workflow || !workflowEditable || !edgeDraft.from || !edgeDraft.to) return;
     const edges = [...(workflow.edges || []), [edgeDraft.from, edgeDraft.to]];
     setBusy("Add Connection");
     try {
       await api.put(endpoints.workflowEdges(workflow.id), { edges });
-      refresh();
+      await refresh();
       toast.success("Connection added.");
     } catch (error) {
       toast.error(error.response?.data?.error || "Could not add connection.");
@@ -310,12 +351,12 @@ export default function OperationsPage({ onAskNora, openRequest }) {
   };
 
   const removeEdge = async edge => {
-    if (!workflow || workflow.status !== "pending") return;
+    if (!workflow || !workflowEditable) return;
     const edges = (workflow.edges || []).filter(([from, to]) => from !== edge[0] || to !== edge[1]);
     setBusy("Remove Connection");
     try {
       await api.put(endpoints.workflowEdges(workflow.id), { edges });
-      refresh();
+      await refresh();
       toast.success("Connection removed.");
     } catch (error) {
       toast.error(error.response?.data?.error || "Could not remove connection. Add a replacement path first if this connection is required for graph validity.");
@@ -331,17 +372,18 @@ export default function OperationsPage({ onAskNora, openRequest }) {
       approval => approval.context?.workflowId === workflow.id,
     );
     const displayTitle = workflowTitle(workflow);
-    const savedPositions = workflow.config?._ui?.layout || workflow.layout;
     const connectedEdges = selectedTaskId
       ? (workflow.edges || []).filter(([from, to]) => from === selectedTaskId || to === selectedTaskId)
       : [];
     const taskIds = Object.keys(workflow.tasks || {});
+    const canResumeWorkflow = ["paused", "blocked", "failed"].includes(workflow.status);
+    const canRestartWorkflow = !["running", "pending"].includes(workflow.status);
 
     return (
       <div className="workspace-page operations-studio">
         <header className="page-header">
           <div className="page-header__leading">
-            <button type="button" className="icon-button" onClick={() => { setSelectedId(""); setSelectedTaskId(""); setEditingTask(false); setEvents([]); }} aria-label="Back to Operations"><IconArrowLeft size={18} /></button>
+            <button type="button" className="icon-button" onClick={closeWorkflow} aria-label="Back to Operations"><IconArrowLeft size={18} /></button>
             <div className="page-header__copy">
               <span className="eyebrow">{workflow.status === "pending" ? "Workflow draft" : "Workflow execution"}</span>
               <h1>{displayTitle}</h1>
@@ -350,11 +392,11 @@ export default function OperationsPage({ onAskNora, openRequest }) {
           </div>
           <div className="page-header__actions">
             <span className={`status-pill status-pill--${workflow.status}`}>{workflow.status}</span>
-            {workflow.status === "pending" && <button type="button" className="button button--quiet" disabled={!!busy} onClick={addTask}><IconPlus size={14} /> Add Task</button>}
+            {workflowEditable && <button type="button" className="button button--quiet" disabled={!!busy} onClick={addTask}><IconPlus size={14} /> Add Task</button>}
             {workflow.status !== "running" && <button type="button" className="button button--quiet" disabled={!!busy} onClick={persistAsProcess}><IconGitBranch size={14} /> Save as Process</button>}
             {workflow.status === "pending" && <button type="button" className="button button--primary" disabled={!!busy} onClick={() => runAction("Run", () => api.post(endpoints.workflowRun(workflow.id)))}><IconPlayerPlay size={14} /> Run now</button>}
-            {["paused", "blocked", "failed"].includes(workflow.status) && <button type="button" className="button button--primary" disabled={!!busy} onClick={() => runAction("Resume", () => api.post(endpoints.workflowResume(workflow.id), {}))}><IconPlayerPlay size={14} /> Resume</button>}
-            {workflow.status !== "pending" && <button type="button" className="button button--quiet" disabled={!!busy} onClick={() => runAction("Restart", () => api.post(endpoints.workflowRestart(workflow.id)))}><IconReload size={14} /> Restart</button>}
+            {canResumeWorkflow && <button type="button" className="button button--primary" disabled={!!busy} onClick={() => runAction("Resume", () => api.post(endpoints.workflowResume(workflow.id), {}))}><IconPlayerPlay size={14} /> Resume</button>}
+            {canRestartWorkflow && <button type="button" className="button button--quiet" disabled={!!busy} onClick={() => runAction("Restart", () => api.post(endpoints.workflowRestart(workflow.id)))}><IconReload size={14} /> Restart</button>}
             {workflow.status === "running" && <button type="button" className="button button--danger" disabled={!!busy} onClick={() => runAction("Stop", () => api.post(endpoints.workflowStop(workflow.id)))}><IconSquare size={14} /> Stop</button>}
             <button type="button" className="button button--danger" disabled={!!busy || workflow.status === "running"} onClick={() => deleteWorkflow(workflow)}><IconTrash size={14} /> Delete</button>
           </div>
@@ -374,15 +416,23 @@ export default function OperationsPage({ onAskNora, openRequest }) {
         {detailTab === "tasks" && (
           <div className="studio-layout operations-studio__tasks">
             <section className="studio-layout__canvas">
+              <div className="workflow-layout-toolbar">
+                <span className={layoutDirty ? "workflow-layout-toolbar__dirty" : ""}>
+                  {layoutDirty ? "Layout changed" : "Drag nodes to arrange · drag empty space to pan"}
+                </span>
+                <button type="button" className="button button--quiet" disabled={!layoutDirty || busy === "Save Layout"} onClick={resetLayout}><IconReload size={13} /> Reset</button>
+                <button type="button" className="button button--primary" disabled={!layoutDirty || busy === "Save Layout"} onClick={saveLayout}><IconDeviceFloppy size={13} /> Save layout</button>
+              </div>
               <ProcessGraph
                 tasks={workflow.tasks}
                 edges={workflow.edges}
                 start={workflow.start}
-                savedPositions={savedPositions}
+                savedPositions={layoutDraft}
                 statuses={statuses}
                 selectedId={selectedTaskId}
                 onSelect={node => { setSelectedTaskId(node.id); setEditingTask(false); }}
-                onMove={workflow.status !== "running" ? saveLayout : undefined}
+                onMove={setLayoutDraft}
+                onCanvasClick={() => { setSelectedTaskId(""); setEditingTask(false); }}
               />
             </section>
             <aside className="inspector-panel">
@@ -390,8 +440,8 @@ export default function OperationsPage({ onAskNora, openRequest }) {
                 <div className="inspector-panel__empty">
                   <IconActivity size={24} stroke={1.4} />
                   <strong>Select a Task</strong>
-                  <span>{workflow.status === "pending" ? "Select a Task to edit it, or drag nodes to arrange the draft before running." : "Inspect its execution configuration, attempts, model, Tools, Skills, and result."}</span>
-                  {workflow.status === "pending" && <button type="button" className="button button--quiet" onClick={addTask}><IconPlus size={14} /> Add Task</button>}
+                  <span>{workflowEditable ? "Select a Task to inspect or edit it. Layout changes are saved separately." : "Inspect execution configuration, attempts, model, Tools, Skills, and result."}</span>
+                  {workflowEditable && <button type="button" className="button button--quiet" onClick={addTask}><IconPlus size={14} /> Add Task</button>}
                 </div>
               ) : editingTask && selectedTask.type === "task" ? (
                 <>
@@ -407,12 +457,12 @@ export default function OperationsPage({ onAskNora, openRequest }) {
                     workflowId={workflow.id}
                     taskId={selectedTaskId}
                     task={selectedTask}
-                    disabled={workflow.status !== "pending"}
+                    disabled={!workflowEditable}
                     onSaved={() => {
                       setEditingTask(false);
                       refresh();
                     }}
-                    onRevise={() => onAskNora?.(`Review pending Workflow ${workflow.id}, Task ${selectedTaskId}, and suggest an improved Task configuration with a concise 2-5 word name.`)}
+                    onRevise={() => onAskNora?.(`Review stopped Workflow ${workflow.id}, Task ${selectedTaskId}, and suggest an improved Task configuration with a concise 2-5 word name.`)}
                   />
                 </>
               ) : (
@@ -434,7 +484,7 @@ export default function OperationsPage({ onAskNora, openRequest }) {
                     {selectedTask.error && <div><span>Error</span><strong>{selectedTask.error}</strong></div>}
                   </div>
 
-                  {workflow.status === "pending" && (
+                  {workflowEditable && (
                     <div className="workflow-connections">
                       <h3>Connections</h3>
                       {!connectedEdges.length ? <span className="workflow-connections__empty">No direct connections.</span> : connectedEdges.map(([from, to]) => (
@@ -489,8 +539,8 @@ export default function OperationsPage({ onAskNora, openRequest }) {
                   )}
 
                   <div className="inspector-panel__actions">
-                    {selectedTask.type === "task" && workflow.status === "pending" && <button type="button" className="button button--quiet" onClick={() => setEditingTask(true)} disabled={!!busy}><IconEdit size={14} /> Edit Task</button>}
-                    {selectedTask.type === "task" && workflow.status === "pending" && <button type="button" className="button button--danger" onClick={removeSelectedTask} disabled={!!busy}><IconTrash size={14} /> Remove Task</button>}
+                    {selectedTask.type === "task" && workflowEditable && <button type="button" className="button button--quiet" onClick={() => setEditingTask(true)} disabled={!!busy}><IconEdit size={14} /> Edit Task</button>}
+                    {selectedTask.type === "task" && workflowEditable && <button type="button" className="button button--danger" onClick={removeSelectedTask} disabled={!!busy}><IconTrash size={14} /> Remove Task</button>}
                     {selectedTask.type === "task" && canResumeTask(selectedTask.status) && workflow.status !== "running" && workflow.status !== "pending" && <button type="button" className="button button--primary" onClick={resumeSelectedTask} disabled={!!busy}><IconPlayerPlay size={14} /> Resume from Task</button>}
                     {selectedTask.status === "failed" && <button type="button" className="button button--quiet" onClick={reviewTask} disabled={!!busy}><IconSparkles size={14} /> Nora review</button>}
                     {selectedTask.type === "task" && canCancelTask(selectedTask.status) && workflow.status !== "pending" && <button type="button" className="button button--danger" disabled={!!busy} onClick={cancelSelectedTask}><IconSquare size={14} /> Cancel Task</button>}
@@ -513,12 +563,18 @@ export default function OperationsPage({ onAskNora, openRequest }) {
           <div className="operations-data">
             <section className="panel operations-data__editor">
               <div className="panel__header"><div><span className="eyebrow">Workflow contract</span><h2>Inputs & runtime config</h2></div></div>
-              <WorkflowDataEditor workflow={workflow} disabled={workflow.status === "running"} onSaved={refresh} />
+              <WorkflowDataEditor workflow={workflow} disabled={!workflowEditable} onSaved={refresh} />
             </section>
             <section className="panel">
               <div className="panel__header"><div><span className="eyebrow">Captured output</span><h2>Result</h2></div></div>
               <pre className="data-block">{workflow.result == null ? "No result captured yet." : typeof workflow.result === "string" ? workflow.result : JSON.stringify(workflow.result, null, 2)}</pre>
             </section>
+            {!!workflow.archivedTasks?.length && (
+              <section className="panel">
+                <div className="panel__header"><div><span className="eyebrow">Preserved history</span><h2>Archived Tasks</h2></div></div>
+                <pre className="data-block">{JSON.stringify(workflow.archivedTasks, null, 2)}</pre>
+              </section>
+            )}
             <button type="button" className="button button--quiet" onClick={() => onAskNora?.(`Review Workflow ${workflow.id} and tell me what should be improved or promoted into a reusable Process.`)}><IconSparkles size={15} /> Ask Nora about this Workflow</button>
           </div>
         )}
@@ -530,14 +586,14 @@ export default function OperationsPage({ onAskNora, openRequest }) {
   return (
     <div className="workspace-page operations-page">
       <header className="page-header">
-        <div className="page-header__copy"><span className="eyebrow">Inspect and control execution</span><h1>Operations</h1><p>Workflows are actual runs. Pending Workflows can be reviewed and edited before any Agent starts.</p></div>
+        <div className="page-header__copy"><span className="eyebrow">Inspect and control execution</span><h1>Operations</h1><p>Workflows start automatically. Stop one when you need to edit its definition before restarting it.</p></div>
         <div className="page-header__actions"><span className="status-pill status-pill--running">{activeCount} open</span><button type="button" className="icon-button" onClick={refresh} aria-label="Refresh Operations"><IconRefresh size={18} /></button></div>
       </header>
       <div className="segmented-control page-tabs" role="tablist" aria-label="Workflow status">
         {[["active", "Active"], ["history", "History"], ["all", "All"]].map(([id, labelText]) => <button key={id} type="button" className={filter === id ? "segmented-control__item segmented-control__item--active" : "segmented-control__item"} onClick={() => setFilter(id)}>{labelText}</button>)}
       </div>
       {!filtered.length ? (
-        <div className="empty-state"><IconActivity size={28} stroke={1.4} /><strong>{filter === "active" ? "No open Workflows" : "No Workflows here"}</strong><span>When Nora prepares or starts work, its Workflow appears here.</span></div>
+        <div className="empty-state"><IconActivity size={28} stroke={1.4} /><strong>{filter === "active" ? "Nothing is running" : "No Workflows here"}</strong><span>When Nora starts work, its Workflow appears here.</span></div>
       ) : (
         <div className="workflow-list">
           {filtered.map(item => {
@@ -553,7 +609,7 @@ export default function OperationsPage({ onAskNora, openRequest }) {
                 <span className={`workflow-row__status workflow-row__status--${item.status}`} />
                 <span className="workflow-row__copy"><strong>{workflowTitle(item)}</strong>{workflowTitle(item) !== item.id && <small>{item.id}</small>}</span>
                 <span className="workflow-row__progress">{completeTasks}/{tasks.length} tasks</span>
-                <span className="workflow-row__agents">{runningTasks ? `${runningTasks} running` : item.status === "pending" ? "draft" : "—"}</span>
+                <span className="workflow-row__agents">{runningTasks ? `${runningTasks} running` : item.status === "pending" ? "queued" : "—"}</span>
                 <span className={`status-pill status-pill--${item.status}`}>{item.status}</span>
                 {filter === "history" && (
                   <button
