@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo } from "react";
 
 const inlinePattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|~~[^~\n]+~~|\[[^\]\n]+\]\([^)\n]+\)|https?:\/\/[^\s<]+|\*[^*\n]+\*)/g;
 
@@ -7,41 +7,85 @@ const safeHref = value => {
   return /^(https?:|mailto:)/i.test(href) ? href : null;
 };
 
-const inline = (text, keyPrefix = "i") => {
+const escapeRegex = value => String(value)
+  .split("")
+  .map(character => "\\^$.*+?()[]{}|".includes(character) ? `\\${character}` : character)
+  .join("");
+
+const plain = (text, keyPrefix, artifactByName, onArtifact) => {
+  const value = String(text ?? "");
+  const names = [...artifactByName.keys()].sort((left, right) => right.length - left.length);
+  if (!names.length || typeof onArtifact !== "function") return [value];
+
+  const pattern = new RegExp(`(${names.map(escapeRegex).join("|")})`, "g");
+  return value.split(pattern).filter(part => part !== "").map((part, index) => {
+    const artifact = artifactByName.get(part);
+    if (!artifact) return part;
+    return (
+      <button
+        key={`${keyPrefix}-artifact-${index}`}
+        type="button"
+        className="markdown-artifact-link"
+        onClick={() => onArtifact(artifact)}
+      >
+        {part}
+      </button>
+    );
+  });
+};
+
+const inline = (text, keyPrefix, artifactByName, onArtifact) => {
   const value = String(text ?? "");
   const nodes = [];
   let cursor = 0;
   let index = 0;
 
   for (const match of value.matchAll(inlinePattern)) {
-    if (match.index > cursor) nodes.push(value.slice(cursor, match.index));
+    if (match.index > cursor) {
+      nodes.push(...plain(value.slice(cursor, match.index), `${keyPrefix}-plain-${index}`, artifactByName, onArtifact));
+    }
     const token = match[0];
     const key = `${keyPrefix}-${index++}`;
 
     if (token.startsWith("`")) {
-      nodes.push(<code key={key}>{token.slice(1, -1)}</code>);
+      const code = token.slice(1, -1);
+      const artifact = artifactByName.get(code);
+      nodes.push(artifact && typeof onArtifact === "function"
+        ? (
+            <button
+              key={key}
+              type="button"
+              className="markdown-artifact-link markdown-artifact-link--code"
+              onClick={() => onArtifact(artifact)}
+            >
+              <code>{code}</code>
+            </button>
+          )
+        : <code key={key}>{code}</code>);
     } else if (token.startsWith("**")) {
-      nodes.push(<strong key={key}>{inline(token.slice(2, -2), `${key}-b`)}</strong>);
+      nodes.push(<strong key={key}>{inline(token.slice(2, -2), `${key}-b`, artifactByName, onArtifact)}</strong>);
     } else if (token.startsWith("~~")) {
-      nodes.push(<del key={key}>{inline(token.slice(2, -2), `${key}-d`)}</del>);
+      nodes.push(<del key={key}>{inline(token.slice(2, -2), `${key}-d`, artifactByName, onArtifact)}</del>);
     } else if (token.startsWith("[")) {
       const split = token.lastIndexOf("](");
       const label = token.slice(1, split);
       const href = safeHref(token.slice(split + 2, -1));
       nodes.push(href
-        ? <a key={key} href={href} target="_blank" rel="noreferrer">{inline(label, `${key}-a`)}</a>
+        ? <a key={key} href={href} target="_blank" rel="noreferrer">{inline(label, `${key}-a`, artifactByName, onArtifact)}</a>
         : token);
     } else if (/^https?:\/\//i.test(token)) {
       const href = safeHref(token);
       nodes.push(<a key={key} href={href} target="_blank" rel="noreferrer">{token}</a>);
     } else if (token.startsWith("*")) {
-      nodes.push(<em key={key}>{inline(token.slice(1, -1), `${key}-e`)}</em>);
+      nodes.push(<em key={key}>{inline(token.slice(1, -1), `${key}-e`, artifactByName, onArtifact)}</em>);
     }
 
     cursor = match.index + token.length;
   }
 
-  if (cursor < value.length) nodes.push(value.slice(cursor));
+  if (cursor < value.length) {
+    nodes.push(...plain(value.slice(cursor), `${keyPrefix}-tail`, artifactByName, onArtifact));
+  }
   return nodes;
 };
 
@@ -62,7 +106,11 @@ const isBlockStart = line => (
   || /^\s*(?:---+|___+|\*\*\*+)\s*$/.test(line)
 );
 
-export default function MarkdownContent({ children }) {
+export default function MarkdownContent({ children, artifacts = [], onArtifact = null }) {
+  const artifactByName = useMemo(() => new Map(
+    artifacts.filter(artifact => artifact?.name).map(artifact => [artifact.name, artifact]),
+  ), [artifacts]);
+  const renderInline = (value, key) => inline(value, key, artifactByName, onArtifact);
   const lines = String(children ?? "").replace(/\r\n?/g, "\n").split("\n");
   const blocks = [];
   let i = 0;
@@ -95,7 +143,7 @@ export default function MarkdownContent({ children }) {
       blocks.push(React.createElement(
         `h${level}`,
         { key: `b-${blocks.length}` },
-        inline(heading[2], `h-${i}`),
+        renderInline(heading[2], `h-${i}`),
       ));
       i += 1;
       continue;
@@ -115,9 +163,9 @@ export default function MarkdownContent({ children }) {
       blocks.push(
         <div className="markdown-table-wrap" key={`b-${blocks.length}`}>
           <table>
-            <thead><tr>{headers.map((cell, cellIndex) => <th key={cellIndex}>{inline(cell, `th-${cellIndex}`)}</th>)}</tr></thead>
+            <thead><tr>{headers.map((cell, cellIndex) => <th key={cellIndex}>{renderInline(cell, `th-${cellIndex}`)}</th>)}</tr></thead>
             <tbody>{rows.map((row, rowIndex) => (
-              <tr key={rowIndex}>{headers.map((_, cellIndex) => <td key={cellIndex}>{inline(row[cellIndex] || "", `td-${rowIndex}-${cellIndex}`)}</td>)}</tr>
+              <tr key={rowIndex}>{headers.map((_, cellIndex) => <td key={cellIndex}>{renderInline(row[cellIndex] || "", `td-${rowIndex}-${cellIndex}`)}</td>)}</tr>
             ))}</tbody>
           </table>
         </div>,
@@ -128,7 +176,7 @@ export default function MarkdownContent({ children }) {
     if (/^>\s?/.test(line)) {
       const quote = [];
       while (i < lines.length && /^>\s?/.test(lines[i])) quote.push(lines[i++].replace(/^>\s?/, ""));
-      blocks.push(<blockquote key={`b-${blocks.length}`}>{inline(quote.join("\n"), `q-${i}`)}</blockquote>);
+      blocks.push(<blockquote key={`b-${blocks.length}`}>{renderInline(quote.join("\n"), `q-${i}`)}</blockquote>);
       continue;
     }
 
@@ -142,8 +190,8 @@ export default function MarkdownContent({ children }) {
         if (!match) break;
         const task = match[1].match(/^\[([ xX])\]\s+(.+)$/);
         items.push(task
-          ? <li key={items.length} className="markdown-task-item"><input type="checkbox" checked={task[1].toLowerCase() === "x"} readOnly /> <span>{inline(task[2], `li-${i}`)}</span></li>
-          : <li key={items.length}>{inline(match[1], `li-${i}`)}</li>);
+          ? <li key={items.length} className="markdown-task-item"><input type="checkbox" checked={task[1].toLowerCase() === "x"} readOnly /> <span>{renderInline(task[2], `li-${i}`)}</span></li>
+          : <li key={items.length}>{renderInline(match[1], `li-${i}`)}</li>);
         i += 1;
       }
       blocks.push(unordered
@@ -166,7 +214,7 @@ export default function MarkdownContent({ children }) {
     const paragraphNodes = [];
     paragraph.forEach((part, lineIndex) => {
       if (lineIndex) paragraphNodes.push(<br key={`br-${i}-${lineIndex}`} />);
-      paragraphNodes.push(...inline(part, `p-${i}-${lineIndex}`));
+      paragraphNodes.push(...renderInline(part, `p-${i}-${lineIndex}`));
     });
     blocks.push(<p key={`b-${blocks.length}`}>{paragraphNodes}</p>);
   }

@@ -1,4 +1,4 @@
-import { getArtifact, readArtifact } from "./ArtifactController.mjs";
+import { getAttachment, readAttachment } from "./AttachmentController.mjs";
 import { listApprovals } from "./AuthorizationController.mjs";
 import {
   addMessage,
@@ -52,7 +52,7 @@ const state = {
 };
 const workflowReports = new Map();
 
-const TEXT_ARTIFACT_TYPES = new Set([
+const TEXT_ATTACHMENT_TYPES = new Set([
   "application/json",
   "application/javascript",
   "application/xml",
@@ -60,7 +60,7 @@ const TEXT_ARTIFACT_TYPES = new Set([
   "text/javascript",
   "text/typescript",
 ]);
-const TEXT_ARTIFACT_EXTENSIONS = [
+const TEXT_ATTACHMENT_EXTENSIONS = [
   ".c", ".cpp", ".css", ".go", ".h", ".html", ".ini", ".java", ".js", ".json", ".jsx",
   ".kt", ".lua", ".md", ".mjs", ".php", ".py", ".rb", ".rs", ".scss", ".sh", ".sql",
   ".swift", ".toml", ".ts", ".tsx", ".txt", ".vue", ".xml", ".yaml", ".yml",
@@ -206,32 +206,35 @@ const summarizeSkills = () => listSkills().map(({ name, content }) => ({
   description: skillDescription(content),
 }));
 
-const conversationForModel = conversation => conversation.messages.map(({ actor, content, artifacts = [] }) => ({
+const conversationForModel = conversation => conversation.messages.map(({
   actor,
   content,
-  artifacts,
-}));
+  attachments = [],
+  artifacts = [],
+}) => ({ actor, content, attachments, artifacts }));
 
-const isTextArtifact = artifact => {
-  const type = String(artifact.type ?? "").toLowerCase();
-  const name = String(artifact.name ?? "").toLowerCase();
+const isTextAttachment = attachment => {
+  const type = String(attachment.type ?? "").toLowerCase();
+  const name = String(attachment.name ?? "").toLowerCase();
   return type.startsWith("text/")
-    || TEXT_ARTIFACT_TYPES.has(type)
-    || TEXT_ARTIFACT_EXTENSIONS.some(extension => name.endsWith(extension));
+    || TEXT_ATTACHMENT_TYPES.has(type)
+    || TEXT_ATTACHMENT_EXTENSIONS.some(extension => name.endsWith(extension));
 };
 
-const loadRequestArtifacts = async (conversationId, artifactIds) => Promise.all(artifactIds.map(async artifactId => {
-  const artifact = await getArtifact(conversationId, artifactId);
-  if (!artifact) throw new Error(`Unknown artifact: ${artifactId}`);
+const loadRequestAttachments = async (conversationId, attachmentIds) => Promise.all(
+  attachmentIds.map(async attachmentId => {
+    const attachment = await getAttachment(conversationId, attachmentId);
+    if (!attachment) throw new Error(`Unknown attachment: ${attachmentId}`);
 
-  let content = null;
-  if (isTextArtifact(artifact)) {
-    const bytes = await readArtifact(conversationId, artifactId);
-    content = bytes?.toString("utf8") ?? "";
-  }
+    let content = null;
+    if (isTextAttachment(attachment)) {
+      const bytes = await readAttachment(conversationId, attachmentId);
+      content = bytes?.toString("utf8") ?? "";
+    }
 
-  return { id: artifact.id, name: artifact.name, type: artifact.type, content };
-}));
+    return { id: attachment.id, name: attachment.name, type: attachment.type, content };
+  }),
+);
 
 const ensureConversationSelection = async conversation => {
   const selected = selectionFrom(conversation.nora);
@@ -242,9 +245,15 @@ const ensureConversationSelection = async conversation => {
   return fallback;
 };
 
-const addNoraMessage = async (conversationId, content, workflowId = null) => addMessage(conversationId, {
+const addNoraMessage = async (
+  conversationId,
+  content,
+  workflowId = null,
+  artifacts = [],
+) => addMessage(conversationId, {
   actor: "Nora",
   content,
+  artifacts,
   workflowId,
 });
 
@@ -253,10 +262,22 @@ const conversationTracksWorkflow = async (conversationId, workflowId) => {
   return Boolean(conversation?.workflows?.includes(workflowId));
 };
 
-const addWorkflowNoraMessage = async (conversationId, workflowId, content) => {
+const addWorkflowNoraMessage = async (
+  conversationId,
+  workflowId,
+  content,
+  artifacts = [],
+) => {
   if (!(await conversationTracksWorkflow(conversationId, workflowId))) return null;
-  return addNoraMessage(conversationId, content, workflowId);
+  return addNoraMessage(conversationId, content, workflowId, artifacts);
 };
+
+const workflowArtifactIds = workflow => [...new Set(
+  Object.values(workflow.tasks ?? {})
+    .flatMap(task => task?.type === "task" ? (task.attempts ?? []) : [])
+    .filter(attempt => attempt.status === "completed")
+    .flatMap(attempt => attempt.artifacts ?? []),
+)];
 
 const workflowCompletionAt = workflow => {
   const completedEvent = listEvents({ type: "workflow.completed", workflowId: workflow.id }).at(-1);
@@ -297,16 +318,24 @@ const reportCompletedWorkflow = async workflowId => {
     if (hasCompletionFollowUp(conversation, workflow)) return null;
 
     const result = await summarizeWorkflow(workflowId);
+    const completedWorkflow = getWorkflow(workflowId) ?? workflow;
     conversation = await getConversation(conversationId);
-    if (hasCompletionFollowUp(conversation, getWorkflow(workflowId) ?? workflow)) return null;
+    if (hasCompletionFollowUp(conversation, completedWorkflow)) return null;
 
-    const message = await addWorkflowNoraMessage(conversationId, workflowId, result.summary);
+    const artifacts = workflowArtifactIds(completedWorkflow);
+    const message = await addWorkflowNoraMessage(
+      conversationId,
+      workflowId,
+      result.summary,
+      artifacts,
+    );
     if (message) {
       await recordEvent("nora.workflow_reported", {
         conversationId,
         workflowId,
         messageId: message.id,
         status: "completed",
+        artifacts,
       });
     }
     return message;
@@ -394,7 +423,7 @@ const finishConversationWorkflow = async ({ conversationId, workflowId, action }
 export const handleCarlosRequest = async ({
   conversationId,
   content = null,
-  artifacts = [],
+  attachments = [],
   messageId = null,
 }) => {
   let conversation = await getConversation(conversationId);
@@ -407,11 +436,11 @@ export const handleCarlosRequest = async ({
       throw new Error(`Unknown Carlos message: ${messageId}`);
     }
     content = carlosMessage.content;
-    artifacts = carlosMessage.artifacts ?? [];
+    attachments = carlosMessage.attachments ?? [];
   }
 
   if (typeof content !== "string" || !content.trim()) throw new Error("Carlos request must be a non-empty string");
-  if (!Array.isArray(artifacts)) throw new Error("Carlos request artifacts must be an array");
+  if (!Array.isArray(attachments)) throw new Error("Carlos request attachments must be an array");
 
   state.status = "working";
   let phase = "intake";
@@ -419,14 +448,16 @@ export const handleCarlosRequest = async ({
   let activeWorkflowId = null;
 
   try {
-    if (!carlosMessage) carlosMessage = await addMessage(conversationId, { actor: "Carlos", content, artifacts });
+    if (!carlosMessage) {
+      carlosMessage = await addMessage(conversationId, { actor: "Carlos", content, attachments });
+    }
     await recordEvent("nora.request_received", {
       conversationId,
       messageId: carlosMessage.id,
       replayed: Boolean(messageId),
     });
 
-    const requestArtifacts = await loadRequestArtifacts(conversationId, artifacts);
+    const requestAttachments = await loadRequestAttachments(conversationId, attachments);
     conversation = await getConversation(conversationId);
     const noraSelection = await ensureConversationSelection(conversation);
     const needsConversationTitle = !conversation.title
@@ -447,7 +478,7 @@ export const handleCarlosRequest = async ({
       decisionInstruction,
       {
         conversation: conversationForModel(conversation),
-        requestArtifacts,
+        requestAttachments,
         availableProcesses: summarizeProcesses(),
         availableTools: await summarizeTools(),
         availableSkills: summarizeSkills(),
@@ -549,7 +580,7 @@ export const handleCarlosRequest = async ({
     };
     const inputs = {
       ...(decision.inputs ?? {}),
-      ...(requestArtifacts.length ? { attachments: structuredClone(requestArtifacts) } : {}),
+      ...(requestAttachments.length ? { attachments: structuredClone(requestAttachments) } : {}),
     };
     let workflow;
 

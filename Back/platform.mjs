@@ -11,8 +11,10 @@ import * as noraRegistry from "./src/registry/Nora.mjs";
 import * as tools from "./src/registry/Tools.mjs";
 import * as skills from "./src/registry/Skills.mjs";
 import * as artifacts from "./src/controllers/ArtifactController.mjs";
+import * as attachments from "./src/controllers/AttachmentController.mjs";
 import * as authorization from "./src/controllers/AuthorizationController.mjs";
 import * as conversations from "./src/controllers/ConversationController.mjs";
+import { createConversationResourceController } from "./src/controllers/ConversationResourceController.mjs";
 import { createCredentialController } from "./src/controllers/CredentialController.mjs";
 import * as events from "./src/controllers/EventController.mjs";
 import { createKnowledgeController } from "./src/controllers/KnowledgeController.mjs";
@@ -34,6 +36,7 @@ await processes.loadProcesses();
 await reconcileInterruptedWorkflows();
 await processes.loadWorkflows();
 await conversations.loadConversations();
+await conversations.migrateLegacyCarlosAttachments();
 await schedules.loadSchedules();
 await nora.initializeNora();
 
@@ -68,12 +71,19 @@ const router = createRouter({
   processes,
   conversations,
   artifacts,
+  attachments,
   authorization,
   schedules,
   events,
   tools,
   skills,
   engine,
+});
+const conversationResources = createConversationResourceController({
+  allowedOrigin: config.frontendOrigin,
+  nora,
+  artifacts,
+  attachments,
 });
 const credentials = createCredentialController({ allowedOrigin: config.frontendOrigin });
 const knowledge = createKnowledgeController({ allowedOrigin: config.frontendOrigin });
@@ -93,6 +103,10 @@ const officeState = createOfficeStateController({
 });
 
 const server = createServer((req, res) => {
+  if (conversationResources.matches(req)) {
+    void conversationResources.handle(req, res);
+    return;
+  }
   if (officeState.matches(req)) {
     void officeState.handle(req, res);
     return;

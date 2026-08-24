@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import { importArtifact } from "../controllers/ArtifactController.mjs";
 import { recordEvent } from "../controllers/EventController.mjs";
 import {
   addTaskAttempt,
@@ -24,6 +25,7 @@ const workflowTransitions = new Map();
 const ORPHANED_ATTEMPT_REASON = "Previous Agent process is no longer active";
 
 const errorMessage = error => error instanceof Error ? error.message : String(error);
+const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 
 const withWorkflowTransition = async (workflowId, operation) => {
   const previous = workflowTransitions.get(workflowId) ?? Promise.resolve();
@@ -160,6 +162,7 @@ const failSetup = async (workflowId, taskId, error) => {
       startedAt: now,
       endedAt: now,
       output: null,
+      artifacts: [],
       error: message,
       blockedReason: null,
     });
@@ -248,6 +251,34 @@ export const selectTaskExecution = async ({
   };
 };
 
+const importDeclaredArtifacts = async (workflow, result, createdBy) => {
+  const completion = isObject(result.output) && typeof result.output.output === "string"
+    ? result.output
+    : { output: result.output, artifacts: [] };
+  const declarations = Array.isArray(completion.artifacts) ? completion.artifacts : [];
+  if (!declarations.length) return { output: completion.output, artifacts: [] };
+
+  const conversationId = workflow?.config?.conversationId;
+  if (!conversationId) return { output: completion.output, artifacts: [] };
+
+  const artifactIds = [];
+  for (const declaration of declarations) {
+    if (!isObject(declaration) || typeof declaration.path !== "string" || !declaration.path.trim()) {
+      throw new Error("Agent declared an invalid Artifact path");
+    }
+    const artifact = await importArtifact({
+      conversationId,
+      sourcePath: declaration.path,
+      name: declaration.name ?? null,
+      type: declaration.type ?? null,
+      createdBy: createdBy || "Temporary Agent",
+    });
+    artifactIds.push(artifact.id);
+  }
+
+  return { output: completion.output, artifacts: artifactIds };
+};
+
 const runTask = async ({ workflowId, taskId, execution, runState }) => {
   if (runState?.cancelled) return null;
 
@@ -293,6 +324,7 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
       startedAt: new Date().toISOString(),
       endedAt: null,
       output: null,
+      artifacts: [],
       error: null,
       blockedReason: null,
     };
@@ -345,6 +377,19 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
   }
 
   const runtime = { agentId: result.agentId ?? null, pid: result.pid ?? null };
+  let completion = { output: result.output, artifacts: [] };
+  if (result.status === "completed") {
+    try {
+      completion = await importDeclaredArtifacts(getWorkflow(workflowId), result, runtime.agentId);
+    } catch (error) {
+      result = {
+        ...result,
+        status: "failed",
+        error: `Could not register Task Artifact: ${errorMessage(error)}`,
+      };
+    }
+  }
+
   const outcome = await withWorkflowTransition(workflowId, async () => {
     const current = getWorkflow(workflowId);
     const currentTask = current?.tasks?.[taskId];
@@ -373,7 +418,8 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
       const completed = await finishAttempt(workflowId, taskId, attempt.id, {
         ...runtime,
         status: "completed",
-        output: result.output,
+        output: completion.output,
+        artifacts: completion.artifacts,
         error: null,
         blockedReason: null,
       });
@@ -415,6 +461,7 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
     taskId,
     attemptId: attempt.id,
     agentId: runtime.agentId,
+    artifacts: outcome.attempt?.artifacts ?? [],
     ...(outcome.approvalId ? { approvalId: outcome.approvalId } : {}),
     ...(outcome.error ? { error: outcome.error } : {}),
   });

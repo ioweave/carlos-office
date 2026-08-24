@@ -3,7 +3,8 @@ import { basename, dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
-import { getArtifact } from "./ArtifactController.mjs";
+import { createAttachment, deleteAttachments, getAttachment } from "./AttachmentController.mjs";
+import { deleteArtifacts, getArtifact, readArtifact } from "./ArtifactController.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const conversationsDir = resolve(here, "../../ObsidianVault/Conversations");
@@ -69,7 +70,8 @@ const renderConversation = conversation => {
         id: message.id,
         actor: message.actor,
         at: message.at,
-        artifacts: message.artifacts,
+        attachments: message.attachments ?? [],
+        artifacts: message.artifacts ?? [],
         ...(message.workflowId ? { workflowId: message.workflowId } : {}),
       });
 
@@ -107,7 +109,8 @@ const parseConversation = (content, fallbackId) => {
       actor: message.actor,
       at: normalizeUtc(message.at, `message ${message.id} timestamp`),
       content: entry[2].trim(),
-      artifacts: message.artifacts ?? [],
+      attachments: Array.isArray(message.attachments) ? message.attachments : [],
+      artifacts: Array.isArray(message.artifacts) ? message.artifacts : [],
       workflowId: typeof message.workflowId === "string" && message.workflowId.trim()
         ? message.workflowId.trim()
         : null,
@@ -143,9 +146,7 @@ export const createConversation = async ({ id = null, nora } = {}) => {
   const conversationId = id ?? `conversation-${randomUUID()}`;
   validateConversationId(conversationId);
 
-  if (conversations.has(conversationId)) {
-    throw new Error(`Conversation already exists: ${conversationId}`);
-  }
+  if (conversations.has(conversationId)) throw new Error(`Conversation already exists: ${conversationId}`);
 
   const conversation = {
     id: conversationId,
@@ -190,6 +191,49 @@ export const loadConversations = async () => {
   }
 
   return listConversations();
+};
+
+export const migrateLegacyCarlosAttachments = async () => {
+  let migrated = 0;
+
+  for (const current of [...conversations.values()]) {
+    const conversation = structuredClone(current);
+    const legacyArtifactIds = [];
+    let changed = false;
+
+    for (const message of conversation.messages) {
+      if (message.actor !== "Carlos" || !message.artifacts?.length) continue;
+
+      const attachmentIds = [...(message.attachments ?? [])];
+      for (const artifactId of message.artifacts) {
+        const artifact = await getArtifact(conversation.id, artifactId);
+        if (!artifact) continue;
+        const content = await readArtifact(conversation.id, artifactId);
+        if (!content) continue;
+
+        const attachment = await createAttachment({
+          conversationId: conversation.id,
+          name: artifact.name,
+          type: artifact.type,
+          createdBy: artifact.createdBy || "Carlos",
+          content,
+          createdAt: artifact.createdAt,
+        });
+        attachmentIds.push(attachment.id);
+        legacyArtifactIds.push(artifactId);
+        migrated += 1;
+      }
+
+      message.attachments = [...new Set(attachmentIds)];
+      message.artifacts = message.artifacts.filter(id => !legacyArtifactIds.includes(id));
+      changed = true;
+    }
+
+    if (changed) await commitConversation(conversation);
+    if (legacyArtifactIds.length) await deleteArtifacts(conversation.id, legacyArtifactIds);
+  }
+
+  return migrated;
 };
 
 export const getConversation = async id => {
@@ -247,24 +291,38 @@ export const editCarlosMessage = async (conversationId, messageId, content, remo
   if (index === -1) throw new Error(`Unknown message: ${messageId}`);
   if (conversation.messages[index].actor !== "Carlos") throw new Error("Only Carlos messages can be edited");
 
+  const removedMessages = conversation.messages.slice(index + 1);
+  const removedAttachmentIds = removedMessages.flatMap(message => message.attachments ?? []);
+  const removedArtifactIds = removedMessages.flatMap(message => message.artifacts ?? []);
+
   conversation.messages[index].content = content.trim();
   conversation.messages = conversation.messages.slice(0, index + 1);
 
   const removed = new Set(removedWorkflowIds);
   conversation.workflows = conversation.workflows.filter(workflowId => !removed.has(workflowId));
-  return commitConversation(conversation);
+  const committed = await commitConversation(conversation);
+  if (removedAttachmentIds.length) await deleteAttachments(conversationId, removedAttachmentIds);
+  if (removedArtifactIds.length) await deleteArtifacts(conversationId, removedArtifactIds);
+  return committed;
 };
 
-export const addMessage = async (conversationId, { actor, content, artifacts = [], workflowId = null }) => {
+export const addMessage = async (
+  conversationId,
+  { actor, content, attachments = [], artifacts = [], workflowId = null },
+) => {
   if (!actor || typeof actor !== "string") throw new Error("Message actor must be a non-empty string");
   if (typeof content !== "string" || !content.trim()) {
     throw new Error("Message content must be a non-empty string");
   }
+  if (!Array.isArray(attachments)) throw new Error("Message attachments must be an array");
   if (!Array.isArray(artifacts)) throw new Error("Message artifacts must be an array");
   if (workflowId != null && (typeof workflowId !== "string" || !workflowId.trim())) {
     throw new Error("Message Workflow ID must be a non-empty string when present");
   }
 
+  for (const attachmentId of attachments) {
+    if (!(await getAttachment(conversationId, attachmentId))) throw new Error(`Unknown attachment: ${attachmentId}`);
+  }
   for (const artifactId of artifacts) {
     if (!(await getArtifact(conversationId, artifactId))) throw new Error(`Unknown artifact: ${artifactId}`);
   }
@@ -276,6 +334,7 @@ export const addMessage = async (conversationId, { actor, content, artifacts = [
     actor,
     at: new Date().toISOString(),
     content: content.trim(),
+    attachments: [...attachments],
     artifacts: [...artifacts],
     workflowId: workflowId?.trim() || null,
   };
@@ -293,6 +352,7 @@ export const addArtifactToMessage = async (conversationId, messageId, artifactId
   const message = conversation.messages.find(item => item.id === messageId);
   if (!message) throw new Error(`Unknown message: ${messageId}`);
 
+  message.artifacts ??= [];
   if (!message.artifacts.includes(artifactId)) message.artifacts.push(artifactId);
   await commitConversation(conversation);
   return structuredClone(message);

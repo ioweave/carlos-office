@@ -4,6 +4,7 @@ import {
   IconFile,
   IconFolder,
   IconMessageCircle,
+  IconMicrophone,
   IconPaperclip,
   IconPencil,
   IconPlus,
@@ -14,6 +15,8 @@ import {
 import { toast } from "sonner";
 
 import api, { endpoints } from "../api";
+import "../styles/chat-features.scss";
+import ArtifactPanel from "../components/ArtifactPanel";
 import MarkdownContent from "../components/MarkdownContent";
 
 const ACTIVE_CONVERSATION_KEY = "office-active-conversation-v2";
@@ -53,15 +56,25 @@ const filePayload = file => new Promise((resolve, reject) => {
   reader.readAsDataURL(file);
 });
 
+const clipboardExtension = type => ({
+  "image/gif": "gif",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+}[type] || "png");
+
 export default function ChatPage({ nora, openRequest, onOpenOperations }) {
   const [conversations, setConversations] = useState([]);
   const [conversation, setConversation] = useState(null);
+  const [attachments, setAttachments] = useState([]);
   const [artifacts, setArtifacts] = useState([]);
+  const [selectedArtifact, setSelectedArtifact] = useState(null);
   const [models, setModels] = useState([]);
   const [modelDraft, setModelDraft] = useState({ provider: "", model: "" });
   const [input, setInput] = useState("");
   const [files, setFiles] = useState([]);
   const [sending, setSending] = useState(false);
+  const [listening, setListening] = useState(false);
   const [loadingConversation, setLoadingConversation] = useState(false);
   const [workflowId, setWorkflowId] = useState("");
   const [editingConversationId, setEditingConversationId] = useState("");
@@ -75,9 +88,15 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
   const requestRef = useRef(null);
   const sendInFlightRef = useRef(false);
   const messageEditCancelledRef = useRef(false);
+  const speechRecognitionRef = useRef(null);
+  const speechBaseRef = useRef("");
 
   const providers = useMemo(() => models.map(item => item.provider), [models]);
   const modelsFor = provider => models.find(item => item.provider === provider)?.models || [];
+  const attachmentById = useMemo(
+    () => Object.fromEntries(attachments.map(item => [item.id, item])),
+    [attachments],
+  );
   const artifactById = useMemo(
     () => Object.fromEntries(artifacts.map(item => [item.id, item])),
     [artifacts],
@@ -107,14 +126,43 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
     }
   }, []);
 
+  const loadResources = useCallback(async id => {
+    const [attachmentResponse, artifactResponse] = await Promise.all([
+      api.get(endpoints.conversationAttachments(id)),
+      api.get(endpoints.conversationArtifacts(id)),
+    ]);
+    setAttachments(attachmentResponse.data || []);
+    setArtifacts(artifactResponse.data || []);
+  }, []);
+
+  const refreshConversation = useCallback(async id => {
+    if (!id) return;
+    try {
+      const [record] = await Promise.all([
+        api.get(endpoints.conversation(id)).then(response => response.data),
+        loadResources(id),
+      ]);
+      setConversation(record);
+      upsertConversation(record);
+      setWorkflowId(record.workflows?.at(-1) || "");
+    } catch {
+      // Background refresh is best-effort. Direct user actions surface their own errors.
+    }
+  }, [loadResources, upsertConversation]);
+
   const openConversation = useCallback(async id => {
     if (!id) return;
     setLoadingConversation(true);
     try {
-      const record = (await api.get(endpoints.conversation(id))).data;
-      const filesResponse = await api.get(endpoints.conversationArtifacts(id));
+      const [record, attachmentResponse, artifactResponse] = await Promise.all([
+        api.get(endpoints.conversation(id)).then(response => response.data),
+        api.get(endpoints.conversationAttachments(id)),
+        api.get(endpoints.conversationArtifacts(id)),
+      ]);
       setConversation(record);
-      setArtifacts(filesResponse.data || []);
+      setAttachments(attachmentResponse.data || []);
+      setArtifacts(artifactResponse.data || []);
+      setSelectedArtifact(null);
       setModelDraft(record.nora || { provider: "", model: "" });
       setWorkflowId(record.workflows?.at(-1) || "");
       setEditingConversationId("");
@@ -157,22 +205,45 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
 
   useEffect(() => {
     if (loadingConversation || !conversation?.id) return undefined;
-
     const frame = requestAnimationFrame(() => {
       const thread = chatThreadRef.current;
       if (thread) thread.scrollTop = thread.scrollHeight;
     });
-
     return () => cancelAnimationFrame(frame);
-  }, [conversation?.id, loadingConversation]);
+  }, [conversation?.id, conversation?.messages?.length, loadingConversation]);
 
-  useEffect(() => () => requestRef.current?.abort(), []);
+  const activeWorkflowKey = Array.isArray(nora?.activeWorkflows) ? nora.activeWorkflows.join("|") : "";
+  useEffect(() => {
+    if (!conversation?.id) return undefined;
+    void refreshConversation(conversation.id);
+
+    const tracked = (conversation.workflows || []).some(id => nora?.activeWorkflows?.includes(id));
+    if (!tracked) return undefined;
+    const timer = window.setInterval(() => void refreshConversation(conversation.id), 2000);
+    return () => window.clearInterval(timer);
+  }, [conversation?.id, activeWorkflowKey]);
+
+  const stopListening = useCallback(() => {
+    const recognition = speechRecognitionRef.current;
+    if (!recognition) return;
+    try {
+      recognition.stop();
+    } catch {}
+  }, []);
+
+  useEffect(() => () => {
+    requestRef.current?.abort();
+    try { speechRecognitionRef.current?.stop(); } catch {}
+  }, []);
 
   const startNew = () => {
     if (sending || sendInFlightRef.current) return;
+    stopListening();
     sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
     setConversation(null);
+    setAttachments([]);
     setArtifacts([]);
+    setSelectedArtifact(null);
     setWorkflowId("");
     setInput("");
     setFiles([]);
@@ -233,7 +304,9 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
       if (conversation?.id === item.id) {
         sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
         setConversation(null);
+        setAttachments([]);
         setArtifacts([]);
+        setSelectedArtifact(null);
         setWorkflowId("");
         setInput("");
         setFiles([]);
@@ -243,7 +316,6 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
       }
 
       if (editingConversationId === item.id) cancelRename();
-
       toast.success("Conversation deleted.");
     } catch (error) {
       toast.error(error.response?.data?.error || "Could not delete conversation.");
@@ -312,11 +384,7 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
       setConversation(updated);
       upsertConversation(updated);
       setWorkflowId(updated.workflows?.at(-1) || "");
-
-      api.get(endpoints.conversationArtifacts(previous.id))
-        .then(response => setArtifacts(response.data || []))
-        .catch(() => {});
-
+      void loadResources(previous.id);
       toast.success("Message committed. Later conversation history was replaced.");
     } catch (error) {
       let restored = previous;
@@ -377,6 +445,7 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
       || (!message && files.length === 0)
     ) return;
 
+    stopListening();
     sendInFlightRef.current = true;
     const previous = conversation;
     const content = message || "Review the attached files.";
@@ -386,6 +455,7 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
       actor: "Carlos",
       at: new Date().toISOString(),
       content,
+      attachments: [],
       artifacts: [],
       pending: true,
     };
@@ -405,22 +475,22 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
 
     try {
       id = await ensureConversation(optimistic);
-      const artifactIds = [];
+      const attachmentIds = [];
 
       for (const item of pendingFiles) {
         const payload = await filePayload(item);
         const created = (
-          await api.post(endpoints.conversationArtifacts(id), {
+          await api.post(endpoints.conversationAttachments(id), {
             ...payload,
             createdBy: "Carlos",
           })
         ).data;
-        artifactIds.push(created.id);
-        setArtifacts(current => [...current.filter(artifact => artifact.id !== created.id), created]);
+        attachmentIds.push(created.id);
+        setAttachments(current => [...current.filter(attachment => attachment.id !== created.id), created]);
         setConversation(current => current ? {
           ...current,
           messages: current.messages.map(entry => (
-            entry.id === optimistic.id ? { ...entry, artifacts: [...artifactIds] } : entry
+            entry.id === optimistic.id ? { ...entry, attachments: [...attachmentIds] } : entry
           )),
         } : current);
       }
@@ -428,7 +498,7 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
       const result = (
         await api.post(
           endpoints.conversationRequest(id),
-          { content, artifacts: artifactIds },
+          { content, attachments: attachmentIds },
           { signal: controller.signal },
         )
       ).data;
@@ -439,6 +509,7 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
       setConversation(committed);
       upsertConversation(committed);
       setWorkflowId(committed.workflows?.at(-1) || result.workflow?.id || "");
+      void loadResources(id);
     } catch (error) {
       let restored = previous;
 
@@ -482,19 +553,94 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
     event.target.value = "";
   };
 
+  const addClipboardImages = event => {
+    const clipboardItems = [...(event.clipboardData?.items || [])];
+    const images = clipboardItems
+      .filter(item => item.kind === "file" && item.type.startsWith("image/"))
+      .map(item => item.getAsFile())
+      .filter(Boolean);
+    if (!images.length) return;
+
+    event.preventDefault();
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const pasted = images.map((file, index) => new File(
+      [file],
+      `clipboard-${stamp}${images.length > 1 ? `-${index + 1}` : ""}.${clipboardExtension(file.type)}`,
+      { type: file.type, lastModified: Date.now() },
+    ));
+    setFiles(current => [...current, ...pasted]);
+    toast.message(`${pasted.length} clipboard image${pasted.length === 1 ? "" : "s"} attached.`);
+  };
+
   const removeFile = index => setFiles(current => current.filter((_, itemIndex) => itemIndex !== index));
 
   const openArtifact = artifact => {
-    if (!conversation?.id || !artifact?.id) return;
-    const url = `${api.defaults.baseURL}${endpoints.conversationArtifact(conversation.id, artifact.id)}`;
+    if (!artifact?.id) return;
+    setSelectedArtifact(artifact);
+  };
+
+  const openAttachment = attachment => {
+    if (!conversation?.id || !attachment?.id) return;
+    const url = `${api.defaults.baseURL}${endpoints.conversationAttachment(conversation.id, attachment.id)}`;
     window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const toggleSpeech = () => {
+    if (listening) {
+      stopListening();
+      return;
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      toast.error("Speech recognition is not supported by this browser.");
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = navigator.language || "en-US";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    speechBaseRef.current = input.trimEnd();
+    let finalTranscript = "";
+
+    recognition.onresult = event => {
+      let interim = "";
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const transcript = event.results[index][0]?.transcript || "";
+        if (event.results[index].isFinal) finalTranscript += `${transcript} `;
+        else interim += transcript;
+      }
+      const spoken = `${finalTranscript}${interim}`.trim();
+      setInput(`${speechBaseRef.current}${speechBaseRef.current && spoken ? " " : ""}${spoken}`);
+    };
+    recognition.onerror = event => {
+      if (!["aborted", "no-speech"].includes(event.error)) {
+        toast.error(`Could not transcribe speech: ${event.error}`);
+      }
+    };
+    recognition.onend = () => {
+      if (speechRecognitionRef.current === recognition) speechRecognitionRef.current = null;
+      setListening(false);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+
+    speechRecognitionRef.current = recognition;
+    setListening(true);
+    try {
+      recognition.start();
+    } catch (error) {
+      speechRecognitionRef.current = null;
+      setListening(false);
+      toast.error(error instanceof Error ? error.message : "Could not start speech recognition.");
+    }
   };
 
   const modelChanged = conversation?.id
     && (conversation.nora?.provider !== modelDraft.provider || conversation.nora?.model !== modelDraft.model);
 
   return (
-    <div className="workspace-page chat-page">
+    <div className={`workspace-page chat-page ${selectedArtifact ? "chat-page--artifact-open" : ""}`}>
       <aside className="chat-history">
         <header className="chat-history__header">
           <h1>Conversations</h1>
@@ -679,6 +825,7 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
               {conversation.messages.map(message => {
                 const isCarlos = message.actor === "Carlos";
                 const editing = isCarlos && editingMessageId === message.id;
+                const messageArtifacts = (message.artifacts || []).map(id => artifactById[id]).filter(Boolean);
                 return (
                   <article key={message.id} className={`message ${isCarlos ? "message--carlos" : "message--nora"}`}>
                     <header className="message__header">
@@ -718,7 +865,9 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
                         aria-label="Edit Carlos message"
                       />
                     ) : (
-                      <div className="message__content"><MarkdownContent>{message.content}</MarkdownContent></div>
+                      <div className="message__content">
+                        <MarkdownContent artifacts={messageArtifacts} onArtifact={openArtifact}>{message.content}</MarkdownContent>
+                      </div>
                     )}
                     {message.workflowId && (
                       <button
@@ -731,16 +880,25 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
                         <strong>Open Operations</strong>
                       </button>
                     )}
-                    {!!message.artifacts?.length && (
-                      <div className="message__artifacts">
-                        {message.artifacts.map(id => {
-                          const artifact = artifactById[id];
-                          return artifact ? (
-                            <button key={id} type="button" onClick={() => openArtifact(artifact)}>
-                              <IconFile size={14} /> {artifact.name}
+                    {!!message.attachments?.length && (
+                      <div className="message__attachments" aria-label="Message attachments">
+                        {message.attachments.map(id => {
+                          const attachment = attachmentById[id];
+                          return attachment ? (
+                            <button key={id} type="button" onClick={() => openAttachment(attachment)}>
+                              <IconPaperclip size={14} /> {attachment.name}
                             </button>
                           ) : null;
                         })}
+                      </div>
+                    )}
+                    {!!messageArtifacts.length && (
+                      <div className="message__artifacts" aria-label="Message artifacts">
+                        {messageArtifacts.map(artifact => (
+                          <button key={artifact.id} type="button" onClick={() => openArtifact(artifact)}>
+                            <IconFile size={14} /> {artifact.name}
+                          </button>
+                        ))}
                       </div>
                     )}
                   </article>
@@ -771,7 +929,7 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
               <div className="chat-composer__files">
                 {files.map((file, index) => (
                   <span key={`${file.name}-${file.size}-${index}`}>
-                    <IconFile size={13} /> {file.name}
+                    <IconPaperclip size={13} /> {file.name}
                     <button type="button" onClick={() => removeFile(index)} aria-label={`Remove ${file.name}`}>
                       <IconX size={12} />
                     </button>
@@ -783,6 +941,7 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
               ref={textareaRef}
               value={input}
               onChange={event => setInput(event.target.value)}
+              onPaste={addClipboardImages}
               onKeyDown={event => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
@@ -790,30 +949,58 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
                   event.currentTarget.form?.requestSubmit();
                 }
               }}
-              placeholder="Message Nora…"
+              placeholder={listening ? "Listening…" : "Message Nora…"}
               rows={1}
             />
             <div className="chat-composer__actions">
-              <input ref={fileInputRef} type="file" multiple hidden onChange={addFiles} />
-              <button type="button" className="icon-button" onClick={() => fileInputRef.current?.click()} aria-label="Attach files">
-                <IconPaperclip size={18} />
-              </button>
-              {sending ? (
-                <button type="button" className="button button--danger" onClick={stop}>Stop</button>
-              ) : (
+              <div className="chat-composer__actions-left">
+                <input ref={fileInputRef} type="file" multiple hidden onChange={addFiles} />
                 <button
-                  type="submit"
-                  className="composer-send"
-                  disabled={Boolean(editingMessageId) || (!input.trim() && files.length === 0)}
-                  aria-label="Send message"
+                  type="button"
+                  className="composer-attach"
+                  onClick={() => fileInputRef.current?.click()}
+                  aria-label="Attach files"
+                  title="Attach files"
                 >
-                  <IconArrowUp size={18} />
+                  <IconPlus size={20} />
                 </button>
-              )}
+              </div>
+              <div className="chat-composer__actions-right">
+                {!sending && (
+                  <button
+                    type="button"
+                    className={`composer-mic ${listening ? "composer-mic--active" : ""}`}
+                    onClick={toggleSpeech}
+                    disabled={Boolean(editingMessageId)}
+                    aria-label={listening ? "Stop dictation" : "Speak to Nora"}
+                    title={listening ? "Stop dictation" : "Speak to Nora"}
+                  >
+                    <IconMicrophone size={18} />
+                  </button>
+                )}
+                {sending ? (
+                  <button type="button" className="button button--danger" onClick={stop}>Stop</button>
+                ) : (
+                  <button
+                    type="submit"
+                    className="composer-send"
+                    disabled={Boolean(editingMessageId) || (!input.trim() && files.length === 0)}
+                    aria-label="Send message"
+                  >
+                    <IconArrowUp size={18} />
+                  </button>
+                )}
+              </div>
             </div>
           </form>
         </div>
       </section>
+
+      <ArtifactPanel
+        conversationId={conversation?.id || ""}
+        artifact={selectedArtifact}
+        onClose={() => setSelectedArtifact(null)}
+      />
     </div>
   );
 }

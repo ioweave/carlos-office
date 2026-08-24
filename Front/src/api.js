@@ -49,6 +49,8 @@ export const endpoints = {
   conversationMessage: (id, messageId) => `/conversations/${id}/messages/${messageId}`,
   conversationModel: id => `/conversations/${id}/model`,
   conversationRequest: id => `/conversations/${id}/requests`,
+  conversationAttachments: id => `/conversations/${id}/attachments`,
+  conversationAttachment: (id, attachmentId) => `/conversations/${id}/attachments/${attachmentId}`,
   conversationArtifacts: id => `/conversations/${id}/artifacts`,
   conversationArtifact: (id, artifactId) => `/conversations/${id}/artifacts/${artifactId}`,
 

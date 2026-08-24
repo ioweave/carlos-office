@@ -1,3 +1,5 @@
+import { parseProviderJSON } from "../lib.mjs";
+
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 
 const resultToText = result => {
@@ -13,6 +15,38 @@ const describeTools = tools => tools.map(tool => ({
   input: tool.input ?? {},
   output: tool.output ?? null,
 }));
+
+const normalizeArtifacts = value => {
+  if (!Array.isArray(value)) return [];
+  return value.map((artifact, index) => {
+    if (!isObject(artifact) || typeof artifact.path !== "string" || !artifact.path.trim()) {
+      throw new Error(`Agent completion artifact ${index + 1} must include a path`);
+    }
+    if (artifact.name != null && (typeof artifact.name !== "string" || !artifact.name.trim())) {
+      throw new Error(`Agent completion artifact ${index + 1} has an invalid name`);
+    }
+    if (artifact.type != null && (typeof artifact.type !== "string" || !artifact.type.trim())) {
+      throw new Error(`Agent completion artifact ${index + 1} has an invalid type`);
+    }
+    return {
+      path: artifact.path.trim(),
+      ...(artifact.name?.trim() ? { name: artifact.name.trim() } : {}),
+      ...(artifact.type?.trim() ? { type: artifact.type.trim() } : {}),
+    };
+  });
+};
+
+const normalizeCompletion = content => {
+  try {
+    const value = parseProviderJSON(content);
+    if (!isObject(value) || typeof value.output !== "string" || !value.output.trim()) {
+      throw new Error("Agent completion must include output");
+    }
+    return { output: value.output.trim(), artifacts: normalizeArtifacts(value.artifacts) };
+  } catch {
+    return { output: String(content || "").trim(), artifacts: [] };
+  }
+};
 
 export class Agent {
   constructor({ provider, model, tools = [], skills = [], invokeTool, maxToolFailures = 12 }) {
@@ -71,11 +105,16 @@ export class Agent {
         `Objective:\n${task.objective ?? ""}`,
         `Completion criteria:\n${task.completion ?? ""}`,
         `Resolved input:\n${JSON.stringify(task.input ?? {}, null, 2)}`,
+        "When the Task is complete, return one JSON object with this exact shape:",
+        '{"output":"human-readable Task result","artifacts":[{"path":"absolute-or-workspace-relative-file-path","name":"optional-display-name","type":"optional-MIME-type"}]}',
+        "The artifacts array is ONLY for files intended as deliverables to Carlos.",
+        "Do not declare ordinary source files, configuration files, or project files merely because you edited them.",
+        "If there are no deliverable files, return an empty artifacts array.",
       ].join("\n\n"),
     });
     messages.push({
       role: "user",
-      content: "Perform this Task. Use available Tools when needed. Return the completed Task output when finished.",
+      content: "Perform this Task. Use available Tools when needed. Return the completed Task output using the required JSON completion object.",
     });
 
     return messages;
@@ -101,7 +140,7 @@ export class Agent {
 
       if (!toolCalls.length) {
         if (!content.trim()) throw new Error("Agent model returned no usable Task output");
-        return content;
+        return normalizeCompletion(content);
       }
 
       messages.push({ role: "assistant", content, toolCalls: structuredClone(toolCalls) });
