@@ -37,15 +37,17 @@ const normalizeArtifacts = value => {
 };
 
 const normalizeCompletion = content => {
+  let value;
   try {
-    const value = parseProviderJSON(content);
-    if (!isObject(value) || typeof value.output !== "string" || !value.output.trim()) {
-      throw new Error("Agent completion must include output");
-    }
-    return { output: value.output.trim(), artifacts: normalizeArtifacts(value.artifacts) };
+    value = parseProviderJSON(content);
   } catch {
     return { output: String(content || "").trim(), artifacts: [] };
   }
+
+  if (!isObject(value) || typeof value.output !== "string" || !value.output.trim()) {
+    throw new Error("Agent completion must include output");
+  }
+  return { output: value.output.trim(), artifacts: normalizeArtifacts(value.artifacts) };
 };
 
 export class Agent {
