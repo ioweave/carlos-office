@@ -163,8 +163,10 @@
 
 .inspector-panel__header--rows {
   display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
   flex-direction: column;
-  gap: 8px;
+  gap: 5px;
 }
 
 .inspector-panel__header--rows h2 {
@@ -176,19 +178,25 @@
 }
 
 .inspector-panel__meta {
-  display: flex;
-  width: 100%;
+  display: inline-flex;
+  width: auto;
+  max-width: 100%;
   min-width: 0;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-start;
+  gap: 6px;
 }
 
 .inspector-panel__meta code {
   display: block;
   min-width: 0;
-  flex: 1 1 auto;
+  max-width: 240px;
+  flex: 0 1 auto;
   overflow: hidden;
   margin: 0;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: var(--color-surface-soft);
   color: var(--color-text-faint);
   font-size: 9px;
   text-overflow: ellipsis;
@@ -197,6 +205,59 @@
 
 .operations-studio__tasks .definition-list strong {
   overflow-wrap: anywhere;
+}
+
+.workflow-layout-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  max-width: calc(100% - 24px);
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-surface) 94%, transparent);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(8px);
+  z-index: 5;
+}
+
+.workflow-layout-toolbar > span {
+  min-width: 0;
+  max-width: 300px;
+  overflow: hidden;
+  padding: 0 5px;
+  color: var(--color-text-faint);
+  font-size: 9px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-layout-toolbar__dirty {
+  color: var(--color-warning) !important;
+}
+
+.workflow-layout-toolbar .button {
+  min-height: 28px;
+  padding: 5px 8px;
+  font-size: 9px;
+}
+
+.process-graph--pannable {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.process-graph--panning {
+  cursor: grabbing;
+}
+
+.process-graph--panning .process-node-wrap {
+  pointer-events: none;
 }
 
 .workflow-connections {
@@ -237,10 +298,7 @@
   white-space: nowrap;
 }
 
-.workflow-connection-row code:first-child {
-  flex: 1 1 0;
-}
-
+.workflow-connection-row code:first-child,
 .workflow-connection-row code:nth-child(3) {
   flex: 1 1 0;
 }
@@ -460,6 +518,10 @@
     width: 360px;
     min-width: 320px;
     flex-basis: 360px;
+  }
+
+  .workflow-layout-toolbar > span {
+    display: none;
   }
 
   .operations-data {
