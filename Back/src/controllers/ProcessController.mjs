@@ -46,7 +46,6 @@ const hasTask = (graph, taskId) => Object.prototype.hasOwnProperty.call(graph.ta
 
 const uniqueEdges = edges => {
   const seen = new Set();
-
   return edges.filter(([from, to]) => {
     const key = `${from}\u0000${to}`;
     if (seen.has(key)) return false;
@@ -64,6 +63,28 @@ const createWorkflowId = () => {
   return id;
 };
 
+const validateLayout = (workflow, layout) => {
+  if (layout == null) return;
+  if (!isObject(layout)) throw new Error(`Workflow ${workflow.id} layout must be an object`);
+  for (const [taskId, position] of Object.entries(layout)) {
+    if (!hasTask(workflow, taskId)) throw new Error(`Workflow layout references unknown Task: ${taskId}`);
+    if (!isObject(position)) throw new Error(`Invalid Workflow position for Task: ${taskId}`);
+    const x = Number(position.x);
+    const y = Number(position.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) {
+      throw new Error(`Invalid Workflow position for Task: ${taskId}`);
+    }
+  }
+};
+
+const normalizeLayout = (workflow, layout) => {
+  validateLayout(workflow, layout);
+  return Object.fromEntries(Object.entries(layout ?? {}).map(([taskId, position]) => [
+    taskId,
+    { x: Math.round(Number(position.x)), y: Math.round(Number(position.y)) },
+  ]));
+};
+
 const validateWorkflow = workflow => {
   if (!isObject(workflow)) throw new Error("Workflow must be an object");
   validateFileName(workflow.id, "workflow ID");
@@ -71,8 +92,9 @@ const validateWorkflow = workflow => {
   if (!workflow.status || typeof workflow.status !== "string") {
     throw new Error(`Workflow ${workflow.id} must have a status`);
   }
-  if (workflow.layout != null && !isObject(workflow.layout)) {
-    throw new Error(`Workflow ${workflow.id} layout must be an object`);
+  validateLayout(workflow, workflow.layout);
+  if (workflow.archivedTasks != null && !Array.isArray(workflow.archivedTasks)) {
+    throw new Error(`Workflow ${workflow.id} archivedTasks must be an array`);
   }
 };
 
@@ -122,7 +144,6 @@ const persistWorkflow = async workflow => {
   });
 
   workflowWrites.set(id, next);
-
   try {
     await next;
   } finally {
@@ -131,6 +152,7 @@ const persistWorkflow = async workflow => {
 };
 
 const commitWorkflow = async workflow => {
+  validateWorkflow(workflow);
   await persistWorkflow(workflow);
   if (deletedWorkflowIds.has(workflow.id)) throw new Error(`Workflow ${workflow.id} was deleted`);
   workflows.set(workflow.id, workflow);
@@ -156,10 +178,10 @@ const requireWorkflow = id => {
   return workflow;
 };
 
-const requirePendingWorkflow = id => {
+const requireEditableWorkflow = id => {
   const workflow = requireWorkflow(id);
-  if (workflow.status !== "pending") {
-    throw new Error(`Workflow ${id} can only be structurally edited before its first run`);
+  if (workflow.status === "running") {
+    throw new Error(`Workflow ${id} must be stopped before editing its definition`);
   }
   return workflow;
 };
@@ -220,7 +242,6 @@ const refreshWorkflow = workflow => {
 
 const createRuntimeTasks = (tasks, start, end) => {
   const runtimeTasks = {};
-
   for (const [taskId, task] of Object.entries(tasks)) {
     if (taskId === start) {
       runtimeTasks[taskId] = { ...structuredClone(task), status: "completed" };
@@ -230,20 +251,14 @@ const createRuntimeTasks = (tasks, start, end) => {
       runtimeTasks[taskId] = { ...structuredClone(task), status: "pending" };
       continue;
     }
-
     runtimeTasks[taskId] = { ...structuredClone(task), status: "pending", attempts: [] };
   }
-
   return runtimeTasks;
 };
 
 const storeNewWorkflow = async workflow => {
-  validateWorkflow(workflow);
-  refreshWorkflow(workflow);
   await commitWorkflow(workflow);
-
   await recordEvent("workflow.created", { workflowId: workflow.id, process: workflow.process });
-  if (workflow.status === "completed") await recordEvent("workflow.completed", { workflowId: workflow.id });
   return structuredClone(workflow);
 };
 
@@ -306,6 +321,8 @@ export const loadWorkflows = async () => {
   for (const filename of files.filter(file => file.endsWith(".json"))) {
     try {
       const workflow = JSON.parse(await readFile(resolve(workflowsDir, filename), "utf8"));
+      workflow.layout ??= workflow.config?._ui?.layout ?? {};
+      workflow.archivedTasks ??= [];
       validateWorkflow(workflow);
       if (workflows.has(workflow.id)) throw new Error(`Duplicate workflow ID: ${workflow.id}`);
       workflows.set(workflow.id, workflow);
@@ -330,7 +347,7 @@ export const createWorkflow = async (processName, inputs = {}, config = {}) => {
   if (!isObject(inputs)) throw new Error("Workflow inputs must be an object");
   if (!isObject(config)) throw new Error("Workflow config must be an object");
 
-  const workflow = {
+  return storeNewWorkflow({
     id: createWorkflowId(),
     process: process.name,
     status: "pending",
@@ -341,10 +358,9 @@ export const createWorkflow = async (processName, inputs = {}, config = {}) => {
     tasks: createRuntimeTasks(process.tasks, process.start, process.end),
     edges: structuredClone(process.edges),
     layout: structuredClone(process.layout ?? {}),
+    archivedTasks: [],
     result: null,
-  };
-
-  return storeNewWorkflow(workflow);
+  });
 };
 
 export const createAdHocWorkflow = async ({ start, end, tasks, edges, inputs = {}, config = {} }) => {
@@ -354,7 +370,7 @@ export const createAdHocWorkflow = async ({ start, end, tasks, edges, inputs = {
   const definition = { start, end, tasks, edges };
   validateGraph(definition);
 
-  const workflow = {
+  return storeNewWorkflow({
     id: createWorkflowId(),
     process: null,
     status: "pending",
@@ -365,10 +381,9 @@ export const createAdHocWorkflow = async ({ start, end, tasks, edges, inputs = {
     tasks: createRuntimeTasks(tasks, start, end),
     edges: structuredClone(edges),
     layout: {},
+    archivedTasks: [],
     result: null,
-  };
-
-  return storeNewWorkflow(workflow);
+  });
 };
 
 export const startWorkflow = async workflowId => {
@@ -468,7 +483,7 @@ export const addTask = async (workflowId, taskId, task, edges = []) => {
   if (!isObject(task) || task.type !== "task") throw new Error('Added node must have type "task"');
   if (!Array.isArray(edges)) throw new Error("Task edges must be an array");
 
-  const draft = structuredClone(requirePendingWorkflow(workflowId));
+  const draft = structuredClone(requireEditableWorkflow(workflowId));
   if (hasTask(draft, taskId)) throw new Error(`Task already exists: ${taskId}`);
 
   const { status: _status, attempts: _attempts, ...definition } = task;
@@ -482,14 +497,21 @@ export const addTask = async (workflowId, taskId, task, edges = []) => {
 };
 
 export const removeTask = async (workflowId, taskId) => {
-  const draft = structuredClone(requirePendingWorkflow(workflowId));
-  if (taskId === draft.start || taskId === draft.end) {
-    throw new Error("Start and end nodes cannot be removed");
-  }
-  requireTask(draft, taskId);
+  const draft = structuredClone(requireEditableWorkflow(workflowId));
+  if (taskId === draft.start || taskId === draft.end) throw new Error("Start and end nodes cannot be removed");
+  const task = requireTask(draft, taskId);
 
   const predecessors = incoming(draft, taskId);
   const successors = outgoing(draft, taskId);
+  if ((task.attempts ?? []).length) {
+    draft.archivedTasks ??= [];
+    draft.archivedTasks.push({
+      id: taskId,
+      removedAt: new Date().toISOString(),
+      task: structuredClone(task),
+    });
+  }
+
   delete draft.tasks[taskId];
   if (draft.layout) delete draft.layout[taskId];
   draft.edges = draft.edges.filter(([from, to]) => from !== taskId && to !== taskId);
@@ -503,17 +525,14 @@ export const removeTask = async (workflowId, taskId) => {
   draft.edges = uniqueEdges(draft.edges);
   validateGraph(draft);
   await commitWorkflow(draft);
-  await recordEvent("workflow.task_removed", { workflowId, taskId });
+  await recordEvent("workflow.task_removed", { workflowId, taskId, archived: Boolean((task.attempts ?? []).length) });
   return structuredClone(draft);
 };
 
 export const editTask = async (workflowId, taskId, changes) => {
   if (!isObject(changes)) throw new Error("Task changes must be an object");
 
-  const draft = structuredClone(requireWorkflow(workflowId));
-  if (!["pending", "paused", "blocked", "failed"].includes(draft.status)) {
-    throw new Error(`Workflow ${workflowId} Task configuration is locked in status ${draft.status}`);
-  }
+  const draft = structuredClone(requireEditableWorkflow(workflowId));
   requireExecutableTask(draft, taskId);
   const { status: _status, attempts: _attempts, type: _type, ...editable } = changes;
   draft.tasks[taskId] = { ...draft.tasks[taskId], ...structuredClone(editable) };
@@ -544,7 +563,7 @@ export const cancelTask = async (workflowId, taskId) => {
 export const setWorkflowEdges = async (workflowId, edges) => {
   if (!Array.isArray(edges)) throw new Error("Workflow edges must be an array");
 
-  const draft = structuredClone(requirePendingWorkflow(workflowId));
+  const draft = structuredClone(requireEditableWorkflow(workflowId));
   draft.edges = structuredClone(edges);
   validateGraph(draft);
 
@@ -554,24 +573,14 @@ export const setWorkflowEdges = async (workflowId, edges) => {
 };
 
 export const setWorkflowLayout = async (workflowId, layout) => {
-  if (!isObject(layout)) throw new Error("Workflow layout must be an object");
-
   const draft = structuredClone(requireWorkflow(workflowId));
-  if (draft.status === "running") throw new Error("Stop the Workflow before changing its layout");
+  draft.layout = normalizeLayout(draft, layout);
 
-  const normalized = {};
-  for (const [taskId, position] of Object.entries(layout)) {
-    if (!hasTask(draft, taskId)) throw new Error(`Workflow layout references unknown Task: ${taskId}`);
-    if (!isObject(position)) throw new Error(`Invalid Workflow position for Task: ${taskId}`);
-    const x = Number(position.x);
-    const y = Number(position.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) {
-      throw new Error(`Invalid Workflow position for Task: ${taskId}`);
-    }
-    normalized[taskId] = { x: Math.round(x), y: Math.round(y) };
+  if (isObject(draft.config?._ui) && Object.prototype.hasOwnProperty.call(draft.config._ui, "layout")) {
+    delete draft.config._ui.layout;
+    if (!Object.keys(draft.config._ui).length) delete draft.config._ui;
   }
 
-  draft.layout = normalized;
   await commitWorkflow(draft);
   await recordEvent("workflow.layout_changed", { workflowId });
   return structuredClone(draft);
@@ -591,9 +600,17 @@ export const setWorkflowConfig = async (workflowId, config) => {
   if (!isObject(config)) throw new Error("Workflow config must be an object");
 
   const draft = structuredClone(requireWorkflow(workflowId));
-  draft.config = structuredClone(config);
+  const storedConfig = structuredClone(config);
+  const legacyLayout = storedConfig?._ui?.layout;
+  if (legacyLayout != null) {
+    draft.layout = normalizeLayout(draft, legacyLayout);
+    delete storedConfig._ui.layout;
+    if (!Object.keys(storedConfig._ui).length) delete storedConfig._ui;
+  }
+
+  draft.config = storedConfig;
   await commitWorkflow(draft);
-  await recordEvent("workflow.config_changed", { workflowId });
+  await recordEvent(legacyLayout != null ? "workflow.layout_changed" : "workflow.config_changed", { workflowId });
   return structuredClone(draft);
 };
 
@@ -601,8 +618,7 @@ export const pauseWorkflow = async workflowId => {
   const draft = structuredClone(requireWorkflow(workflowId));
   if (draft.status === "completed") throw new Error("Completed workflows cannot be stopped");
   if (draft.status === "cancelled") throw new Error("Cancelled workflows must be restarted");
-  if (draft.status === "paused") return structuredClone(draft);
-  if (draft.status === "pending") return structuredClone(draft);
+  if (["paused", "pending"].includes(draft.status)) return structuredClone(draft);
 
   for (const task of Object.values(draft.tasks)) {
     if (task.type === "task" && task.status === "running") task.status = "pending";
