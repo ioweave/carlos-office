@@ -29,12 +29,20 @@ const commaList = value => [...new Set(
     .filter(Boolean),
 )];
 
-const taskDraftFrom = task => {
+const humanizeId = id => String(id || "")
+  .replace(/[_-]+/g, " ")
+  .replace(/\s+/g, " ")
+  .trim()
+  .replace(/\b\w/g, character => character.toUpperCase())
+  .slice(0, 50);
+
+const taskDraftFrom = (task, taskId) => {
   const legacyTools = task?.tool ? [task.tool] : [];
   const hasFixedTools = Array.isArray(task?.tools) || legacyTools.length > 0;
   const hasFixedSkills = Array.isArray(task?.skills);
 
   return {
+    name: task?.name || humanizeId(taskId),
     objective: task?.objective || "",
     provider: task?.provider || "",
     model: task?.model || "",
@@ -96,7 +104,7 @@ export default function TaskConfigurationForm({
   onRevise,
   disabled = false,
 }) {
-  const initial = useMemo(() => taskDraftFrom(task), [task]);
+  const initial = useMemo(() => taskDraftFrom(task, taskId), [task, taskId]);
   const [baseline, setBaseline] = useState(initial);
   const [draft, setDraft] = useState(initial);
   const [catalog, setCatalog] = useState({ models: [], tools: [], skills: [] });
@@ -157,7 +165,7 @@ export default function TaskConfigurationForm({
     ? TASK_TIMEOUT_OPTIONS
     : [{ value: draft.timeoutMs, label: `${Number(draft.timeoutMs) / 1000} seconds` }, ...TASK_TIMEOUT_OPTIONS];
   const dirty = !sameDraft(draft, baseline);
-  const valid = !draft.provider || Boolean(draft.model);
+  const valid = Boolean(draft.name.trim()) && draft.name.trim().length <= 50 && (!draft.provider || Boolean(draft.model));
 
   const update = changes => setDraft(current => ({ ...current, ...changes }));
   const toggle = (field, name) => setDraft(current => ({
@@ -168,6 +176,7 @@ export default function TaskConfigurationForm({
   }));
 
   const taskPayload = () => ({
+    name: draft.name.trim(),
     objective: draft.objective.trim(),
     provider: draft.provider || null,
     model: draft.provider ? draft.model || null : null,
@@ -200,7 +209,7 @@ export default function TaskConfigurationForm({
         savedRecord = updated;
       }
 
-      const savedDraft = taskDraftFrom(savedTask);
+      const savedDraft = taskDraftFrom(savedTask, taskId);
       setBaseline(savedDraft);
       setDraft(savedDraft);
       onSaved?.(savedRecord);
@@ -217,6 +226,18 @@ export default function TaskConfigurationForm({
       <div className="task-config__body">
         {catalogLoading && <span className="task-config__loading">Loading configuration options…</span>}
         <div className="task-config__fields">
+          <label className="field">
+            <span>Name</span>
+            <input
+              type="text"
+              maxLength={50}
+              value={draft.name}
+              onChange={event => update({ name: event.target.value })}
+              placeholder="Atomic 2-5 word label"
+              disabled={disabled}
+            />
+          </label>
+
           <label className="field">
             <span>Objective</span>
             <textarea
@@ -321,7 +342,7 @@ export default function TaskConfigurationForm({
       </div>
 
       <footer className="form-actions task-config__actions">
-        <span className="form-actions__status">{disabled ? "Stop the Workflow before editing" : dirty ? "Unsaved changes" : "Up to date"}</span>
+        <span className="form-actions__status">{disabled ? "Workflow configuration is locked" : dirty ? "Unsaved changes" : "Up to date"}</span>
         <div className="form-actions__buttons">
           {onRevise && (
             <button type="button" className="button button--quiet" onClick={onRevise} disabled={disabled}>
