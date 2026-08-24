@@ -510,7 +510,10 @@ export const removeTask = async (workflowId, taskId) => {
 export const editTask = async (workflowId, taskId, changes) => {
   if (!isObject(changes)) throw new Error("Task changes must be an object");
 
-  const draft = structuredClone(requirePendingWorkflow(workflowId));
+  const draft = structuredClone(requireWorkflow(workflowId));
+  if (!["pending", "paused", "blocked", "failed"].includes(draft.status)) {
+    throw new Error(`Workflow ${workflowId} Task configuration is locked in status ${draft.status}`);
+  }
   requireExecutableTask(draft, taskId);
   const { status: _status, attempts: _attempts, type: _type, ...editable } = changes;
   draft.tasks[taskId] = { ...draft.tasks[taskId], ...structuredClone(editable) };
