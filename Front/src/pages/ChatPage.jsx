@@ -65,6 +65,7 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
   const [loadingConversation, setLoadingConversation] = useState(false);
   const [workflowId, setWorkflowId] = useState("");
   const [editingConversationId, setEditingConversationId] = useState("");
+  const [editingTitleSurface, setEditingTitleSurface] = useState("");
   const [titleDraft, setTitleDraft] = useState("");
   const [editingMessageId, setEditingMessageId] = useState("");
   const [messageDraft, setMessageDraft] = useState("");
@@ -117,6 +118,7 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
       setModelDraft(record.nora || { provider: "", model: "" });
       setWorkflowId(record.workflows?.at(-1) || "");
       setEditingConversationId("");
+      setEditingTitleSurface("");
       setTitleDraft("");
       setEditingMessageId("");
       setMessageDraft("");
@@ -175,6 +177,7 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
     setInput("");
     setFiles([]);
     setEditingConversationId("");
+    setEditingTitleSurface("");
     setTitleDraft("");
     setEditingMessageId("");
     setMessageDraft("");
@@ -182,14 +185,16 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
-  const beginRename = item => {
+  const beginRename = (item, surface) => {
     if (!item?.id) return;
     setEditingConversationId(item.id);
+    setEditingTitleSurface(surface);
     setTitleDraft(conversationTitle(item));
   };
 
   const cancelRename = () => {
     setEditingConversationId("");
+    setEditingTitleSurface("");
     setTitleDraft("");
   };
 
@@ -510,7 +515,7 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
               key={item.id}
               className={`conversation-row ${conversation?.id === item.id ? "conversation-row--active" : ""}`}
             >
-              {editingConversationId === item.id ? (
+              {editingConversationId === item.id && editingTitleSurface === "history" ? (
                 <div className="conversation-row__open">
                   <input
                     autoFocus
@@ -553,7 +558,7 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
                   className="conversation-row__open"
                   onClick={event => {
                     if (event.target.closest("[data-edit-conversation-title]")) {
-                      beginRename(item);
+                      beginRename(item, "history");
                       return;
                     }
                     openConversation(item.id);
@@ -585,50 +590,52 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
       <section className="chat-workspace">
         <header className="page-header chat-workspace__header">
           <div className="page-header__copy">
-            {conversation && editingConversationId === conversation.id ? (
-              <input
-                autoFocus
-                value={titleDraft}
-                onChange={event => setTitleDraft(event.target.value)}
-                onFocus={event => event.currentTarget.select()}
-                onBlur={cancelRename}
-                onKeyDown={event => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void finishRename(conversation);
-                  }
-                  if (event.key === "Escape") {
-                    event.preventDefault();
-                    cancelRename();
-                  }
-                }}
-                aria-label={`Rename ${conversationTitle(conversation)}`}
-                style={{
-                  width: "min(720px, 100%)",
-                  minWidth: 0,
-                  padding: 0,
-                  border: 0,
-                  borderRadius: "2px",
-                  outline: "1px solid var(--color-accent)",
-                  outlineOffset: "3px",
-                  background: "transparent",
-                  color: "var(--color-text)",
-                  fontFamily: "var(--font-headline)",
-                  fontSize: "25px",
-                  fontWeight: 700,
-                  lineHeight: 1.15,
-                  letterSpacing: "-0.025em",
-                }}
-              />
-            ) : (
-              <h1
-                onClick={() => conversation && beginRename(conversation)}
-                title={conversation ? "Click to rename conversation" : undefined}
-                style={conversation ? { cursor: "text" } : undefined}
-              >
-                {conversation ? conversationTitle(conversation) : "New conversation"}
-              </h1>
-            )}
+            {conversation
+              && editingConversationId === conversation.id
+              && editingTitleSurface === "header" ? (
+                <input
+                  autoFocus
+                  value={titleDraft}
+                  onChange={event => setTitleDraft(event.target.value)}
+                  onFocus={event => event.currentTarget.select()}
+                  onBlur={cancelRename}
+                  onKeyDown={event => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void finishRename(conversation);
+                    }
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      cancelRename();
+                    }
+                  }}
+                  aria-label={`Rename ${conversationTitle(conversation)}`}
+                  style={{
+                    width: "min(720px, 100%)",
+                    minWidth: 0,
+                    padding: 0,
+                    border: 0,
+                    borderRadius: "2px",
+                    outline: "1px solid var(--color-accent)",
+                    outlineOffset: "3px",
+                    background: "transparent",
+                    color: "var(--color-text)",
+                    fontFamily: "var(--font-headline)",
+                    fontSize: "25px",
+                    fontWeight: 700,
+                    lineHeight: 1.15,
+                    letterSpacing: "-0.025em",
+                  }}
+                />
+              ) : (
+                <h1
+                  onClick={() => conversation && beginRename(conversation, "header")}
+                  title={conversation ? "Click to rename conversation" : undefined}
+                  style={conversation ? { cursor: "text" } : undefined}
+                >
+                  {conversation ? conversationTitle(conversation) : "New conversation"}
+                </h1>
+              )}
           </div>
           <div className="model-control">
             <select
