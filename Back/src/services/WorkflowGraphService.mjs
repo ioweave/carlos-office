@@ -1,4 +1,5 @@
 const NODE_TYPES = new Set(["start", "task", "end"]);
+const MAX_TASK_NAME_LENGTH = 50;
 
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 
@@ -11,6 +12,13 @@ const validateStringList = (value, label) => {
     throw new Error(`${label} must contain non-empty strings`);
   }
 };
+
+const taskNameFromId = taskId => String(taskId)
+  .replace(/[_-]+/g, " ")
+  .replace(/\s+/g, " ")
+  .trim()
+  .replace(/\b\w/g, character => character.toUpperCase())
+  .slice(0, MAX_TASK_NAME_LENGTH);
 
 export const normalizeGeneratedGraph = graph => {
   if (!isObject(graph)) return graph;
@@ -36,6 +44,9 @@ export const normalizeGeneratedGraph = graph => {
         task.objective = task.description.trim();
       }
     }
+    if (task.type === "task" && (!task.name || !String(task.name).trim())) {
+      task.name = taskNameFromId(taskId);
+    }
   }
 
   return normalized;
@@ -46,6 +57,14 @@ const validateTaskDefinition = (taskId, task) => {
   if (!NODE_TYPES.has(task.type)) throw new Error(`Invalid node type for ${taskId}: ${task.type}`);
   if (task.type !== "task") return;
 
+  if (task.name != null) {
+    if (typeof task.name !== "string" || !task.name.trim()) {
+      throw new Error(`Task ${taskId} name must be a non-empty string`);
+    }
+    if (task.name.trim().length > MAX_TASK_NAME_LENGTH) {
+      throw new Error(`Task ${taskId} name cannot exceed ${MAX_TASK_NAME_LENGTH} characters`);
+    }
+  }
   if (typeof task.objective !== "string" || !task.objective.trim()) {
     throw new Error(`Task ${taskId} objective must be a non-empty string`);
   }
