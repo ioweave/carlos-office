@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { getAttachment, readAttachment } from "./AttachmentController.mjs";
 import { listApprovals } from "./AuthorizationController.mjs";
 import {
@@ -51,6 +53,7 @@ const state = {
   activeWorkflows: new Set(),
 };
 const workflowReports = new Map();
+const requestJobs = new Map();
 
 const TEXT_ATTACHMENT_TYPES = new Set([
   "application/json",
@@ -68,6 +71,20 @@ const TEXT_ATTACHMENT_EXTENSIONS = [
 
 const errorMessage = error => error instanceof Error ? error.message : String(error);
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
+const isCancelledError = (error, signal = null) => Boolean(
+  signal?.aborted
+  || error?.name === "AbortError"
+  || error?.code === "nora_request_cancelled"
+);
+
+const publicRequestJob = job => ({
+  id: job.id,
+  conversationId: job.conversationId,
+  messageId: job.messageId,
+  status: job.status,
+  startedAt: job.startedAt,
+  workflowId: job.workflowId ?? null,
+});
 
 const validateSelection = ({ provider, model }) => {
   if (!provider || typeof provider !== "string") throw new Error("Provider must be a non-empty string");
@@ -98,12 +115,13 @@ const getDefaultNoraSelection = () => {
 const getWorkflowNoraSelection = workflow => selectionFrom(workflow.config?.nora) ?? getDefaultNoraSelection();
 
 const refreshNoraStatus = () => {
-  let working = getNoraProcessState().status === "working";
+  let working = getNoraProcessState().status === "working"
+    || [...requestJobs.values()].some(job => job.status === "running");
   let blocked = false;
 
   for (const workflowId of [...state.activeWorkflows]) {
     const workflow = getWorkflow(workflowId);
-    if (!workflow || ["completed", "cancelled", "failed", "paused"].includes(workflow.status)) {
+    if (!workflow || ["completed", "cancelled", "failed", "paused", "stalled"].includes(workflow.status)) {
       state.activeWorkflows.delete(workflowId);
       continue;
     }
@@ -147,10 +165,13 @@ export const getNoraState = () => {
     pid: runtime.pid,
     processRunning: runtime.running,
     activeWorkflows: [...state.activeWorkflows],
+    activeRequests: [...requestJobs.values()]
+      .filter(job => job.status === "running")
+      .map(publicRequestJob),
   };
 };
 
-export const listModels = () => listProcessModels();
+export const listCarlosRequests = () => [...requestJobs.values()].map(publicRequestJob);
 
 export const createConversation = async ({ id = null, provider = null, model = null } = {}) => {
   const selection = provider || model
@@ -172,11 +193,12 @@ export const setConversationModel = async (conversationId, selection) => {
   return conversation;
 };
 
-const askNoraForJson = (instruction, context, modelSelection) => decideInNoraProcess({
+const askNoraForJson = (instruction, context, modelSelection, signal = null) => decideInNoraProcess({
   definition: getNora(),
   selection: validateSelection(modelSelection),
   instruction,
   context,
+  signal,
 });
 
 const summarizeProcesses = () => listProcesses().map(({ name, purpose = "", inputs = [] }) => ({
@@ -393,9 +415,11 @@ const finishConversationWorkflow = async ({ conversationId, workflowId, action }
         ? `Workflow ${workflowId} stopped because a Task failed.`
         : finalWorkflow.status === "paused"
           ? `Workflow ${workflowId} was stopped and can be edited or resumed.`
-          : finalWorkflow.status === "cancelled"
-            ? `Workflow ${workflowId} was cancelled.`
-            : `Workflow ${workflowId} stopped in state ${finalWorkflow.status}.`;
+          : finalWorkflow.status === "stalled"
+            ? `Workflow ${workflowId} stalled because no Task can make progress. Open Operations to inspect its dependency diagnostics.`
+            : finalWorkflow.status === "cancelled"
+              ? `Workflow ${workflowId} was cancelled.`
+              : `Workflow ${workflowId} stopped in state ${finalWorkflow.status}.`;
     await addWorkflowNoraMessage(conversationId, workflowId, response);
   } catch (error) {
     const failure = await recordRequestFailure({
@@ -425,6 +449,7 @@ export const handleCarlosRequest = async ({
   content = null,
   attachments = [],
   messageId = null,
+  signal = null,
 }) => {
   let conversation = await getConversation(conversationId);
   if (!conversation) throw new Error(`Unknown conversation: ${conversationId}`);
@@ -446,8 +471,15 @@ export const handleCarlosRequest = async ({
   let phase = "intake";
   let action = null;
   let activeWorkflowId = null;
+  const requestAskNoraForJson = (instruction, context, modelSelection) => (
+    askNoraForJson(instruction, context, modelSelection, signal)
+  );
+  const ensureNotCancelled = () => {
+    if (signal?.aborted) throw Object.assign(new Error("Nora request cancelled"), { name: "AbortError", code: "nora_request_cancelled" });
+  };
 
   try {
+    ensureNotCancelled();
     if (!carlosMessage) {
       carlosMessage = await addMessage(conversationId, { actor: "Carlos", content, attachments });
     }
@@ -457,6 +489,7 @@ export const handleCarlosRequest = async ({
       replayed: Boolean(messageId),
     });
 
+    ensureNotCancelled();
     const requestAttachments = await loadRequestAttachments(conversationId, attachments);
     conversation = await getConversation(conversationId);
     const noraSelection = await ensureConversationSelection(conversation);
@@ -474,7 +507,7 @@ export const handleCarlosRequest = async ({
       : getNoraRequestDecisionInstruction();
     phase = "decision";
 
-    const decision = await askNoraForJson(
+    const decision = await requestAskNoraForJson(
       decisionInstruction,
       {
         conversation: conversationForModel(conversation),
@@ -485,6 +518,7 @@ export const handleCarlosRequest = async ({
       },
       noraSelection,
     );
+    ensureNotCancelled();
 
     if (!isObject(decision)) throw new Error("Nora decision must be an object");
     if (typeof decision.action !== "string" || !decision.action.trim()) {
@@ -508,6 +542,7 @@ export const handleCarlosRequest = async ({
       if (typeof decision.response !== "string" || !decision.response.trim()) {
         throw new Error(`Nora ${action} decision requires a response`);
       }
+      ensureNotCancelled();
       const message = await addNoraMessage(conversationId, decision.response);
       refreshNoraStatus();
       return { action, message, workflow: null };
@@ -515,6 +550,7 @@ export const handleCarlosRequest = async ({
 
     phase = "creation";
     if (action === "tool") {
+      ensureNotCancelled();
       const tool = await saveNoraTool(decision.name, decision.source);
       const message = await addNoraMessage(conversationId, creationMessage(decision, `Tool ${tool.name} saved.`));
       refreshNoraStatus();
@@ -522,6 +558,7 @@ export const handleCarlosRequest = async ({
     }
 
     if (action === "skill") {
+      ensureNotCancelled();
       const skill = await saveNoraSkill(decision.name, decision.content);
       const message = await addNoraMessage(conversationId, creationMessage(decision, `Skill ${skill.name} saved.`));
       refreshNoraStatus();
@@ -531,10 +568,11 @@ export const handleCarlosRequest = async ({
     if (action === "create_process") {
       const process = await createNoraProcess({
         process: decision.process,
-        askForJson: askNoraForJson,
+        askForJson: requestAskNoraForJson,
         modelSelection: noraSelection,
         validateModelSelection: validateSelection,
       });
+      ensureNotCancelled();
       const message = await addNoraMessage(
         conversationId,
         creationMessage(decision, `Process ${process.name} saved and ready to reuse.`),
@@ -544,6 +582,7 @@ export const handleCarlosRequest = async ({
     }
 
     if (action === "create_schedule") {
+      ensureNotCancelled();
       const schedule = await createProcessSchedule(decision.schedule);
       const message = await addNoraMessage(
         conversationId,
@@ -556,10 +595,11 @@ export const handleCarlosRequest = async ({
     if (action === "plan") {
       const results = await executeCreationPlan({
         steps: decision.steps,
-        askForJson: askNoraForJson,
+        askForJson: requestAskNoraForJson,
         modelSelection: noraSelection,
         validateModelSelection: validateSelection,
       });
+      ensureNotCancelled();
       const summary = results.map(result => result.name || result.id).filter(Boolean).join(", ");
       const message = await addNoraMessage(
         conversationId,
@@ -584,6 +624,7 @@ export const handleCarlosRequest = async ({
     };
     let workflow;
 
+    ensureNotCancelled();
     if (action === "process") {
       if (!getProcess(decision.process)) throw new Error(`Nora selected unknown Process: ${decision.process}`);
       workflow = await createWorkflow(decision.process, inputs, config);
@@ -591,9 +632,10 @@ export const handleCarlosRequest = async ({
       const definition = await ensureValidGeneratedGraph({
         definition: decision.workflow,
         label: "ad-hoc Workflow",
-        askForJson: askNoraForJson,
+        askForJson: requestAskNoraForJson,
         modelSelection: noraSelection,
       });
+      ensureNotCancelled();
       workflow = await createAdHocWorkflow({ ...definition, inputs, config });
     } else {
       throw new Error(`Unknown Nora action: ${action}`);
@@ -618,6 +660,17 @@ export const handleCarlosRequest = async ({
     refreshNoraStatus();
     return { action, message, workflow: getWorkflow(workflow.id) };
   } catch (error) {
+    if (isCancelledError(error, signal)) {
+      await recordEvent("nora.request_cancelled", {
+        conversationId,
+        messageId: carlosMessage?.id ?? messageId ?? null,
+        workflowId: activeWorkflowId,
+        phase,
+      });
+      refreshNoraStatus();
+      return { action: "cancelled", message: null, workflow: activeWorkflowId ? getWorkflow(activeWorkflowId) : null };
+    }
+
     const failure = await recordRequestFailure({
       conversationId,
       phase,
@@ -645,6 +698,65 @@ export const handleCarlosRequest = async ({
       error: { phase, message: failure },
     };
   }
+};
+
+export const startCarlosRequest = ({ conversationId, messageId, content = null, attachments = [] }) => {
+  const existing = [...requestJobs.values()].find(job => (
+    job.status === "running"
+    && job.conversationId === conversationId
+    && job.messageId === messageId
+  ));
+  if (existing) return publicRequestJob(existing);
+
+  const controller = new AbortController();
+  const job = {
+    id: `request-${randomUUID()}`,
+    conversationId,
+    messageId,
+    status: "running",
+    startedAt: new Date().toISOString(),
+    workflowId: null,
+    controller,
+  };
+  requestJobs.set(job.id, job);
+  refreshNoraStatus();
+
+  void recordEvent("nora.request_job_started", publicRequestJob(job)).catch(() => {});
+  job.promise = handleCarlosRequest({ conversationId, messageId, content, attachments, signal: controller.signal })
+    .then(async result => {
+      job.status = result.action === "cancelled" ? "cancelled" : "completed";
+      job.workflowId = result.workflow?.id ?? null;
+      await recordEvent(`nora.request_job_${job.status}`, {
+        ...publicRequestJob(job),
+        action: result.action,
+      });
+      return result;
+    })
+    .catch(async error => {
+      job.status = isCancelledError(error, controller.signal) ? "cancelled" : "failed";
+      await recordEvent(`nora.request_job_${job.status}`, {
+        ...publicRequestJob(job),
+        error: errorMessage(error),
+      });
+      return null;
+    })
+    .finally(() => {
+      requestJobs.delete(job.id);
+      refreshNoraStatus();
+    });
+
+  return publicRequestJob(job);
+};
+
+export const cancelCarlosRequest = async (requestId, conversationId = null) => {
+  const job = requestJobs.get(requestId);
+  if (!job || job.status !== "running") return false;
+  if (conversationId && job.conversationId !== conversationId) return false;
+  job.controller.abort();
+  job.status = "cancelled";
+  refreshNoraStatus();
+  await recordEvent("nora.request_job_cancel_requested", publicRequestJob(job));
+  return true;
 };
 
 export const selectTaskExecution = async (workflowId, taskId) => {
