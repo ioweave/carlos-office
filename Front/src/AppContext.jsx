@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
-import api, { endpoints, setOfficeStateBridge } from "./api";
+import api, { endpoints } from "./api";
 
 const PAGES = new Set(["office", "chat", "processes", "operations", "capabilities", "store", "providers"]);
 const ACTIVE_PAGE_STORAGE_KEY = "office-active-page-v1";
@@ -12,7 +12,7 @@ const FALLBACK_RETRY_MS = 5_000;
 const WS_RECONNECT_MAX_MS = 15_000;
 
 const EMPTY_OFFICE_STATE = {
-  nora: { provider: "", model: "" },
+  nora: { provider: "", model: "", activeRequests: [] },
   models: [],
   workflows: [],
   approvals: [],
@@ -66,6 +66,7 @@ const AppContext = createContext(null);
 
 export const AppProvider = ({ children }) => {
   const [activePage, setActivePageState] = useState(storedActivePage);
+  const [activeConversationId, setActiveConversationIdState] = useState(storedActiveConversation);
   const [theme, setThemeState] = useState(() => localStorage.getItem(THEME_STORAGE_KEY) || "system");
   const [systemDark, setSystemDark] = useState(systemPrefersDark);
   const [officeState, setOfficeState] = useState(EMPTY_OFFICE_STATE);
@@ -79,20 +80,10 @@ export const AppProvider = ({ children }) => {
   const instanceRef = useRef(null);
   const websocketRef = useRef(null);
   const websocketReadyRef = useRef(false);
-  const revisionWaitersRef = useRef(new Set());
   const conversationRevisionRef = useRef(new Map());
   const conversationRevisionReadyRef = useRef(false);
 
   const effectiveTheme = theme === "system" ? (systemDark ? "dark" : "light") : theme;
-
-  const resolveRevisionWaiters = useCallback(() => {
-    for (const waiter of [...revisionWaitersRef.current]) {
-      if (revisionRef.current <= waiter.baseline) continue;
-      revisionWaitersRef.current.delete(waiter);
-      window.clearTimeout(waiter.timer);
-      waiter.resolve(revisionRef.current);
-    }
-  }, []);
 
   const applyStatePayload = useCallback(payload => {
     if (!payload || payload.ok !== true) return false;
@@ -114,9 +105,8 @@ export const AppProvider = ({ children }) => {
     instanceRef.current = nextInstance;
     setConnected(true);
     setLoading(false);
-    resolveRevisionWaiters();
     return shouldApply;
-  }, [resolveRevisionWaiters]);
+  }, []);
 
   const requestPing = useCallback(async ({ waitMs = 0, signal = null } = {}) => {
     try {
@@ -145,39 +135,37 @@ export const AppProvider = ({ children }) => {
     }
   }, [applyStatePayload]);
 
-  const waitForRevision = useCallback((baseline, timeoutMs = 2_500) => {
-    if (!Number.isSafeInteger(baseline) || revisionRef.current > baseline) {
-      return Promise.resolve(revisionRef.current);
-    }
-
-    return new Promise(resolve => {
-      const waiter = {
-        baseline,
-        resolve,
-        timer: null,
-      };
-      waiter.timer = window.setTimeout(() => {
-        revisionWaitersRef.current.delete(waiter);
-        resolve(revisionRef.current);
-      }, timeoutMs);
-      revisionWaitersRef.current.add(waiter);
-    });
-  }, []);
-
   const refresh = useCallback(async () => {
-    if (websocketReadyRef.current) return;
     await requestPing({ waitMs: 0 });
   }, [requestPing]);
 
-  const setActivePage = value => {
+  const setActivePage = useCallback(value => {
     if (!PAGES.has(value)) return;
     setActivePageState(value);
     try {
       sessionStorage.setItem(ACTIVE_PAGE_STORAGE_KEY, value);
-    } catch {
-      // Session persistence is optional; React context remains authoritative while the app is open.
-    }
-  };
+    } catch {}
+  }, []);
+
+  const markConversationRead = useCallback(conversationId => {
+    if (!conversationId) return;
+    setUnreadConversationIds(current => {
+      if (!current.has(conversationId)) return current;
+      const next = new Set(current);
+      next.delete(conversationId);
+      return next;
+    });
+  }, []);
+
+  const setActiveConversationId = useCallback(conversationId => {
+    const id = typeof conversationId === "string" ? conversationId : "";
+    setActiveConversationIdState(id);
+    try {
+      if (id) sessionStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, id);
+      else sessionStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+    } catch {}
+    if (id) markConversationRead(id);
+  }, [markConversationRead]);
 
   const setTheme = value => {
     if (!["system", "light", "dark"].includes(value)) return;
@@ -190,17 +178,8 @@ export const AppProvider = ({ children }) => {
     setTheme(order[(order.indexOf(theme) + 1) % order.length]);
   };
 
-  const markConversationRead = useCallback(conversationId => {
-    if (!conversationId) return;
-    setUnreadConversationIds(current => {
-      if (!current.has(conversationId)) return current;
-      const next = new Set(current);
-      next.delete(conversationId);
-      return next;
-    });
-  }, []);
-
   const openConversation = conversationId => {
+    setActiveConversationId(conversationId);
     setChatRequest({ conversationId, token: Date.now() });
     setActivePage("chat");
   };
@@ -224,17 +203,7 @@ export const AppProvider = ({ children }) => {
     }
 
     const previous = conversationRevisionRef.current;
-    const activeConversationId = activePage === "chat" ? storedActiveConversation() : "";
-    const changedNoraConversations = [];
-
-    for (const [id, snapshot] of next) {
-      const prior = previous.get(id);
-      if (!prior || snapshot.lastMessageId === prior.lastMessageId || snapshot.lastActor !== "Nora") continue;
-      changedNoraConversations.push([id, snapshot]);
-    }
-
-    const liveSnapshot = changedNoraConversations.find(([id]) => id === activeConversationId)?.[1] ?? null;
-
+    const visibleConversationId = activePage === "chat" ? activeConversationId : "";
     setUnreadConversationIds(current => {
       const unread = new Set(current);
 
@@ -242,30 +211,18 @@ export const AppProvider = ({ children }) => {
         if (!next.has(id)) unread.delete(id);
       }
 
-      for (const [id] of changedNoraConversations) {
-        if (id === activeConversationId) unread.delete(id);
+      for (const [id, snapshot] of next) {
+        const prior = previous.get(id);
+        if (!prior || snapshot.lastMessageId === prior.lastMessageId || snapshot.lastActor !== "Nora") continue;
+        if (id === visibleConversationId) unread.delete(id);
         else unread.add(id);
       }
-
       return unread;
     });
 
-    if (liveSnapshot && activeConversationId) {
-      setChatRequest(current => {
-        if (
-          current?.conversationId === activeConversationId
-          && current?.liveMessageId === liveSnapshot.lastMessageId
-        ) return current;
-        return {
-          conversationId: activeConversationId,
-          liveMessageId: liveSnapshot.lastMessageId,
-          token: Date.now(),
-        };
-      });
-    }
-
+    if (activeConversationId && !next.has(activeConversationId)) setActiveConversationId("");
     conversationRevisionRef.current = next;
-  }, [activePage, officeState.conversations]);
+  }, [activeConversationId, activePage, officeState.conversations, setActiveConversationId]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = effectiveTheme;
@@ -278,14 +235,6 @@ export const AppProvider = ({ children }) => {
     query.addEventListener?.("change", handleChange);
     return () => query.removeEventListener?.("change", handleChange);
   }, []);
-
-  useEffect(() => {
-    setOfficeStateBridge({
-      read: () => ({ state: stateRef.current, revision: revisionRef.current }),
-      waitForRevision,
-    });
-    return () => setOfficeStateBridge(null);
-  }, [waitForRevision]);
 
   useEffect(() => {
     let stopped = false;
@@ -363,10 +312,7 @@ export const AppProvider = ({ children }) => {
         }
       };
 
-      socket.onerror = () => {
-        // onclose owns reconnect/fallback behavior.
-      };
-
+      socket.onerror = () => {};
       socket.onclose = () => {
         if (websocketRef.current === socket) websocketRef.current = null;
         websocketReadyRef.current = false;
@@ -406,12 +352,6 @@ export const AppProvider = ({ children }) => {
       websocketRef.current = null;
       websocketReadyRef.current = false;
       document.removeEventListener("visibilitychange", handleVisibility);
-
-      for (const waiter of revisionWaitersRef.current) {
-        window.clearTimeout(waiter.timer);
-        waiter.resolve(revisionRef.current);
-      }
-      revisionWaitersRef.current.clear();
     };
   }, [applyStatePayload, requestPing]);
 
@@ -419,6 +359,8 @@ export const AppProvider = ({ children }) => {
     <AppContext.Provider value={{
       activePage,
       setActivePage,
+      activeConversationId,
+      setActiveConversationId,
       theme,
       effectiveTheme,
       setTheme,
