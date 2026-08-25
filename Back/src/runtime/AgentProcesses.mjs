@@ -9,14 +9,14 @@ import { getKnowledge } from "../services/KnowledgeService.mjs";
 
 const agentProgram = fileURLToPath(new URL("./AgentProcess.mjs", import.meta.url));
 const active = new Map();
-const activeTaskKeys = new Map();
+const activeInvocationKeys = new Map();
 const DEFAULT_TASK_TIMEOUT_MS = 300_000;
 const MAX_DIAGNOSTIC_STRING_LENGTH = 1_000;
 const MAX_DIAGNOSTIC_ARRAY_LENGTH = 20;
 const MAX_DIAGNOSTIC_DEPTH = 5;
 const SENSITIVE_KEY_PATTERN = /(?:pass(?:word)?|token|secret|api[_-]?key|authorization|cookie|private[_-]?key|credential)/i;
 
-const taskKey = (workflowId, taskId) => `${workflowId}\u0000${taskId}`;
+const invocationKey = (workflowId, taskId, invocationId) => `${workflowId}\u0000${taskId}\u0000${invocationId ?? "single"}`;
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 
 const sameInput = (left, right) => {
@@ -57,11 +57,12 @@ const hasCarlosAuthority = workflowId => {
   return Boolean(config?.conversationId && config?.sourceMessageId);
 };
 
-const approvedToolAction = ({ workflowId, taskId, toolName, input }) => listApprovals("approved").find(
+const approvedToolAction = ({ workflowId, taskId, invocationId, toolName, input }) => listApprovals("approved").find(
   approval => (
     approval.action === `tool:${toolName}`
     && approval.context?.workflowId === workflowId
     && approval.context?.taskId === taskId
+    && (approval.context?.invocationId ?? null) === (invocationId ?? null)
     && sameInput(approval.context?.input, input)
   ),
 ) ?? null;
@@ -132,7 +133,7 @@ const enrichFailedResult = (entry, result) => {
 };
 
 const runTool = async (entry, message) => {
-  const { child, controller, workflowId, taskId } = entry;
+  const { child, controller, workflowId, taskId, invocationId } = entry;
   const { requestId, call } = message;
 
   try {
@@ -142,7 +143,7 @@ const runTool = async (entry, message) => {
 
     const input = call.input ?? {};
     if (tool.requiresApproval && !hasCarlosAuthority(workflowId)) {
-      const approved = approvedToolAction({ workflowId, taskId, toolName: tool.name, input });
+      const approved = approvedToolAction({ workflowId, taskId, invocationId, toolName: tool.name, input });
 
       if (!approved) {
         const authorization = await authorize({
@@ -152,6 +153,7 @@ const runTool = async (entry, message) => {
           context: {
             workflowId,
             taskId,
+            invocationId,
             agentId: entry.id,
             tool: tool.name,
             input: structuredClone(input),
@@ -173,6 +175,7 @@ const runTool = async (entry, message) => {
     const result = await tool.execute(structuredClone(input), {
       workflowId,
       taskId,
+      invocationId,
       agentId: entry.id,
       provider: tool.provider ?? null,
       model: tool.model ?? null,
@@ -181,6 +184,7 @@ const runTool = async (entry, message) => {
     await recordEvent("tool.executed", {
       workflowId,
       taskId,
+      invocationId,
       agentId: entry.id,
       tool: tool.name,
       provider: tool.provider ?? null,
@@ -200,6 +204,7 @@ const runTool = async (entry, message) => {
     recordAgentEvent("tool.failed", {
       workflowId,
       taskId,
+      invocationId,
       agentId: entry.id,
       tool: failure.tool,
       sequence: failure.sequence,
@@ -214,16 +219,16 @@ const runTool = async (entry, message) => {
   }
 };
 
-export const runAgentProcess = ({ workflowId, taskId, task, provider, model, tools, skills }) => {
-  const key = taskKey(workflowId, taskId);
-  const existingAgentId = activeTaskKeys.get(key);
+export const runAgentProcess = ({ workflowId, taskId, invocationId = null, task, provider, model, tools, skills }) => {
+  const key = invocationKey(workflowId, taskId, invocationId);
+  const existingAgentId = activeInvocationKeys.get(key);
   if (existingAgentId) {
     return Promise.reject(new Error(
-      `Task ${taskId} in Workflow ${workflowId} already has an active Agent process (${existingAgentId})`,
+      `Invocation ${invocationId ?? taskId} in Workflow ${workflowId} already has an active Agent process (${existingAgentId})`,
     ));
   }
 
-  activeTaskKeys.set(key, "starting");
+  activeInvocationKeys.set(key, "starting");
 
   return new Promise((resolve, reject) => {
     let child;
@@ -233,7 +238,7 @@ export const runAgentProcess = ({ workflowId, taskId, task, provider, model, too
         serialization: "advanced",
       });
     } catch (error) {
-      activeTaskKeys.delete(key);
+      activeInvocationKeys.delete(key);
       reject(error);
       return;
     }
@@ -247,6 +252,7 @@ export const runAgentProcess = ({ workflowId, taskId, task, provider, model, too
       controller,
       workflowId,
       taskId,
+      invocationId,
       provider,
       model,
       tools: tools.map(tool => tool.name),
@@ -259,11 +265,12 @@ export const runAgentProcess = ({ workflowId, taskId, task, provider, model, too
       timeoutTimer: null,
     };
     active.set(id, entry);
-    activeTaskKeys.set(key, id);
+    activeInvocationKeys.set(key, id);
 
     recordAgentEvent("agent.started", {
       workflowId,
       taskId,
+      invocationId,
       agentId: id,
       pid: child.pid,
       provider,
@@ -276,7 +283,7 @@ export const runAgentProcess = ({ workflowId, taskId, task, provider, model, too
       entry.settled = true;
       if (entry.timeoutTimer !== null) clearTimeout(entry.timeoutTimer);
       active.delete(id);
-      if (activeTaskKeys.get(key) === id) activeTaskKeys.delete(key);
+      if (activeInvocationKeys.get(key) === id) activeInvocationKeys.delete(key);
 
       const result = rawResult.status === "failed"
         ? enrichFailedResult(entry, rawResult)
@@ -285,12 +292,13 @@ export const runAgentProcess = ({ workflowId, taskId, task, provider, model, too
       recordAgentEvent("agent.stopped", {
         workflowId,
         taskId,
+        invocationId,
         agentId: id,
         pid: child.pid,
         status: result.status,
         ...(result.status === "failed" ? { error: result.error, diagnostics: result.diagnostics } : {}),
       });
-      resolve({ ...result, agentId: id, pid: child.pid });
+      resolve({ ...result, agentId: id, pid: child.pid, invocationId });
     };
 
     if (timeoutMs !== null) {
@@ -375,6 +383,7 @@ export const listActiveAgents = () => [...active.values()].map(entry => ({
   name: entry.id,
   status: entry.status,
   taskId: entry.taskId,
+  invocationId: entry.invocationId,
   provider: entry.provider,
   model: entry.model,
   tools: [...entry.tools],
