@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { watch } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { subscribeOfficeStateChanges } from "./OfficeStateBus.mjs";
 
+const here = dirname(fileURLToPath(import.meta.url));
+const vaultDir = resolve(here, "../../ObsidianVault");
 const DEFAULT_DOMAINS = [
   "nora",
   "models",
@@ -13,6 +18,7 @@ const DEFAULT_DOMAINS = [
   "attachments",
   "artifacts",
 ];
+const WATCH_DEBOUNCE_MS = 30;
 
 const normalizeDomains = domains => {
   const values = Array.isArray(domains) ? domains : [domains];
@@ -31,8 +37,8 @@ const normalizeDomains = domains => {
 
 /**
  * Central, revisioned application-state cache shared by /ping and WebSocket transports.
- * Controllers notify the process-local OfficeStateBus after durable mutations; this service
- * refreshes only those domains and pushes a revision to connected clients.
+ * Runtime events and durable-file watchers invalidate only affected domains; no periodic state
+ * scanning or external cache is required.
  */
 export const createOfficeStateService = ({
   nora,
@@ -47,10 +53,12 @@ export const createOfficeStateService = ({
   const instance = randomUUID();
   const cache = new Map();
   const listeners = new Set();
+  const watchers = [];
   let revision = 0;
   let initialized = false;
   let initializePromise = null;
   let refreshQueue = Promise.resolve();
+  let watchersStarted = false;
 
   const conversationResourceMap = async listResource => {
     const records = conversations.listConversations();
@@ -140,12 +148,57 @@ export const createOfficeStateService = ({
     return next;
   };
 
+  const watchDurableState = (path, domains, recursive = true) => {
+    let timer = null;
+    try {
+      const watcher = watch(path, { recursive }, () => {
+        if (timer !== null) clearTimeout(timer);
+        timer = setTimeout(() => {
+          timer = null;
+          void invalidate(domains).catch(error => {
+            console.error("[office-state] Could not refresh watched state.", {
+              path,
+              domains,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }, WATCH_DEBOUNCE_MS);
+      });
+      watcher.on("error", error => {
+        console.error("[office-state] State watcher failed.", {
+          path,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+      watchers.push({
+        close: () => {
+          if (timer !== null) clearTimeout(timer);
+          watcher.close();
+        },
+      });
+    } catch (error) {
+      console.error("[office-state] Could not watch durable state.", {
+        path,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  const startWatchers = () => {
+    if (watchersStarted) return;
+    watchersStarted = true;
+    watchDurableState(resolve(vaultDir, "Conversations"), ["conversations"]);
+    watchDurableState(resolve(vaultDir, "System/Workflows"), ["workflows"]);
+    watchDurableState(resolve(vaultDir, "System/Runtime/Authorizations"), ["approvals"]);
+  };
+
   const initialize = () => {
     if (initialized) return Promise.resolve();
     if (initializePromise) return initializePromise;
 
     initializePromise = invalidate(DEFAULT_DOMAINS).then(() => {
       initialized = true;
+      startWatchers();
     }).finally(() => {
       initializePromise = null;
     });
@@ -166,7 +219,7 @@ export const createOfficeStateService = ({
     const immediate = createResponse(since, clientInstance);
     if (immediate.reset || immediate.changed.length || waitMs === 0 || signal?.aborted) return immediate;
 
-    return new Promise(resolve => {
+    return new Promise(resolvePromise => {
       let settled = false;
       let timer = null;
       let unsubscribe = null;
@@ -177,7 +230,7 @@ export const createOfficeStateService = ({
         if (timer !== null) clearTimeout(timer);
         signal?.removeEventListener("abort", handleAbort);
         unsubscribe?.();
-        resolve(payload);
+        resolvePromise(payload);
       };
       const handleAbort = () => finish(null);
       const handleRevision = () => {
@@ -210,6 +263,8 @@ export const createOfficeStateService = ({
 
   const dispose = () => {
     unsubscribeBus();
+    for (const watcher of watchers) watcher.close();
+    watchers.length = 0;
     listeners.clear();
   };
 
