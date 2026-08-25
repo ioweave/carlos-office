@@ -112,11 +112,20 @@ const mapWithConcurrency = async (items, concurrency, mapper) => {
   return results;
 };
 
+const localHost = hostname => ["localhost", "127.0.0.1", "::1"].includes(hostname);
+
 export const createOllamaProvider = ({
   baseUrl = "http://localhost:11434/api",
   apiKey = null,
 } = {}) => {
   const apiUrl = normalizeBaseUrl(baseUrl);
+  const endpointIsCloud = (() => {
+    try {
+      return !localHost(new URL(apiUrl).hostname);
+    } catch {
+      return false;
+    }
+  })();
 
   const provider = {
     name: "ollama",
@@ -183,7 +192,7 @@ export const createOllamaProvider = ({
 
         return {
           name,
-          location: /(?:^|[-:])cloud$/i.test(name) ? "cloud" : "local",
+          location: endpointIsCloud || /(?:^|[-:])cloud$/i.test(name) ? "cloud" : "local",
           details: shown?.details ?? tagged.details ?? null,
           capabilities: Array.isArray(shown?.capabilities) ? shown.capabilities : null,
           modelInfo: shown?.model_info ?? null,
