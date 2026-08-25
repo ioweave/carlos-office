@@ -115,6 +115,56 @@
   font-size: 12px;
 }
 
+.workflow-failure-banner {
+  display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 32px 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 45%, var(--color-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-danger) 7%, var(--color-surface));
+  color: var(--color-danger);
+  text-align: left;
+}
+
+.workflow-failure-banner:hover {
+  background: color-mix(in srgb, var(--color-danger) 11%, var(--color-surface));
+}
+
+.workflow-failure-banner__copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.workflow-failure-banner__copy strong,
+.workflow-failure-banner__copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-failure-banner__copy strong {
+  color: var(--color-text);
+  font-size: 11px;
+}
+
+.workflow-failure-banner__copy small {
+  color: var(--color-text-muted);
+  font-size: 9px;
+}
+
+.workflow-failure-banner__action {
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: 700;
+}
+
 .operations-studio > .page-tabs {
   flex: 0 0 auto;
   align-self: flex-start;
@@ -204,6 +254,58 @@
 }
 
 .operations-studio__tasks .definition-list strong {
+  overflow-wrap: anywhere;
+}
+
+.task-failure-insight {
+  margin: 12px 0 4px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 42%, var(--color-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-danger) 6%, var(--color-surface));
+}
+
+.task-failure-insight__heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  color: var(--color-danger);
+}
+
+.task-failure-insight__heading > div {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.task-failure-insight__heading span {
+  color: var(--color-danger);
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.task-failure-insight__heading strong {
+  color: var(--color-text);
+  font-size: 10px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.task-failure-insight pre {
+  max-height: 260px;
+  margin: 9px 0 0;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--color-surface-soft);
+  color: var(--color-text-muted);
+  font-size: 9px;
+  line-height: 1.5;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
@@ -388,6 +490,13 @@
   white-space: pre-wrap;
 }
 
+.attempt-card__body .attempt-card__error {
+  border: 1px solid color-mix(in srgb, var(--color-danger) 28%, var(--color-border));
+  background: color-mix(in srgb, var(--color-danger) 5%, var(--color-surface-soft));
+  color: var(--color-text);
+  line-height: 1.5;
+}
+
 .operations-activity,
 .operations-data {
   margin: 18px 32px 36px;
@@ -424,6 +533,10 @@
   background: var(--color-accent);
 }
 
+.event-row--error .event-row__dot {
+  background: var(--color-danger);
+}
+
 .event-row > div {
   display: flex;
   min-width: 0;
@@ -439,6 +552,14 @@
 .event-row small {
   color: var(--color-text-faint);
   font-size: 9px;
+}
+
+.event-row code {
+  margin-top: 2px;
+  color: var(--color-danger);
+  font-size: 9px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .event-row small {
@@ -512,6 +633,15 @@
 
   .operations-summary > div:nth-child(-n + 2) {
     border-bottom: 1px solid var(--color-border);
+  }
+
+  .workflow-failure-banner {
+    margin-right: 18px;
+    margin-left: 18px;
+  }
+
+  .workflow-failure-banner__action {
+    display: none;
   }
 
   .operations-studio__tasks > .inspector-panel {
