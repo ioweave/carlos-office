@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
 
+import "../styles/table.scss";
+
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 
 const valueFor = (row, definition) => (
