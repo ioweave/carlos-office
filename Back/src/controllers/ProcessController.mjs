@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { recordEvent } from "./EventController.mjs";
 import { atomicWriteFile } from "../lib/AtomicFile.mjs";
+import { notifyOfficeStateChanged } from "../services/OfficeStateBus.mjs";
 import { validateGraph, validateProcessDefinition } from "../services/WorkflowGraphService.mjs";
 
 export { validateGraph, validateProcessDefinition } from "../services/WorkflowGraphService.mjs";
@@ -16,24 +17,15 @@ const processes = new Map();
 const workflows = new Map();
 const workflowWrites = new Map();
 const deletedWorkflowIds = new Set();
-const TASK_STATUSES = new Set([
-  "pending", "ready", "running", "blocked", "completed", "failed", "skipped", "cancelled",
-]);
+const TASK_STATUSES = new Set(["pending", "ready", "running", "blocked", "completed", "failed", "skipped", "cancelled"]);
 const RESUMABLE_TASK_STATUSES = new Set(["blocked", "failed", "cancelled"]);
-
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 
 const validateFileName = (value, label) => {
-  if (
-    typeof value !== "string"
-    || !value.trim()
-    || value.trim() !== value
-    || value === "."
-    || value === ".."
-    || /[<>:"/\\|?*\u0000-\u001F]/.test(value)
-  ) throw new Error(`Invalid ${label}: ${value}`);
+  if (typeof value !== "string" || !value.trim() || value.trim() !== value || value === "." || value === ".." || /[<>:"/\\|?*\u0000-\u001F]/.test(value)) {
+    throw new Error(`Invalid ${label}: ${value}`);
+  }
 };
-
 const hasTask = (graph, taskId) => Object.prototype.hasOwnProperty.call(graph.tasks, taskId);
 const uniqueEdges = edges => {
   const seen = new Set();
@@ -44,7 +36,6 @@ const uniqueEdges = edges => {
     return true;
   });
 };
-
 const createWorkflowId = () => {
   let id;
   do {
@@ -65,23 +56,15 @@ const validateLayout = (workflow, layout) => {
     if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) throw new Error(`Invalid Workflow position for Task: ${taskId}`);
   }
 };
-
 const normalizeLayout = (workflow, layout) => {
   validateLayout(workflow, layout);
-  return Object.fromEntries(Object.entries(layout ?? {}).map(([taskId, position]) => [
-    taskId,
-    { x: Math.round(Number(position.x)), y: Math.round(Number(position.y)) },
-  ]));
+  return Object.fromEntries(Object.entries(layout ?? {}).map(([taskId, position]) => [taskId, { x: Math.round(Number(position.x)), y: Math.round(Number(position.y)) }]));
 };
-
 const normalizeGroups = groups => (Array.isArray(groups) ? groups : []).map(group => {
   const normalized = structuredClone(group);
-  for (const key of ["x", "y", "width", "height"]) {
-    if (normalized[key] != null) normalized[key] = Math.round(Number(normalized[key]));
-  }
+  for (const key of ["x", "y", "width", "height"]) if (normalized[key] != null) normalized[key] = Math.round(Number(normalized[key]));
   return normalized;
 });
-
 const validateWorkflow = workflow => {
   if (!isObject(workflow)) throw new Error("Workflow must be an object");
   validateFileName(workflow.id, "workflow ID");
@@ -90,7 +73,6 @@ const validateWorkflow = workflow => {
   validateLayout(workflow, workflow.layout);
   if (workflow.archivedTasks != null && !Array.isArray(workflow.archivedTasks)) throw new Error(`Workflow ${workflow.id} archivedTasks must be an array`);
 };
-
 const validateAttempt = attempt => {
   if (!isObject(attempt)) throw new Error("Task Attempt must be an object");
   if (!attempt.id || typeof attempt.id !== "string") throw new Error("Task Attempt must have an ID");
@@ -98,7 +80,6 @@ const validateAttempt = attempt => {
   if (!attempt.status || typeof attempt.status !== "string") throw new Error("Task Attempt must have a status");
   if (attempt.invocations != null && !Array.isArray(attempt.invocations)) throw new Error("Task Attempt invocations must be an array");
 };
-
 const processPath = name => {
   validateFileName(name, "process name");
   return resolve(processesDir, `${name}.md`);
@@ -113,7 +94,6 @@ const parseProcess = (content, filename) => {
   if (!match) throw new Error(`Process file ${filename} does not contain a Carlos Office JSON definition`);
   return JSON.parse(match[1]);
 };
-
 const persistWorkflow = async workflow => {
   const id = workflow.id;
   if (deletedWorkflowIds.has(id)) throw new Error(`Workflow ${id} was deleted`);
@@ -127,14 +107,12 @@ const persistWorkflow = async workflow => {
     if (workflowWrites.get(id) === next) workflowWrites.delete(id);
   }
 };
-
 const commitWorkflow = async workflow => {
   validateWorkflow(workflow);
   await persistWorkflow(workflow);
   if (deletedWorkflowIds.has(workflow.id)) throw new Error(`Workflow ${workflow.id} was deleted`);
   workflows.set(workflow.id, workflow);
 };
-
 const recordLoadFailure = async (type, filename, error) => {
   const message = error instanceof Error ? error.message : String(error);
   console.error(`[${type}] Could not load persisted record.`, { filename, message });
@@ -142,7 +120,6 @@ const recordLoadFailure = async (type, filename, error) => {
     console.error(`[${type}] Could not record load failure.`, { filename, message: eventError instanceof Error ? eventError.message : String(eventError) });
   }
 };
-
 const requireWorkflow = id => {
   const workflow = workflows.get(id);
   if (!workflow) throw new Error(`Unknown workflow: ${id}`);
@@ -170,7 +147,6 @@ const dependenciesComplete = (workflow, taskId) => {
   if (!dependencies.length) return false;
   return dependencies.every(dependencyId => ["completed", "skipped"].includes(workflow.tasks[dependencyId]?.status));
 };
-
 const stalledDiagnostics = workflow => Object.entries(workflow.tasks)
   .filter(([, task]) => task.type === "task" && task.status === "pending")
   .map(([taskId]) => ({
@@ -179,24 +155,19 @@ const stalledDiagnostics = workflow => Object.entries(workflow.tasks)
       .filter(id => !["completed", "skipped"].includes(workflow.tasks[id]?.status))
       .map(id => ({ taskId: id, status: workflow.tasks[id]?.status ?? "missing" })),
   }));
-
 const refreshWorkflow = workflow => {
   if (["pending", "cancelled", "paused"].includes(workflow.status)) return;
-
   for (const [taskId, task] of Object.entries(workflow.tasks)) {
     if (task.type !== "task" || !["pending", "ready"].includes(task.status)) continue;
     task.status = dependenciesComplete(workflow, taskId) ? "ready" : "pending";
   }
-
   const endTask = workflow.tasks[workflow.end];
   if (endTask.status !== "completed" && dependenciesComplete(workflow, workflow.end)) endTask.status = "completed";
-
   if (endTask.status === "completed") {
     workflow.status = "completed";
     delete workflow.stalled;
     return;
   }
-
   const tasks = Object.values(workflow.tasks).filter(task => task.type === "task");
   if (tasks.some(task => ["running", "ready"].includes(task.status))) {
     workflow.status = "running";
@@ -213,7 +184,6 @@ const refreshWorkflow = workflow => {
     delete workflow.stalled;
     return;
   }
-
   workflow.status = "stalled";
   workflow.stalled = {
     at: workflow.stalled?.at || new Date().toISOString(),
@@ -221,7 +191,6 @@ const refreshWorkflow = workflow => {
     tasks: stalledDiagnostics(workflow),
   };
 };
-
 const createRuntimeTasks = (tasks, start, end) => {
   const runtimeTasks = {};
   for (const [taskId, task] of Object.entries(tasks)) {
@@ -231,7 +200,6 @@ const createRuntimeTasks = (tasks, start, end) => {
   }
   return runtimeTasks;
 };
-
 const storeNewWorkflow = async workflow => {
   await commitWorkflow(workflow);
   await recordEvent("workflow.created", { workflowId: workflow.id, process: workflow.process });
@@ -290,7 +258,6 @@ export const deleteProcess = async name => {
   await recordEvent("process.deleted", { process: name });
   return true;
 };
-
 export const loadWorkflows = async () => {
   await mkdir(workflowsDir, { recursive: true });
   workflows.clear();
@@ -314,7 +281,6 @@ export const getWorkflow = id => {
   return workflow ? structuredClone(workflow) : null;
 };
 export const listWorkflows = () => [...workflows.values()].map(workflow => structuredClone(workflow));
-
 export const createWorkflow = async (processName, inputs = {}, config = {}) => {
   const process = processes.get(processName);
   if (!process) throw new Error(`Unknown process: ${processName}`);
@@ -336,7 +302,6 @@ export const createAdHocWorkflow = async ({ start, end, tasks, edges, groups = [
     tasks: createRuntimeTasks(tasks, start, end), edges: structuredClone(edges), groups: normalizeGroups(groups), layout: {}, archivedTasks: [], result: null,
   });
 };
-
 export const startWorkflow = async workflowId => {
   const draft = structuredClone(requireWorkflow(workflowId));
   if (draft.status !== "pending") return structuredClone(draft);
@@ -350,7 +315,6 @@ export const startWorkflow = async workflowId => {
 export const getReadyTasks = workflowId => Object.entries(requireWorkflow(workflowId).tasks)
   .filter(([, task]) => task.type === "task" && task.status === "ready")
   .map(([id, task]) => ({ id, ...structuredClone(task) }));
-
 export const markWorkflowStalled = async workflowId => {
   const draft = structuredClone(requireWorkflow(workflowId));
   if (["completed", "cancelled", "failed", "paused", "blocked"].includes(draft.status)) return structuredClone(draft);
@@ -364,7 +328,6 @@ export const markWorkflowStalled = async workflowId => {
   await recordEvent("workflow.stalled", { workflowId, diagnostics: draft.stalled });
   return structuredClone(draft);
 };
-
 export const setTaskStatus = async (workflowId, taskId, status) => {
   if (!TASK_STATUSES.has(status)) throw new Error(`Invalid task status: ${status}`);
   const draft = structuredClone(requireWorkflow(workflowId));
@@ -381,7 +344,6 @@ export const setTaskStatus = async (workflowId, taskId, status) => {
   if (previousWorkflowStatus !== "stalled" && draft.status === "stalled") await recordEvent("workflow.stalled", { workflowId, diagnostics: draft.stalled });
   return structuredClone(task);
 };
-
 export const addTaskAttempt = async (workflowId, taskId, attempt) => {
   validateAttempt(attempt);
   const draft = structuredClone(requireWorkflow(workflowId));
@@ -399,7 +361,7 @@ export const getTaskAttempt = (workflowId, taskId, attemptId) => {
   return attempt ? structuredClone(attempt) : null;
 };
 export const listTaskAttempts = (workflowId, taskId) => structuredClone(requireExecutableTask(requireWorkflow(workflowId), taskId).attempts ?? []);
-export const updateTaskAttempt = async (workflowId, taskId, attemptId, changes) => {
+const applyAttemptChanges = (workflowId, taskId, attemptId, changes) => {
   if (!isObject(changes)) throw new Error("Task Attempt changes must be an object");
   const draft = structuredClone(requireWorkflow(workflowId));
   const task = requireExecutableTask(draft, taskId);
@@ -409,7 +371,18 @@ export const updateTaskAttempt = async (workflowId, taskId, attemptId, changes) 
   const updated = { ...current, ...structuredClone(changes), id: current.id, attempt: current.attempt };
   validateAttempt(updated);
   task.attempts[index] = updated;
+  return { draft, updated };
+};
+export const updateTaskAttempt = async (workflowId, taskId, attemptId, changes) => {
+  const { draft, updated } = applyAttemptChanges(workflowId, taskId, attemptId, changes);
   await commitWorkflow(draft);
+  return structuredClone(updated);
+};
+export const updateTaskAttemptRuntime = (workflowId, taskId, attemptId, changes) => {
+  const { draft, updated } = applyAttemptChanges(workflowId, taskId, attemptId, changes);
+  validateWorkflow(draft);
+  workflows.set(workflowId, draft);
+  notifyOfficeStateChanged("workflows");
   return structuredClone(updated);
 };
 
@@ -474,7 +447,6 @@ export const cancelTask = async (workflowId, taskId) => {
   await recordEvent("workflow.paused", { workflowId, taskId });
   return structuredClone(draft);
 };
-
 export const setWorkflowEdges = async (workflowId, edges) => {
   if (!Array.isArray(edges)) throw new Error("Workflow edges must be an array");
   const draft = structuredClone(requireEditableWorkflow(workflowId));
@@ -525,7 +497,6 @@ export const setWorkflowConfig = async (workflowId, config) => {
   await recordEvent(legacyLayout != null ? "workflow.layout_changed" : "workflow.config_changed", { workflowId });
   return structuredClone(draft);
 };
-
 export const pauseWorkflow = async workflowId => {
   const draft = structuredClone(requireWorkflow(workflowId));
   if (draft.status === "completed") throw new Error("Completed workflows cannot be stopped");
