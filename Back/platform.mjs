@@ -4,6 +4,8 @@ import config from "./src/config.mjs";
 import { createRouter } from "./src/Router.mjs";
 import { stopNora } from "./src/runtime/NoraProcess.mjs";
 import { loadKnowledge } from "./src/services/KnowledgeService.mjs";
+import { createOfficeStateService } from "./src/services/OfficeStateService.mjs";
+import { attachOfficeStateWebSocket } from "./src/services/OfficeStateWebSocketService.mjs";
 import { prepareVaultStructure } from "./src/services/VaultMaintenanceService.mjs";
 import { reconcileInterruptedWorkflows } from "./src/services/WorkflowRecoveryService.mjs";
 
@@ -92,21 +94,62 @@ const providerResources = createProviderResourceController({
 const credentials = createCredentialController({ allowedOrigin: config.frontendOrigin });
 const knowledge = createKnowledgeController({ allowedOrigin: config.frontendOrigin });
 const variables = createVariableController({ allowedOrigin: config.frontendOrigin });
-const officeState = createOfficeStateController({
-  allowedOrigin: config.frontendOrigin,
-  noraRegistry,
+
+const officeStateService = createOfficeStateService({
   nora,
   processes,
   conversations,
   authorization,
-  schedules,
-  events,
-  tools,
-  skills,
   engine,
+  skills,
+  attachments,
+  artifacts,
+});
+await officeStateService.initialize();
+
+const officeState = createOfficeStateController({
+  allowedOrigin: config.frontendOrigin,
+  noraRegistry,
+  nora,
+  service: officeStateService,
 });
 
+const mutationDomains = req => {
+  const method = String(req.method || "GET").toUpperCase();
+  if (["GET", "HEAD", "OPTIONS"].includes(method)) return [];
+
+  let pathname = "";
+  try {
+    pathname = new URL(req.url, `http://${req.headers.host ?? "localhost"}`).pathname;
+  } catch {
+    return [];
+  }
+
+  if (pathname.startsWith("/conversations")) {
+    return ["conversations", "attachments", "artifacts", "workflows", "nora"];
+  }
+  if (pathname.startsWith("/workflows")) return ["workflows", "agents", "nora"];
+  if (pathname.startsWith("/approvals")) return ["approvals", "workflows", "agents", "nora"];
+  if (pathname.startsWith("/providers")) return ["models", "nora"];
+  if (pathname.startsWith("/skills")) return ["skillsRevision"];
+  if (pathname === "/nora") return ["nora", "models"];
+  return [];
+};
+
 const server = createServer((req, res) => {
+  const domains = mutationDomains(req);
+  if (domains.length) {
+    res.once("finish", () => {
+      void officeStateService.invalidate(domains).catch(error => {
+        console.error("[office-state] Could not refresh state after HTTP mutation.", {
+          method: req.method,
+          url: req.url,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+    });
+  }
+
   if (conversationResources.matches(req)) {
     void conversationResources.handle(req, res);
     return;
@@ -134,6 +177,12 @@ const server = createServer((req, res) => {
   void router(req, res);
 });
 
+const officeStateSocket = attachOfficeStateWebSocket({
+  server,
+  allowedOrigin: config.frontendOrigin,
+  service: officeStateService,
+});
+
 server.listen(config.port, config.host, () => {
   console.log(`Carlos Office platform listening on http://${config.host}:${config.port}`);
 });
@@ -142,6 +191,8 @@ schedules.startScheduler(runScheduledWorkflow);
 
 const shutdown = () => {
   schedules.stopScheduler();
+  officeStateSocket.close();
+  officeStateService.dispose();
   engine.shutdownProcessEngine();
   stopNora();
   server.close(() => process.exit(0));
