@@ -727,15 +727,17 @@ export const inspectWorkflow = workflowId => {
   };
 };
 
-const completedOutput = task => [...(task?.attempts ?? [])]
-  .reverse()
-  .find(attempt => attempt.status === "completed" && attempt.output != null)
-  ?.output;
+const completedValue = task => {
+  const attempt = [...(task?.attempts ?? [])]
+    .reverse()
+    .find(item => item.status === "completed" && (item.data != null || item.output != null));
+  return attempt?.data != null ? attempt.data : attempt?.output;
+};
 
 const completedWorkflowResult = workflow => {
   const finalOutputs = workflow.edges
     .filter(([, to]) => to === workflow.end)
-    .map(([from]) => [from, completedOutput(workflow.tasks[from])])
+    .map(([from]) => [from, completedValue(workflow.tasks[from])])
     .filter(([, output]) => output != null);
 
   if (finalOutputs.length === 1) return finalOutputs[0][1];
@@ -743,7 +745,7 @@ const completedWorkflowResult = workflow => {
 
   const outputs = Object.entries(workflow.tasks)
     .filter(([, task]) => task.type === "task")
-    .map(([taskId, task]) => [taskId, completedOutput(task)])
+    .map(([taskId, task]) => [taskId, completedValue(task)])
     .filter(([, output]) => output != null);
 
   if (outputs.length === 1) return outputs[0][1];
@@ -784,6 +786,7 @@ export const promoteWorkflow = async (workflowId, { name, purpose = null }) => {
         agent: _legacyAgent,
         blockedReason: _blockedReason,
         error: _error,
+        resumeCheckpointAttemptId: _resumeCheckpointAttemptId,
         ...definition
       } = task;
       return [taskId, definition];
@@ -798,6 +801,8 @@ export const promoteWorkflow = async (workflowId, { name, purpose = null }) => {
       end: workflow.end,
       tasks: cleanTasks,
       edges: workflow.edges,
+      groups: structuredClone(workflow.groups ?? []),
+      layout: structuredClone(workflow.layout ?? {}),
     },
     askForJson: askNoraForJson,
     modelSelection: getWorkflowNoraSelection(workflow),

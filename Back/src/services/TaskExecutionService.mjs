@@ -5,7 +5,6 @@ import { getTaskExecutionGroups } from "./WorkflowGraphService.mjs";
 const limiterStates = new Map();
 
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const clone = value => value === undefined ? undefined : structuredClone(value);
 
 const errorResult = (message, phase, code, extra = {}) => ({
@@ -88,6 +87,30 @@ const normalizeAgentCompletion = result => {
 
 const limiterKey = (workflowId, groupId) => `${workflowId}\u0000${groupId}`;
 
+const pruneStarts = limiter => {
+  if (!limiter.throttle) return;
+  const threshold = Date.now() - limiter.throttle.windowMs;
+  limiter.starts = limiter.starts.filter(startedAt => startedAt > threshold);
+};
+
+const scheduleLimiterCleanup = limiter => {
+  if (limiter.active || limiter.queue.length) return;
+  pruneStarts(limiter);
+  if (!limiter.throttle || !limiter.starts.length) {
+    if (limiterStates.get(limiter.key) === limiter) limiterStates.delete(limiter.key);
+    if (limiter.cleanupTimer) clearTimeout(limiter.cleanupTimer);
+    limiter.cleanupTimer = null;
+    return;
+  }
+
+  if (limiter.cleanupTimer) clearTimeout(limiter.cleanupTimer);
+  const delay = Math.max(25, limiter.starts[0] + limiter.throttle.windowMs - Date.now() + 5);
+  limiter.cleanupTimer = setTimeout(() => {
+    limiter.cleanupTimer = null;
+    scheduleLimiterCleanup(limiter);
+  }, delay);
+};
+
 const getLimiter = (workflowId, group) => {
   const key = limiterKey(workflowId, group.id);
   const signature = JSON.stringify({
@@ -96,13 +119,16 @@ const getLimiter = (workflowId, group) => {
   });
   let limiter = limiterStates.get(key);
   if (!limiter || limiter.signature !== signature) {
+    if (limiter?.cleanupTimer) clearTimeout(limiter.cleanupTimer);
     limiter = {
+      key,
       signature,
       concurrency: group.concurrency,
       throttle: group.throttle ?? null,
       active: 0,
       starts: [],
       queue: [],
+      cleanupTimer: null,
     };
     limiterStates.set(key, limiter);
   }
@@ -117,17 +143,18 @@ const waitForLimiter = async (limiter, isCancelled) => {
   while (true) {
     if (isCancelled()) throw Object.assign(new Error("Workflow stopped"), { cancelled: true });
     const now = Date.now();
-    const throttle = limiter.throttle;
-    if (throttle) {
-      const threshold = now - throttle.windowMs;
-      limiter.starts = limiter.starts.filter(startedAt => startedAt > threshold);
-    }
+    pruneStarts(limiter);
 
+    const throttle = limiter.throttle;
     const capacityReady = limiter.active < limiter.concurrency;
     const rateReady = !throttle || limiter.starts.length < throttle.requests;
     if (capacityReady && rateReady) {
       limiter.active += 1;
       if (throttle) limiter.starts.push(now);
+      if (limiter.cleanupTimer) {
+        clearTimeout(limiter.cleanupTimer);
+        limiter.cleanupTimer = null;
+      }
       return;
     }
 
@@ -158,6 +185,7 @@ const withOneLimiter = async (workflowId, group, operation, isCancelled) => {
   } finally {
     limiter.active = Math.max(0, limiter.active - 1);
     wakeLimiter(limiter);
+    scheduleLimiterCleanup(limiter);
   }
 };
 
@@ -341,7 +369,8 @@ export const executeTaskWithGroups = async ({
   };
 
   const wrapMap = (group, inner) => async context => {
-    const source = getPath(context.input, group.source);
+    const resolved = getPath(context.input, group.source);
+    const source = resolved === undefined ? getPath(workflow.inputs, group.source) : resolved;
     if (!Array.isArray(source)) {
       return errorResult(
         `Map Group ${group.id} source ${group.source} did not resolve to an array`,
@@ -445,7 +474,9 @@ export const executeTaskWithGroups = async ({
 };
 
 export const clearWorkflowExecutionLimiters = workflowId => {
-  for (const key of [...limiterStates.keys()]) {
-    if (key.startsWith(`${workflowId}\u0000`)) limiterStates.delete(key);
+  for (const [key, limiter] of [...limiterStates.entries()]) {
+    if (!key.startsWith(`${workflowId}\u0000`)) continue;
+    if (limiter.cleanupTimer) clearTimeout(limiter.cleanupTimer);
+    limiterStates.delete(key);
   }
 };

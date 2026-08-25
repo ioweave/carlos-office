@@ -23,7 +23,6 @@ import * as nora from "./src/controllers/NoraController.mjs";
 import { createOfficeStateController } from "./src/controllers/OfficeStateController.mjs";
 import * as processes from "./src/controllers/ProcessController.mjs";
 import * as providers from "./src/controllers/ProviderController.mjs";
-import { createProviderResourceController } from "./src/controllers/ProviderResourceController.mjs";
 import * as schedules from "./src/controllers/ScheduleController.mjs";
 import { createVariableController } from "./src/controllers/VariableController.mjs";
 import * as engine from "./src/services/ProcessEngine.mjs";
@@ -87,9 +86,8 @@ const conversationResources = conversations.createConversationResourceController
   allowedOrigin: config.frontendOrigin,
   nora,
 });
-const providerResources = createProviderResourceController({
+const providerResources = providers.createProviderResourceController({
   allowedOrigin: config.frontendOrigin,
-  providers,
 });
 const credentials = createCredentialController({ allowedOrigin: config.frontendOrigin });
 const knowledge = createKnowledgeController({ allowedOrigin: config.frontendOrigin });
@@ -136,50 +134,6 @@ const mutationDomains = req => {
   return [];
 };
 
-const workflowDesignMatch = req => {
-  if (String(req.method || "GET").toUpperCase() !== "PATCH") return null;
-  let pathname;
-  try {
-    pathname = new URL(req.url, `http://${req.headers.host ?? "localhost"}`).pathname;
-  } catch {
-    return null;
-  }
-  const match = pathname.match(/^\/workflows\/([^/]+)\/design$/);
-  return match ? decodeURIComponent(match[1]) : null;
-};
-
-const handleWorkflowDesign = async (req, res, workflowId) => {
-  const origin = req.headers.origin ?? null;
-  const cors = {
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "PATCH,OPTIONS",
-    ...(origin ? { "Access-Control-Allow-Origin": origin, Vary: "Origin" } : {}),
-  };
-  const send = (status, body) => {
-    res.writeHead(status, { ...cors, "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify(body));
-  };
-
-  if (origin && origin !== config.frontendOrigin) return send(403, { error: "Origin not allowed" });
-
-  try {
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      return send(400, { error: "Workflow design must be an object" });
-    }
-    return send(200, await processes.setWorkflowDesign(workflowId, {
-      ...(Object.prototype.hasOwnProperty.call(body, "layout") ? { layout: body.layout } : {}),
-      ...(Object.prototype.hasOwnProperty.call(body, "groups") ? { groups: body.groups } : {}),
-    }));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const status = /Unknown workflow/i.test(message) ? 404 : /running|invalid|must|cannot|references/i.test(message) ? 400 : 500;
-    return send(status, { error: message });
-  }
-};
-
 const server = createServer((req, res) => {
   const domains = mutationDomains(req);
   if (domains.length) {
@@ -194,11 +148,6 @@ const server = createServer((req, res) => {
     });
   }
 
-  const workflowDesignId = workflowDesignMatch(req);
-  if (workflowDesignId) {
-    void handleWorkflowDesign(req, res, workflowDesignId);
-    return;
-  }
   if (conversationResources.matches(req)) {
     void conversationResources.handle(req, res);
     return;
