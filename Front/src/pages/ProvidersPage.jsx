@@ -4,6 +4,7 @@ import { toast } from "sonner";
 
 import api, { endpoints } from "../api";
 import FilterableSortableTable from "../components/FilterableSortableTable";
+import "../styles/providers.scss";
 
 const CAPABILITIES = ["thinking", "vision", "audio", "embeddings"];
 
@@ -67,15 +68,15 @@ export default function ProvidersPage() {
       .map(provider => ({ value: provider, label: provider })),
   ], [rows]);
 
-  const replaceModel = updated => {
+  const replaceModel = useCallback(updated => {
     if (!updated) return;
     setProviders(current => current.map(provider => provider.provider !== updated.provider ? provider : ({
       ...provider,
       models: (provider.models || []).map(model => model.name === updated.name ? updated : model),
     })));
-  };
+  }, []);
 
-  const patchModel = async (model, changes, key) => {
+  const patchModel = useCallback(async (model, changes, key) => {
     const savingKey = `${model.provider}:${model.name}:${key}`;
     setSaving(current => new Set(current).add(savingKey));
     try {
@@ -92,9 +93,9 @@ export default function ProvidersPage() {
         return next;
       });
     }
-  };
+  }, [replaceModel]);
 
-  const capabilityCell = capability => model => {
+  const renderCapability = useCallback((model, capability) => {
     const definition = model.capabilities?.[capability] || { supported: null, enabled: false };
     const key = `${model.provider}:${model.name}:${capability}`;
     if (definition.supported === false) return <span className="model-capability model-capability--unsupported" title="Unsupported">—</span>;
@@ -103,7 +104,7 @@ export default function ProvidersPage() {
       <button
         type="button"
         className={`model-capability model-capability--toggle ${definition.enabled ? "model-capability--enabled" : ""}`}
-        disabled={saving.has(key) || !model.available || !model.enabled}
+        disabled={saving.has(key) || !model.available}
         aria-pressed={definition.enabled}
         title={definition.enabled ? `Disable ${capability} routing` : `Enable ${capability} routing`}
         onClick={() => void patchModel(model, { capabilities: { [capability]: !definition.enabled } }, capability)}
@@ -111,7 +112,7 @@ export default function ProvidersPage() {
         {definition.enabled ? "On" : "Off"}
       </button>
     );
-  };
+  }, [patchModel, saving]);
 
   const columns = useMemo(() => [
     { key: "provider", label: "Provider", sortType: "text" },
@@ -123,7 +124,7 @@ export default function ProvidersPage() {
       label: capability[0].toUpperCase() + capability.slice(1),
       sortType: "boolean",
       value: row => row.capabilities?.[capability]?.enabled ?? false,
-      render: capabilityCell(capability),
+      render: row => renderCapability(row, capability),
       className: "providers-table__capability",
     })),
     {
@@ -155,7 +156,7 @@ export default function ProvidersPage() {
         );
       },
     },
-  ], [saving]);
+  ], [patchModel, renderCapability, saving]);
 
   const filters = useMemo(() => [
     {
