@@ -14,12 +14,11 @@ import {
 import { toast } from "sonner";
 
 import api, { endpoints } from "../api";
+import { useAppContext } from "../AppContext";
 import "../styles/chat-features.scss";
 import ArtifactPanel from "../components/ArtifactPanel";
 import MarkdownContent from "../components/MarkdownContent";
 import WorkflowLink from "../components/WorkflowLink";
-
-const ACTIVE_CONVERSATION_KEY = "office-active-conversation-v2";
 
 const formatTime = value => {
   if (!value) return "";
@@ -34,7 +33,7 @@ const conversationTitle = conversation => {
   return first?.content?.replace(/\s+/g, " ").trim().slice(0, 56) || "New conversation";
 };
 
-const sortConversations = items => items.sort((left, right) => {
+const sortConversations = items => [...items].sort((left, right) => {
   const leftAt = left.messages?.at(-1)?.at || "";
   const rightAt = right.messages?.at(-1)?.at || "";
   return rightAt.localeCompare(leftAt);
@@ -69,26 +68,33 @@ const clipboardExtension = type => ({
   "image/webp": "webp",
 }[type] || "png");
 
-export default function ChatPage({
-  nora,
-  openRequest,
-  unreadConversationIds = [],
-  onConversationRead,
-  onOpenOperations,
-}) {
-  const [conversations, setConversations] = useState([]);
-  const [conversation, setConversation] = useState(null);
-  const [attachments, setAttachments] = useState([]);
-  const [artifacts, setArtifacts] = useState([]);
+const mergeOptimisticConversation = (canonical, optimistic) => {
+  if (!optimistic) return canonical;
+  if (!canonical) return optimistic;
+  if (canonical.id !== optimistic.id) return canonical;
+
+  const canonicalIds = new Set((canonical.messages || []).map(message => message.id));
+  const localMessages = (optimistic.messages || []).filter(message => !canonicalIds.has(message.id));
+  if (!localMessages.length) return canonical;
+  return { ...canonical, messages: [...(canonical.messages || []), ...localMessages] };
+};
+
+export default function ChatPage({ openRequest, onOpenOperations }) {
+  const {
+    officeState,
+    activeConversationId,
+    setActiveConversationId,
+    unreadConversationIds,
+    markConversationRead,
+  } = useAppContext();
+  const [optimisticConversation, setOptimisticConversation] = useState(null);
+  const [localAttachments, setLocalAttachments] = useState([]);
   const [selectedArtifact, setSelectedArtifact] = useState(null);
-  const [models, setModels] = useState([]);
   const [modelDraft, setModelDraft] = useState({ provider: "", model: "" });
   const [input, setInput] = useState("");
   const [files, setFiles] = useState([]);
   const [sending, setSending] = useState(false);
   const [listening, setListening] = useState(false);
-  const [loadingConversation, setLoadingConversation] = useState(false);
-  const [workflowId, setWorkflowId] = useState("");
   const [editingConversationId, setEditingConversationId] = useState("");
   const [editingTitleSurface, setEditingTitleSurface] = useState("");
   const [titleDraft, setTitleDraft] = useState("");
@@ -103,6 +109,30 @@ export default function ChatPage({
   const speechRecognitionRef = useRef(null);
   const speechBaseRef = useRef("");
 
+  const nora = officeState.nora || { provider: "", model: "", activeRequests: [] };
+  const models = officeState.models || [];
+  const canonicalConversation = useMemo(
+    () => (officeState.conversations || []).find(item => item.id === activeConversationId) || null,
+    [activeConversationId, officeState.conversations],
+  );
+  const conversation = useMemo(() => {
+    if (activeConversationId) return mergeOptimisticConversation(canonicalConversation, optimisticConversation);
+    return optimisticConversation?.id === "" ? optimisticConversation : null;
+  }, [activeConversationId, canonicalConversation, optimisticConversation]);
+  const conversations = useMemo(() => {
+    const records = officeState.conversations || [];
+    if (!optimisticConversation?.id || records.some(item => item.id === optimisticConversation.id)) {
+      return sortConversations(records);
+    }
+    return sortConversations([optimisticConversation, ...records]);
+  }, [officeState.conversations, optimisticConversation]);
+  const canonicalAttachments = officeState.attachments?.[activeConversationId] || [];
+  const attachments = useMemo(() => {
+    const byId = new Map(canonicalAttachments.map(item => [item.id, item]));
+    for (const item of localAttachments) byId.set(item.id, item);
+    return [...byId.values()];
+  }, [canonicalAttachments, localAttachments]);
+  const artifacts = officeState.artifacts?.[activeConversationId] || [];
   const providers = useMemo(() => models.map(item => item.provider), [models]);
   const unreadConversationSet = useMemo(() => new Set(unreadConversationIds), [unreadConversationIds]);
   const modelsFor = provider => models.find(item => item.provider === provider)?.models || [];
@@ -114,136 +144,73 @@ export default function ChatPage({
     () => Object.fromEntries(artifacts.map(item => [item.id, item])),
     [artifacts],
   );
+  const activeRequest = useMemo(
+    () => (nora.activeRequests || []).find(item => item.conversationId === activeConversationId) || null,
+    [activeConversationId, nora.activeRequests],
+  );
+  const working = sending || Boolean(activeRequest);
+  const workflowId = conversation?.workflows?.at(-1) || "";
 
-  const upsertConversation = useCallback(record => {
-    if (!record?.id) return;
-    setConversations(current => sortConversations([
-      record,
-      ...current.filter(item => item.id !== record.id),
-    ]));
+  const resetEditing = useCallback(() => {
+    setEditingConversationId("");
+    setEditingTitleSurface("");
+    setTitleDraft("");
+    setEditingMessageId("");
+    setMessageDraft("");
   }, []);
 
-  const loadCatalog = useCallback(async () => {
-    try {
-      setModels((await api.get(endpoints.models())).data || []);
-    } catch (error) {
-      toast.error(error.response?.data?.error || "Could not load models.");
-    }
-  }, []);
-
-  const loadHistory = useCallback(async () => {
-    try {
-      setConversations(sortConversations((await api.get(endpoints.conversations())).data || []));
-    } catch (error) {
-      toast.error(error.response?.data?.error || "Could not load conversations.");
-    }
-  }, []);
-
-  const loadResources = useCallback(async id => {
-    const [attachmentResponse, artifactResponse] = await Promise.all([
-      api.get(endpoints.conversationAttachments(id)),
-      api.get(endpoints.conversationArtifacts(id)),
-    ]);
-    setAttachments(attachmentResponse.data || []);
-    setArtifacts(artifactResponse.data || []);
-  }, []);
-
-  const openConversation = useCallback(async id => {
+  const openConversation = useCallback(id => {
     if (!id) return;
-    setLoadingConversation(true);
-    try {
-      const [record, attachmentResponse, artifactResponse] = await Promise.all([
-        api.get(endpoints.conversation(id)).then(response => response.data),
-        api.get(endpoints.conversationAttachments(id)),
-        api.get(endpoints.conversationArtifacts(id)),
-      ]);
-      setConversation(record);
-      setAttachments(attachmentResponse.data || []);
-      setArtifacts(artifactResponse.data || []);
-      setSelectedArtifact(null);
-      setModelDraft(record.nora || { provider: "", model: "" });
-      setWorkflowId(record.workflows?.at(-1) || "");
-      setEditingConversationId("");
-      setEditingTitleSurface("");
-      setTitleDraft("");
-      setEditingMessageId("");
-      setMessageDraft("");
-      sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
-      onConversationRead?.(id);
-    } catch (error) {
-      sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
-      toast.error(error.response?.data?.error || "Could not open conversation.");
-    } finally {
-      setLoadingConversation(false);
-    }
-  }, [onConversationRead]);
-
-  const syncActiveConversation = useCallback(async id => {
-    if (!id) return;
-    try {
-      const [record, attachmentResponse, artifactResponse] = await Promise.all([
-        api.get(endpoints.conversation(id)).then(response => response.data),
-        api.get(endpoints.conversationAttachments(id)),
-        api.get(endpoints.conversationArtifacts(id)),
-      ]);
-      if (!record?.id) return;
-      setConversation(record);
-      upsertConversation(record);
-      setAttachments(attachmentResponse.data || []);
-      setArtifacts(artifactResponse.data || []);
-      setWorkflowId(record.workflows?.at(-1) || "");
-      onConversationRead?.(id);
-    } catch (error) {
-      toast.error(error.response?.data?.error || "Could not update conversation.");
-    }
-  }, [onConversationRead, upsertConversation]);
-
-  useEffect(() => {
-    loadCatalog();
-    loadHistory();
-  }, [loadCatalog, loadHistory]);
-
-  useEffect(() => {
-    const stored = sessionStorage.getItem(ACTIVE_CONVERSATION_KEY);
-    if (stored) openConversation(stored);
-  }, [openConversation]);
+    setActiveConversationId(id);
+    setOptimisticConversation(null);
+    setLocalAttachments([]);
+    setSelectedArtifact(null);
+    resetEditing();
+    markConversationRead(id);
+  }, [markConversationRead, resetEditing, setActiveConversationId]);
 
   useEffect(() => {
     if (!openRequest) return;
-    if (openRequest.conversationId) {
-      const isLiveUpdate = Boolean(
-        openRequest.liveMessageId
-        && conversation?.id === openRequest.conversationId
-      );
-      if (isLiveUpdate) void syncActiveConversation(openRequest.conversationId);
-      else openConversation(openRequest.conversationId);
-    }
+    if (openRequest.conversationId) openConversation(openRequest.conversationId);
     if (openRequest.prefill) {
       setInput(openRequest.prefill);
       requestAnimationFrame(() => textareaRef.current?.focus());
     }
-  }, [openRequest, openConversation, syncActiveConversation, conversation?.id]);
+  }, [openRequest, openConversation]);
 
   useEffect(() => {
-    if (conversation || modelDraft.provider || !nora?.provider) return;
-    setModelDraft(nora);
-  }, [conversation, modelDraft.provider, nora]);
+    const selection = canonicalConversation?.nora || nora;
+    setModelDraft({ provider: selection?.provider || "", model: selection?.model || "" });
+  }, [activeConversationId, canonicalConversation?.nora?.model, canonicalConversation?.nora?.provider, nora.model, nora.provider]);
 
   useEffect(() => {
-    if (loadingConversation || !conversation?.id) return undefined;
+    if (!activeConversationId || !canonicalConversation || optimisticConversation?.id !== activeConversationId) return;
+    const pendingIds = (optimisticConversation.messages || [])
+      .filter(message => message.pending)
+      .map(message => message.id);
+    if (pendingIds.every(id => canonicalConversation.messages?.some(message => message.id === id))) {
+      setOptimisticConversation(null);
+      setLocalAttachments([]);
+    }
+  }, [activeConversationId, canonicalConversation, optimisticConversation]);
+
+  useEffect(() => {
+    if (!conversation?.id) return undefined;
     const frame = requestAnimationFrame(() => {
       const thread = chatThreadRef.current;
       if (thread) thread.scrollTop = thread.scrollHeight;
     });
     return () => cancelAnimationFrame(frame);
-  }, [conversation?.id, conversation?.messages?.length, loadingConversation]);
+  }, [conversation?.id, conversation?.messages?.length]);
+
+  useEffect(() => {
+    if (activeConversationId) markConversationRead(activeConversationId);
+  }, [activeConversationId, conversation?.messages?.length, markConversationRead]);
 
   const stopListening = useCallback(() => {
     const recognition = speechRecognitionRef.current;
     if (!recognition) return;
-    try {
-      recognition.stop();
-    } catch {}
+    try { recognition.stop(); } catch {}
   }, []);
 
   useEffect(() => () => {
@@ -254,20 +221,14 @@ export default function ChatPage({
   const startNew = () => {
     if (sending || sendInFlightRef.current) return;
     stopListening();
-    sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
-    setConversation(null);
-    setAttachments([]);
-    setArtifacts([]);
+    setActiveConversationId("");
+    setOptimisticConversation(null);
+    setLocalAttachments([]);
     setSelectedArtifact(null);
-    setWorkflowId("");
     setInput("");
     setFiles([]);
-    setEditingConversationId("");
-    setEditingTitleSurface("");
-    setTitleDraft("");
-    setEditingMessageId("");
-    setMessageDraft("");
-    setModelDraft(nora || { provider: "", model: "" });
+    resetEditing();
+    setModelDraft({ provider: nora.provider || "", model: nora.model || "" });
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
@@ -297,9 +258,7 @@ export default function ChatPage({
     }
 
     try {
-      const updated = (await api.patch(endpoints.conversation(item.id), { title: nextTitle })).data;
-      upsertConversation(updated);
-      if (conversation?.id === item.id) setConversation(updated);
+      await api.patch(endpoints.conversation(item.id), { title: nextTitle });
     } catch (error) {
       toast.error(error.response?.data?.error || "Could not rename conversation.");
     } finally {
@@ -308,28 +267,13 @@ export default function ChatPage({
   };
 
   const deleteConversation = async item => {
-    if (sending && conversation?.id === item.id) return;
+    if (working && conversation?.id === item.id) return;
     const confirmed = window.confirm(`Delete "${conversationTitle(item)}"? This cannot be undone.`);
     if (!confirmed) return;
 
     try {
       await api.delete(endpoints.conversation(item.id));
-      setConversations(current => current.filter(entry => entry.id !== item.id));
-
-      if (conversation?.id === item.id) {
-        sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
-        setConversation(null);
-        setAttachments([]);
-        setArtifacts([]);
-        setSelectedArtifact(null);
-        setWorkflowId("");
-        setInput("");
-        setFiles([]);
-        setEditingMessageId("");
-        setMessageDraft("");
-        setModelDraft(nora || { provider: "", model: "" });
-      }
-
+      if (activeConversationId === item.id) startNew();
       if (editingConversationId === item.id) cancelRename();
       toast.success("Conversation deleted.");
     } catch (error) {
@@ -338,7 +282,7 @@ export default function ChatPage({
   };
 
   const beginMessageEdit = message => {
-    if (sending || message.pending || message.actor !== "Carlos") return;
+    if (working || message.pending || message.actor !== "Carlos") return;
     messageEditCancelledRef.current = false;
     setEditingMessageId(message.id);
     setMessageDraft(message.content);
@@ -368,49 +312,29 @@ export default function ChatPage({
     const previous = conversation;
     const messageIndex = previous.messages.findIndex(item => item.id === message.id);
     if (messageIndex < 0) return;
-
-    const optimistic = {
+    setOptimisticConversation({
       ...previous,
       messages: previous.messages.slice(0, messageIndex + 1).map(item => (
         item.id === message.id ? { ...item, content, pending: true } : item
       )),
       workflows: [],
-    };
-
-    setConversation(optimistic);
-    upsertConversation(optimistic);
-    setWorkflowId("");
+    });
     setEditingMessageId("");
     setMessageDraft("");
     setSending(true);
 
     const controller = new AbortController();
     requestRef.current = controller;
-
     try {
-      const updated = (
-        await api.patch(
-          endpoints.conversationMessage(previous.id, message.id),
-          { content },
-          { signal: controller.signal },
-        )
-      ).data;
-
-      setConversation(updated);
-      upsertConversation(updated);
-      setWorkflowId(updated.workflows?.at(-1) || "");
-      void loadResources(previous.id);
+      const response = await api.patch(
+        endpoints.conversationMessage(previous.id, message.id),
+        { content },
+        { signal: controller.signal },
+      );
+      if (response.data?.id === previous.id) setOptimisticConversation(response.data);
       toast.success("Message committed. Later conversation history was replaced.");
     } catch (error) {
-      let restored = previous;
-      try {
-        restored = (await api.get(endpoints.conversation(previous.id))).data;
-      } catch {}
-
-      setConversation(restored);
-      upsertConversation(restored);
-      setWorkflowId(restored.workflows?.at(-1) || "");
-
+      setOptimisticConversation(null);
       if (error?.code !== "ERR_CANCELED" && error?.name !== "CanceledError") {
         toast.error(error.response?.data?.error || "Could not edit message.");
       }
@@ -421,28 +345,23 @@ export default function ChatPage({
   };
 
   const ensureConversation = async optimisticMessage => {
-    if (conversation?.id) return conversation.id;
-    const provider = modelDraft.provider || nora?.provider || providers[0] || "";
-    const model = modelDraft.model || nora?.model || modelsFor(provider)[0] || "";
+    if (activeConversationId) return activeConversationId;
+    const provider = modelDraft.provider || nora.provider || providers[0] || "";
+    const model = modelDraft.model || nora.model || modelsFor(provider)[0] || "";
     if (!provider || !model) throw new Error("Select a provider and model before sending.");
 
     const created = (await api.post(endpoints.conversations(), { provider, model })).data;
     const local = { ...created, messages: [optimisticMessage] };
-    setConversation(local);
-    upsertConversation(local);
+    setActiveConversationId(created.id);
+    setOptimisticConversation(local);
     setModelDraft(created.nora || { provider, model });
-    sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, created.id);
     return created.id;
   };
 
   const saveModel = async () => {
     if (!conversation?.id || !modelDraft.provider || !modelDraft.model) return;
     try {
-      const updated = (
-        await api.patch(endpoints.conversationModel(conversation.id), modelDraft)
-      ).data;
-      setConversation(updated);
-      setModelDraft(updated.nora || modelDraft);
+      await api.patch(endpoints.conversationModel(conversation.id), modelDraft);
       toast.success("Conversation model updated.");
     } catch (error) {
       toast.error(error.response?.data?.error || "Could not update model.");
@@ -455,7 +374,7 @@ export default function ChatPage({
     if (
       sendInFlightRef.current
       || requestRef.current
-      || sending
+      || working
       || editingMessageId
       || (!message && files.length === 0)
     ) return;
@@ -478,15 +397,15 @@ export default function ChatPage({
       ? { ...previous, messages: [...(previous.messages || []), optimistic] }
       : { id: "", messages: [optimistic], workflows: [], nora: modelDraft };
 
-    setConversation(local);
-    if (local.id) upsertConversation(local);
+    setOptimisticConversation(local);
     setInput("");
     setFiles([]);
     setSending(true);
 
     const controller = new AbortController();
     requestRef.current = controller;
-    let id = previous?.id || "";
+    let id = activeConversationId || "";
+    let accepted = false;
 
     try {
       id = await ensureConversation(optimistic);
@@ -498,47 +417,35 @@ export default function ChatPage({
           await api.post(endpoints.conversationAttachments(id), {
             ...payload,
             createdBy: "Carlos",
-          })
+          }, { signal: controller.signal })
         ).data;
         attachmentIds.push(created.id);
-        setAttachments(current => [...current.filter(attachment => attachment.id !== created.id), created]);
-        setConversation(current => current ? {
+        setLocalAttachments(current => [...current.filter(attachment => attachment.id !== created.id), created]);
+        setOptimisticConversation(current => current ? {
           ...current,
+          id,
           messages: current.messages.map(entry => (
             entry.id === optimistic.id ? { ...entry, attachments: [...attachmentIds] } : entry
           )),
         } : current);
       }
 
-      const result = (
-        await api.post(
-          endpoints.conversationRequest(id),
-          { content, attachments: attachmentIds, messageId: optimistic.id },
-          { signal: controller.signal },
-        )
-      ).data;
-
-      if (result.workflow?.id) setWorkflowId(result.workflow.id);
-
-      const committed = (await api.get(endpoints.conversation(id))).data;
-      setConversation(committed);
-      upsertConversation(committed);
-      setWorkflowId(committed.workflows?.at(-1) || result.workflow?.id || "");
-      onConversationRead?.(id);
-      void loadResources(id);
+      await api.post(
+        endpoints.conversationRequest(id),
+        { content, attachments: attachmentIds, messageId: optimistic.id },
+        { signal: controller.signal },
+      );
+      accepted = true;
+      setOptimisticConversation(current => current ? {
+        ...current,
+        id,
+        messages: current.messages.map(entry => (
+          entry.id === optimistic.id ? { ...entry, pending: false, attachments: [...attachmentIds] } : entry
+        )),
+      } : current);
+      markConversationRead(id);
     } catch (error) {
-      let restored = previous;
-
-      if (id) {
-        try {
-          restored = (await api.get(endpoints.conversation(id))).data;
-        } catch {}
-      }
-
-      setConversation(restored);
-      if (restored?.id) upsertConversation(restored);
-      setWorkflowId(restored?.workflows?.at(-1) || "");
-
+      if (!accepted) setOptimisticConversation(previous || null);
       if (error?.code !== "ERR_CANCELED" && error?.name !== "CanceledError") {
         setInput(content);
         setFiles(pendingFiles);
@@ -553,12 +460,12 @@ export default function ChatPage({
 
   const stop = async () => {
     requestRef.current?.abort();
-    if (!workflowId) return;
+    if (!activeRequest || !activeConversationId) return;
     try {
-      await api.post(endpoints.workflowCancel(workflowId));
-      toast.message("Workflow cancelled.");
+      await api.delete(endpoints.conversationRequestJob(activeConversationId, activeRequest.id));
+      toast.message("Nora request cancelled.");
     } catch (error) {
-      toast.error(error.response?.data?.error || "Could not cancel workflow.");
+      toast.error(error.response?.data?.error || "Could not cancel Nora request.");
     }
   };
 
@@ -589,11 +496,7 @@ export default function ChatPage({
   };
 
   const removeFile = index => setFiles(current => current.filter((_, itemIndex) => itemIndex !== index));
-
-  const openArtifact = artifact => {
-    if (!artifact?.id) return;
-    setSelectedArtifact(artifact);
-  };
+  const openArtifact = artifact => artifact?.id && setSelectedArtifact(artifact);
 
   const openAttachment = attachment => {
     if (!conversation?.id || !attachment?.id) return;
@@ -673,10 +576,7 @@ export default function ChatPage({
               <span>Start with Nora.</span>
             </div>
           ) : conversations.map(item => (
-            <div
-              key={item.id}
-              className={`conversation-row ${conversation?.id === item.id ? "conversation-row--active" : ""}`}
-            >
+            <div key={item.id} className={`conversation-row ${conversation?.id === item.id ? "conversation-row--active" : ""}`}>
               {editingConversationId === item.id && editingTitleSurface === "history" ? (
                 <div className="conversation-row__open">
                   <input
@@ -696,21 +596,7 @@ export default function ChatPage({
                       }
                     }}
                     aria-label={`Rename ${conversationTitle(item)}`}
-                    style={{
-                      width: "100%",
-                      minWidth: 0,
-                      padding: 0,
-                      border: 0,
-                      borderRadius: "2px",
-                      outline: "1px solid var(--color-accent)",
-                      outlineOffset: "1px",
-                      background: "transparent",
-                      color: "var(--color-text)",
-                      font: "inherit",
-                      fontSize: "11px",
-                      fontWeight: 700,
-                      lineHeight: 1.2,
-                    }}
+                    style={{ width: "100%", minWidth: 0, padding: 0, border: 0, borderRadius: "2px", outline: "1px solid var(--color-accent)", outlineOffset: "1px", background: "transparent", color: "var(--color-text)", font: "inherit", fontSize: "11px", fontWeight: 700, lineHeight: 1.2 }}
                   />
                   <small>{formatTime(item.messages?.at(-1)?.at)}</small>
                 </div>
@@ -742,7 +628,7 @@ export default function ChatPage({
                   type="button"
                   className="conversation-row__action conversation-row__action--danger"
                   onClick={() => deleteConversation(item)}
-                  disabled={sending && conversation?.id === item.id}
+                  disabled={working && conversation?.id === item.id}
                   aria-label={`Delete ${conversationTitle(item)}`}
                   title="Delete"
                 >
@@ -757,85 +643,52 @@ export default function ChatPage({
       <section className="chat-workspace">
         <header className="page-header chat-workspace__header">
           <div className="page-header__copy">
-            {conversation
-              && editingConversationId === conversation.id
-              && editingTitleSurface === "header" ? (
-                <input
-                  autoFocus
-                  value={titleDraft}
-                  onChange={event => setTitleDraft(event.target.value)}
-                  onFocus={event => event.currentTarget.select()}
-                  onBlur={cancelRename}
-                  onKeyDown={event => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      void finishRename(conversation);
-                    }
-                    if (event.key === "Escape") {
-                      event.preventDefault();
-                      cancelRename();
-                    }
-                  }}
-                  aria-label={`Rename ${conversationTitle(conversation)}`}
-                  style={{
-                    width: "min(720px, 100%)",
-                    minWidth: 0,
-                    padding: 0,
-                    border: 0,
-                    borderRadius: "2px",
-                    outline: "1px solid var(--color-accent)",
-                    outlineOffset: "3px",
-                    background: "transparent",
-                    color: "var(--color-text)",
-                    fontFamily: "var(--font-headline)",
-                    fontSize: "25px",
-                    fontWeight: 700,
-                    lineHeight: 1.15,
-                    letterSpacing: "-0.025em",
-                  }}
-                />
-              ) : (
-                <h1
-                  onClick={() => conversation && beginRename(conversation, "header")}
-                  title={conversation ? "Click to rename conversation" : undefined}
-                  style={conversation ? { cursor: "text" } : undefined}
-                >
-                  {conversation ? conversationTitle(conversation) : "New conversation"}
-                </h1>
-              )}
+            {conversation && editingConversationId === conversation.id && editingTitleSurface === "header" ? (
+              <input
+                autoFocus
+                value={titleDraft}
+                onChange={event => setTitleDraft(event.target.value)}
+                onFocus={event => event.currentTarget.select()}
+                onBlur={cancelRename}
+                onKeyDown={event => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void finishRename(conversation);
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    cancelRename();
+                  }
+                }}
+                aria-label={`Rename ${conversationTitle(conversation)}`}
+                style={{ width: "min(720px, 100%)", minWidth: 0, padding: 0, border: 0, borderRadius: "2px", outline: "1px solid var(--color-accent)", outlineOffset: "3px", background: "transparent", color: "var(--color-text)", fontFamily: "var(--font-headline)", fontSize: "25px", fontWeight: 700, lineHeight: 1.15, letterSpacing: "-0.025em" }}
+              />
+            ) : (
+              <h1
+                onClick={() => conversation && beginRename(conversation, "header")}
+                title={conversation ? "Click to rename conversation" : undefined}
+                style={conversation ? { cursor: "text" } : undefined}
+              >
+                {conversation ? conversationTitle(conversation) : "New conversation"}
+              </h1>
+            )}
           </div>
           <div className="model-control">
-            <select
-              aria-label="Provider"
-              value={modelDraft.provider}
-              onChange={event => setModelDraft({ provider: event.target.value, model: "" })}
-            >
-              {!providers.includes(modelDraft.provider) && modelDraft.provider && (
-                <option value={modelDraft.provider}>{modelDraft.provider}</option>
-              )}
+            <select aria-label="Provider" value={modelDraft.provider} onChange={event => setModelDraft({ provider: event.target.value, model: "" })}>
+              {!providers.includes(modelDraft.provider) && modelDraft.provider && <option value={modelDraft.provider}>{modelDraft.provider}</option>}
               {providers.map(provider => <option key={provider} value={provider}>{provider}</option>)}
             </select>
-            <select
-              aria-label="Model"
-              value={modelDraft.model}
-              onChange={event => setModelDraft(current => ({ ...current, model: event.target.value }))}
-            >
+            <select aria-label="Model" value={modelDraft.model} onChange={event => setModelDraft(current => ({ ...current, model: event.target.value }))}>
               <option value="">Select model</option>
               {modelsFor(modelDraft.provider).map(model => <option key={model} value={model}>{model}</option>)}
-              {!modelsFor(modelDraft.provider).includes(modelDraft.model) && modelDraft.model && (
-                <option value={modelDraft.model}>{modelDraft.model}</option>
-              )}
+              {!modelsFor(modelDraft.provider).includes(modelDraft.model) && modelDraft.model && <option value={modelDraft.model}>{modelDraft.model}</option>}
             </select>
-            {modelChanged && (
-              <button type="button" className="button button--quiet" onClick={saveModel}>Save</button>
-            )}
+            {modelChanged && <button type="button" className="button button--quiet" onClick={saveModel}>Save</button>}
           </div>
         </header>
 
         <div ref={chatThreadRef} className="chat-thread">
-          {loadingConversation ? (
-            <div className="page-state"><span className="spinner" /> Loading conversation</div>
-          ) : !conversation?.messages?.length ? (
+          {!conversation?.messages?.length ? (
             <div className="chat-welcome">
               <div className="chat-welcome__mark">N</div>
               <h2>What do you need?</h2>
@@ -853,14 +706,7 @@ export default function ChatPage({
                       <strong>{isCarlos ? "Carlos" : "Nora"}</strong>
                       <small>{message.pending ? "Sending…" : formatTime(message.at)}</small>
                       {isCarlos && !editing && !message.pending && (
-                        <button
-                          type="button"
-                          className="message__edit"
-                          onClick={() => beginMessageEdit(message)}
-                          disabled={sending}
-                          aria-label="Edit message"
-                          title="Edit message"
-                        >
+                        <button type="button" className="message__edit" onClick={() => beginMessageEdit(message)} disabled={working} aria-label="Edit message" title="Edit message">
                           <IconPencil size={13} />
                         </button>
                       )}
@@ -890,9 +736,7 @@ export default function ChatPage({
                         <MarkdownContent artifacts={messageArtifacts} onArtifact={openArtifact}>{message.content}</MarkdownContent>
                       </div>
                     )}
-                    {message.workflowId && (
-                      <WorkflowLink workflowId={message.workflowId} onOpen={onOpenOperations} />
-                    )}
+                    {message.workflowId && <WorkflowLink workflowId={message.workflowId} onOpen={onOpenOperations} />}
                     {!!message.attachments?.length && (
                       <div className="message__attachments" aria-label="Message attachments">
                         {message.attachments.map(id => {
@@ -917,7 +761,7 @@ export default function ChatPage({
                   </article>
                 );
               })}
-              {sending && (
+              {working && (
                 <article className="message message--nora message--thinking">
                   <header className="message__header"><strong>Nora</strong></header>
                   <div className="message__content"><span className="spinner" /> Working…</div>
@@ -931,9 +775,7 @@ export default function ChatPage({
           {artifacts.length > 0 && (
             <div className="artifact-strip" aria-label="Conversation artifacts">
               <span><IconFolder size={15} /> Artifacts</span>
-              {artifacts.map(artifact => (
-                <button key={artifact.id} type="button" onClick={() => openArtifact(artifact)}>{artifact.name}</button>
-              ))}
+              {artifacts.map(artifact => <button key={artifact.id} type="button" onClick={() => openArtifact(artifact)}>{artifact.name}</button>)}
             </div>
           )}
 
@@ -943,9 +785,7 @@ export default function ChatPage({
                 {files.map((file, index) => (
                   <span key={`${file.name}-${file.size}-${index}`}>
                     <IconPaperclip size={13} /> {file.name}
-                    <button type="button" onClick={() => removeFile(index)} aria-label={`Remove ${file.name}`}>
-                      <IconX size={12} />
-                    </button>
+                    <button type="button" onClick={() => removeFile(index)} aria-label={`Remove ${file.name}`}><IconX size={12} /></button>
                   </span>
                 ))}
               </div>
@@ -958,7 +798,7 @@ export default function ChatPage({
               onKeyDown={event => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
-                  if (event.repeat || sendInFlightRef.current || requestRef.current) return;
+                  if (event.repeat || sendInFlightRef.current || requestRef.current || activeRequest) return;
                   event.currentTarget.form?.requestSubmit();
                 }
               }}
@@ -968,38 +808,20 @@ export default function ChatPage({
             <div className="chat-composer__actions">
               <div className="chat-composer__actions-left">
                 <input ref={fileInputRef} type="file" multiple hidden onChange={addFiles} />
-                <button
-                  type="button"
-                  className="composer-attach"
-                  onClick={() => fileInputRef.current?.click()}
-                  aria-label="Attach files"
-                  title="Attach files"
-                >
+                <button type="button" className="composer-attach" onClick={() => fileInputRef.current?.click()} aria-label="Attach files" title="Attach files">
                   <IconPlus size={20} />
                 </button>
               </div>
               <div className="chat-composer__actions-right">
-                {!sending && (
-                  <button
-                    type="button"
-                    className={`composer-mic ${listening ? "composer-mic--active" : ""}`}
-                    onClick={toggleSpeech}
-                    disabled={Boolean(editingMessageId)}
-                    aria-label={listening ? "Stop dictation" : "Speak to Nora"}
-                    title={listening ? "Stop dictation" : "Speak to Nora"}
-                  >
+                {!working && (
+                  <button type="button" className={`composer-mic ${listening ? "composer-mic--active" : ""}`} onClick={toggleSpeech} disabled={Boolean(editingMessageId)} aria-label={listening ? "Stop dictation" : "Speak to Nora"} title={listening ? "Stop dictation" : "Speak to Nora"}>
                     <IconMicrophone size={18} />
                   </button>
                 )}
-                {sending ? (
+                {working ? (
                   <button type="button" className="button button--danger" onClick={stop}>Stop</button>
                 ) : (
-                  <button
-                    type="submit"
-                    className="composer-send"
-                    disabled={Boolean(editingMessageId) || (!input.trim() && files.length === 0)}
-                    aria-label="Send message"
-                  >
+                  <button type="submit" className="composer-send" disabled={Boolean(editingMessageId) || (!input.trim() && files.length === 0)} aria-label="Send message">
                     <IconArrowUp size={18} />
                   </button>
                 )}
@@ -1009,11 +831,7 @@ export default function ChatPage({
         </div>
       </section>
 
-      <ArtifactPanel
-        conversationId={conversation?.id || ""}
-        artifact={selectedArtifact}
-        onClose={() => setSelectedArtifact(null)}
-      />
+      <ArtifactPanel conversationId={conversation?.id || ""} artifact={selectedArtifact} onClose={() => setSelectedArtifact(null)} />
     </div>
   );
 }
