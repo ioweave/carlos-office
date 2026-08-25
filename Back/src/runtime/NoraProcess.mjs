@@ -13,6 +13,8 @@ let child = null;
 let models = [];
 let readyPromise = null;
 
+const abortError = () => Object.assign(new Error("Nora request cancelled"), { name: "AbortError", code: "nora_request_cancelled" });
+
 const rejectPending = error => {
   for (const request of pending.values()) request.reject(error);
   pending.clear();
@@ -89,8 +91,10 @@ export const startNora = async () => {
       const request = pending.get(message.id);
       if (!request) return;
       pending.delete(message.id);
+      request.cleanup?.();
 
-      if (message.error) request.reject(new Error(message.error));
+      if (message.cancelled) request.reject(abortError());
+      else if (message.error) request.reject(new Error(message.error));
       else request.resolve(message.result);
     });
 
@@ -112,7 +116,8 @@ export const startNora = async () => {
   return readyPromise;
 };
 
-export const decide = async ({ definition, selection, instruction, context, format = null }) => {
+export const decide = async ({ definition, selection, instruction, context, format = null, signal = null }) => {
+  if (signal?.aborted) throw abortError();
   await startNora();
   if (!child?.connected) throw new Error("Nora process is not available");
 
@@ -120,7 +125,23 @@ export const decide = async ({ definition, selection, instruction, context, form
   const responseFormat = format ?? defaultFormat(context);
   const routed = await routedDecision(instruction, context);
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
+    const handleAbort = () => {
+      const request = pending.get(id);
+      if (!request) return;
+      pending.delete(id);
+      request.cleanup?.();
+      if (child?.connected) child.send({ type: "cancel", id });
+      reject(abortError());
+    };
+    const cleanup = () => signal?.removeEventListener("abort", handleAbort);
+
+    pending.set(id, { resolve, reject, cleanup });
+    signal?.addEventListener("abort", handleAbort, { once: true });
+    if (signal?.aborted) {
+      handleAbort();
+      return;
+    }
+
     child.send({
       type: "decide",
       id,
