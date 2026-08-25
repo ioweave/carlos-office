@@ -55,13 +55,17 @@ const normalizeCompletion = content => {
   try {
     value = parseProviderJSON(content);
   } catch {
-    return { output: String(content || "").trim(), artifacts: [] };
+    return { output: String(content || "").trim(), data: null, artifacts: [] };
   }
 
   if (!isObject(value) || typeof value.output !== "string" || !value.output.trim()) {
     throw failure("Agent completion must include output", "completion", "invalid_completion");
   }
-  return { output: value.output.trim(), artifacts: normalizeArtifacts(value.artifacts) };
+  return {
+    output: value.output.trim(),
+    data: value.data === undefined ? null : structuredClone(value.data),
+    artifacts: normalizeArtifacts(value.artifacts),
+  };
 };
 
 export class Agent {
@@ -122,7 +126,8 @@ export class Agent {
         `Completion criteria:\n${task.completion ?? ""}`,
         `Resolved input:\n${JSON.stringify(task.input ?? {}, null, 2)}`,
         "When the Task is complete, return one JSON object with this exact shape:",
-        '{"output":"human-readable Task result","artifacts":[{"path":"absolute-or-workspace-relative-file-path","name":"optional-display-name","type":"optional-MIME-type"}]}',
+        '{"output":"human-readable Task result","data":"optional machine-readable JSON value","artifacts":[{"path":"absolute-or-workspace-relative-file-path","name":"optional-display-name","type":"optional-MIME-type"}]}',
+        "Use data when downstream Tasks would benefit from structured values such as arrays or objects. data may be null when the human-readable output is sufficient.",
         "The artifacts array is ONLY for files intended as deliverables to Carlos.",
         "Do not declare ordinary source files, configuration files, or project files merely because you edited them.",
         "If there are no deliverable files, return an empty artifacts array.",
