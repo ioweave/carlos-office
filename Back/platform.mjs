@@ -14,7 +14,6 @@ import * as artifacts from "./src/controllers/ArtifactController.mjs";
 import * as attachments from "./src/controllers/AttachmentController.mjs";
 import * as authorization from "./src/controllers/AuthorizationController.mjs";
 import * as conversations from "./src/controllers/ConversationController.mjs";
-import { createConversationResourceController } from "./src/controllers/ConversationResourceController.mjs";
 import { createCredentialController } from "./src/controllers/CredentialController.mjs";
 import * as events from "./src/controllers/EventController.mjs";
 import { createKnowledgeController } from "./src/controllers/KnowledgeController.mjs";
@@ -82,11 +81,9 @@ const router = createRouter({
   skills,
   engine,
 });
-const conversationResources = createConversationResourceController({
+const conversationResources = conversations.createConversationResourceController({
   allowedOrigin: config.frontendOrigin,
   nora,
-  artifacts,
-  attachments,
 });
 const providerResources = createProviderResourceController({
   allowedOrigin: config.frontendOrigin,

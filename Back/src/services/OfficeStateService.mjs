@@ -26,6 +26,7 @@ const conversationRevision = conversations => JSON.stringify(
         conversation.messages?.length ?? 0,
         lastMessage?.id ?? "",
         lastMessage?.at ?? "",
+        lastMessage?.actor ?? "",
       ];
     })
     .sort(([left], [right]) => left.localeCompare(right)),

@@ -2,8 +2,9 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 
 import api, { endpoints, setOfficeMutationListener } from "./api";
 
-const PAGES = new Set(["office", "chat", "processes", "operations", "capabilities", "store"]);
+const PAGES = new Set(["office", "chat", "processes", "operations", "capabilities", "store", "providers"]);
 const ACTIVE_PAGE_STORAGE_KEY = "office-active-page-v1";
+const ACTIVE_CONVERSATION_KEY = "office-active-conversation-v2";
 const THEME_STORAGE_KEY = "office-theme";
 const LONG_POLL_WAIT_MS = 240_000;
 const PING_TIMEOUT_MS = 250_000;
@@ -28,6 +29,24 @@ const storedActivePage = () => {
   }
 };
 
+const parseConversationRevision = value => {
+  if (!value || typeof value !== "string") return new Map();
+  try {
+    const entries = JSON.parse(value);
+    if (!Array.isArray(entries)) return new Map();
+    return new Map(entries
+      .filter(entry => Array.isArray(entry) && typeof entry[0] === "string")
+      .map(([id, count, lastMessageId, lastMessageAt, lastActor]) => [id, {
+        count: Number.isFinite(count) ? count : 0,
+        lastMessageId: typeof lastMessageId === "string" ? lastMessageId : "",
+        lastMessageAt: typeof lastMessageAt === "string" ? lastMessageAt : "",
+        lastActor: typeof lastActor === "string" ? lastActor : "",
+      }]));
+  } catch {
+    return new Map();
+  }
+};
+
 const AppContext = createContext(null);
 
 export const AppProvider = ({ children }) => {
@@ -39,10 +58,13 @@ export const AppProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [chatRequest, setChatRequest] = useState(null);
   const [operationsRequest, setOperationsRequest] = useState(null);
+  const [unreadConversationIds, setUnreadConversationIds] = useState(() => new Set());
   const stateRef = useRef(EMPTY_OFFICE_STATE);
   const revisionRef = useRef(0);
   const instanceRef = useRef(null);
   const wakePollRef = useRef(null);
+  const conversationRevisionRef = useRef(new Map());
+  const conversationRevisionReadyRef = useRef(false);
 
   const effectiveTheme = theme === "system" ? (systemDark ? "dark" : "light") : theme;
 
@@ -113,6 +135,16 @@ export const AppProvider = ({ children }) => {
     setTheme(order[(order.indexOf(theme) + 1) % order.length]);
   };
 
+  const markConversationRead = useCallback(conversationId => {
+    if (!conversationId) return;
+    setUnreadConversationIds(current => {
+      if (!current.has(conversationId)) return current;
+      const next = new Set(current);
+      next.delete(conversationId);
+      return next;
+    });
+  }, []);
+
   const openConversation = conversationId => {
     setChatRequest({ conversationId, token: Date.now() });
     setActivePage("chat");
@@ -127,6 +159,49 @@ export const AppProvider = ({ children }) => {
     setOperationsRequest(workflowId ? { workflowId, token: Date.now() } : null);
     setActivePage("operations");
   };
+
+  useEffect(() => {
+    const next = parseConversationRevision(officeState.conversationsRevision);
+    if (!conversationRevisionReadyRef.current) {
+      conversationRevisionRef.current = next;
+      conversationRevisionReadyRef.current = true;
+      return;
+    }
+
+    const previous = conversationRevisionRef.current;
+    const activeConversationId = (() => {
+      try {
+        return sessionStorage.getItem(ACTIVE_CONVERSATION_KEY) || "";
+      } catch {
+        return "";
+      }
+    })();
+
+    setUnreadConversationIds(current => {
+      const unread = new Set(current);
+
+      for (const id of previous.keys()) {
+        if (!next.has(id)) unread.delete(id);
+      }
+
+      for (const [id, snapshot] of next) {
+        const prior = previous.get(id);
+        if (!prior || snapshot.lastMessageId === prior.lastMessageId) continue;
+
+        const currentlyReading = activePage === "chat" && activeConversationId === id;
+        if (currentlyReading) {
+          unread.delete(id);
+          continue;
+        }
+
+        if (snapshot.lastActor === "Nora") unread.add(id);
+      }
+
+      return unread;
+    });
+
+    conversationRevisionRef.current = next;
+  }, [activePage, officeState.conversationsRevision]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = effectiveTheme;
@@ -218,6 +293,8 @@ export const AppProvider = ({ children }) => {
       refresh,
       chatRequest,
       operationsRequest,
+      unreadConversationIds: [...unreadConversationIds],
+      markConversationRead,
       openConversation,
       askNora,
       openOperations,

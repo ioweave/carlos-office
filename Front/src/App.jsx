@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   IconActivity,
   IconBuildingSkyscraper,
@@ -24,8 +24,6 @@ import ProcessesPage from "./pages/ProcessesPage";
 import ProvidersPage from "./pages/ProvidersPage";
 import StorePage from "./pages/StorePage";
 
-const ACTIVE_CONVERSATION_KEY = "office-active-conversation-v2";
-
 const NAV_ITEMS = [
   { id: "office", label: "Office", icon: IconBuildingSkyscraper },
   { id: "chat", label: "Chat", icon: IconMessageCircle },
@@ -49,18 +47,17 @@ export default function App() {
     refresh,
     chatRequest,
     operationsRequest,
+    unreadConversationIds,
+    markConversationRead,
     openConversation,
     askNora,
     openOperations,
   } = useAppContext();
   const [approvalOpen, setApprovalOpen] = useState(false);
-  const [backgroundChatRequest, setBackgroundChatRequest] = useState(null);
   const [editingNoraModel, setEditingNoraModel] = useState(false);
   const [noraModelCatalog, setNoraModelCatalog] = useState([]);
   const [noraModelDraft, setNoraModelDraft] = useState({ provider: "", model: "" });
   const [savingNoraModel, setSavingNoraModel] = useState(false);
-  const conversationsRevision = officeState.conversationsRevision ?? "";
-  const previousConversationsRevision = useRef(conversationsRevision);
   const nora = officeState.nora || { provider: "", model: "" };
   const approvals = officeState.approvals || [];
   const pendingApprovals = useMemo(
@@ -71,16 +68,6 @@ export default function App() {
   const modelsForNoraProvider = provider => (
     noraModelCatalog.find(item => item.provider === provider)?.models || []
   );
-
-  useEffect(() => {
-    if (previousConversationsRevision.current === conversationsRevision) return;
-    previousConversationsRevision.current = conversationsRevision;
-    if (active !== "chat" || !conversationsRevision) return;
-
-    const conversationId = sessionStorage.getItem(ACTIVE_CONVERSATION_KEY);
-    if (!conversationId) return;
-    setBackgroundChatRequest({ conversationId, token: Date.now() });
-  }, [active, conversationsRevision]);
 
   const beginNoraModelEdit = async () => {
     if (!connected || savingNoraModel) return;
@@ -133,12 +120,6 @@ export default function App() {
     }
   };
 
-  const effectiveChatRequest = (
-    (backgroundChatRequest?.token ?? 0) > (chatRequest?.token ?? 0)
-      ? backgroundChatRequest
-      : chatRequest
-  );
-
   const ThemeIcon = theme === "light" ? IconSun : theme === "dark" ? IconMoon : IconDeviceDesktop;
 
   let page = null;
@@ -153,7 +134,9 @@ export default function App() {
     page = (
       <ChatPage
         nora={nora}
-        openRequest={effectiveChatRequest}
+        openRequest={chatRequest}
+        unreadConversationIds={unreadConversationIds}
+        onConversationRead={markConversationRead}
         onOpenOperations={openOperations}
       />
     );

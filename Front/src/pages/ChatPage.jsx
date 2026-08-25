@@ -40,6 +40,12 @@ const sortConversations = items => items.sort((left, right) => {
   return rightAt.localeCompare(leftAt);
 });
 
+const createMessageId = () => {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  if (uuid) return `message-${uuid}`;
+  return `message-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
 const filePayload = file => new Promise((resolve, reject) => {
   const reader = new FileReader();
   reader.onload = () => {
@@ -63,7 +69,13 @@ const clipboardExtension = type => ({
   "image/webp": "webp",
 }[type] || "png");
 
-export default function ChatPage({ nora, openRequest, onOpenOperations }) {
+export default function ChatPage({
+  nora,
+  openRequest,
+  unreadConversationIds = [],
+  onConversationRead,
+  onOpenOperations,
+}) {
   const [conversations, setConversations] = useState([]);
   const [conversation, setConversation] = useState(null);
   const [attachments, setAttachments] = useState([]);
@@ -92,6 +104,7 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
   const speechBaseRef = useRef("");
 
   const providers = useMemo(() => models.map(item => item.provider), [models]);
+  const unreadConversationSet = useMemo(() => new Set(unreadConversationIds), [unreadConversationIds]);
   const modelsFor = provider => models.find(item => item.provider === provider)?.models || [];
   const attachmentById = useMemo(
     () => Object.fromEntries(attachments.map(item => [item.id, item])),
@@ -171,13 +184,14 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
       setEditingMessageId("");
       setMessageDraft("");
       sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
+      onConversationRead?.(id);
     } catch (error) {
       sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
       toast.error(error.response?.data?.error || "Could not open conversation.");
     } finally {
       setLoadingConversation(false);
     }
-  }, []);
+  }, [onConversationRead]);
 
   useEffect(() => {
     loadCatalog();
@@ -451,7 +465,7 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
     const content = message || "Review the attached files.";
     const pendingFiles = [...files];
     const optimistic = {
-      id: `pending-${Date.now()}`,
+      id: createMessageId(),
       actor: "Carlos",
       at: new Date().toISOString(),
       content,
@@ -498,7 +512,7 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
       const result = (
         await api.post(
           endpoints.conversationRequest(id),
-          { content, attachments: attachmentIds },
+          { content, attachments: attachmentIds, messageId: optimistic.id },
           { signal: controller.signal },
         )
       ).data;
@@ -509,6 +523,7 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
       setConversation(committed);
       upsertConversation(committed);
       setWorkflowId(committed.workflows?.at(-1) || result.workflow?.id || "");
+      onConversationRead?.(id);
       void loadResources(id);
     } catch (error) {
       let restored = previous;
@@ -712,7 +727,12 @@ export default function ChatPage({ nora, openRequest, onOpenOperations }) {
                   aria-label={`Open ${conversationTitle(item)}`}
                   title="Click the title to rename; click elsewhere to open"
                 >
-                  <strong data-edit-conversation-title>{conversationTitle(item)}</strong>
+                  <span className="conversation-row__title">
+                    <strong data-edit-conversation-title>{conversationTitle(item)}</strong>
+                    {unreadConversationSet.has(item.id) && (
+                      <span className="conversation-row__unread" aria-label="Unread Nora response" title="Unread Nora response" />
+                    )}
+                  </span>
                   <small>{item.messages?.at(-1)?.pending ? "Sending…" : formatTime(item.messages?.at(-1)?.at)}</small>
                 </button>
               )}
