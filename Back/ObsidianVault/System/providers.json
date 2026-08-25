@@ -1,0 +1,22 @@
+{
+  "ollama": {
+    "models": {
+      "orcarouter/Qwen3.8-27B-Uncensored:latest": {
+        "capabilities": {
+          "thinking": false
+        }
+      },
+      "gemma4:latest": {
+        "capabilities": {
+          "thinking": false
+        }
+      },
+      "qwen3:8b": {
+        "enabled": false
+      },
+      "tinyrick/gemma-4-31B-it-uncensored-heretic-vision-llmfan46:Q4_K_M": {
+        "enabled": false
+      }
+    }
+  }
+}
