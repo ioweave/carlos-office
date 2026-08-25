@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { NORA_DECISION_SCHEMA } from "../NoraActions.mjs";
+import { filterModelOptions } from "../controllers/ProviderController.mjs";
 import { getNora } from "../registry/Nora.mjs";
 import { getKnowledge } from "../services/KnowledgeService.mjs";
 
@@ -108,7 +109,7 @@ export const decide = async ({ definition, selection, instruction, context, form
   });
 };
 
-export const listModels = () => structuredClone(models);
+export const listModels = () => filterModelOptions(models);
 
 export const getNoraProcessState = () => ({
   pid: child?.pid ?? null,
