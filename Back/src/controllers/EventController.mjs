@@ -2,11 +2,21 @@ import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { notifyOfficeStateChanged } from "../services/OfficeStateBus.mjs";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const eventsDir = resolve(here, "../../ObsidianVault/System/Events");
 const eventsFile = resolve(eventsDir, "events.jsonl");
 const events = [];
 let eventWrite = Promise.resolve();
+
+const domainsForEvent = type => {
+  if (/^(?:agent|attempt|task|tool|workflow)\./.test(type)) return ["workflows", "agents", "nora"];
+  if (/^approval\./.test(type)) return ["approvals", "nora"];
+  if (/^nora\./.test(type)) return ["conversations", "nora"];
+  if (/^(?:schedule|process)\./.test(type)) return ["workflows", "nora"];
+  return [];
+};
 
 export const loadEvents = async () => {
   await eventWrite.catch(() => {});
@@ -62,6 +72,9 @@ export const recordEvent = async (type, details = {}) => {
   eventWrite = next;
   await next;
   events.push(event);
+
+  const domains = domainsForEvent(type);
+  if (domains.length) notifyOfficeStateChanged(domains);
   return event;
 };
 
