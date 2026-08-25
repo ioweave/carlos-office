@@ -3,6 +3,8 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { notifyOfficeStateChanged } from "../services/OfficeStateBus.mjs";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const skillsDir = resolve(here, "../../skills");
 const skills = new Map();
@@ -50,13 +52,15 @@ const reloadFromDisk = async () => {
   const nextSignature = JSON.stringify(
     [...discovered.entries()].map(([name, skill]) => [name, skill.path, skill.content]),
   );
-  if (nextSignature !== registrySignature) {
+  const changed = nextSignature !== registrySignature;
+  if (changed) {
     registrySignature = nextSignature;
     registryRevision += 1;
   }
 
   skills.clear();
   for (const [name, skill] of discovered) skills.set(name, skill);
+  if (changed) notifyOfficeStateChanged("skillsRevision");
   return listSkills();
 };
 
