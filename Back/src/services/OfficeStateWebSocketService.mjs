@@ -27,7 +27,10 @@ export const attachOfficeStateWebSocket = ({ server, allowedOrigin, service }) =
       return;
     }
 
-    if (url.pathname !== "/ws") return;
+    if (url.pathname !== "/ws") {
+      socket.destroy();
+      return;
+    }
     if (req.headers.origin && req.headers.origin !== allowedOrigin) {
       socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
       socket.destroy();
@@ -41,7 +44,7 @@ export const attachOfficeStateWebSocket = ({ server, allowedOrigin, service }) =
 
   server.on("upgrade", handleUpgrade);
 
-  wss.on("connection", (ws, req, url) => {
+  wss.on("connection", (ws, _req, url) => {
     const requestedSince = nonNegativeInteger(url.searchParams.get("since"));
     if (requestedSince === null) {
       ws.close(1008, "Invalid state revision");
