@@ -1,125 +1,9 @@
 import axios from "axios";
 
-export const SEND_REQUEST_TIMEOUT_MS = 60_000;
-
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || "http://127.0.0.1:3002",
   timeout: 2700000,
 });
-
-let stateBridge = null;
-let pendingMutationRevision = null;
-
-export const setOfficeStateBridge = bridge => {
-  stateBridge = bridge && typeof bridge.read === "function" ? bridge : null;
-  if (!stateBridge) pendingMutationRevision = null;
-};
-
-const requestPath = config => String(config.url || "").split("?", 1)[0];
-
-const isConversationSend = config => {
-  const method = String(config.method || "get").toLowerCase();
-  const path = requestPath(config);
-
-  return (
-    (method === "post" && /\/conversations\/[^/]+\/requests$/.test(path))
-    || (method === "patch" && /\/conversations\/[^/]+\/messages\/[^/]+$/.test(path))
-  );
-};
-
-const isStateMutation = config => {
-  const method = String(config.method || "get").toLowerCase();
-  if (["get", "head", "options"].includes(method)) return false;
-  const path = requestPath(config);
-  return path === "/nora"
-    || path.startsWith("/conversations")
-    || path.startsWith("/workflows")
-    || path.startsWith("/approvals")
-    || path.startsWith("/providers")
-    || path.startsWith("/skills");
-};
-
-const decodePart = value => {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-};
-
-const stateBackedRead = (url, snapshot) => {
-  if (!snapshot?.state) return { matched: false, data: null };
-  const path = String(url || "").split("?", 1)[0];
-  const parts = path.split("/").filter(Boolean).map(decodePart);
-  const state = snapshot.state;
-
-  if (parts.length === 1 && parts[0] === "models") {
-    return { matched: true, data: state.models || [] };
-  }
-  if (parts.length === 1 && parts[0] === "conversations") {
-    return { matched: true, data: state.conversations || [] };
-  }
-  if (parts[0] !== "conversations" || !parts[1]) return { matched: false, data: null };
-
-  const conversationId = parts[1];
-  if (parts.length === 2) {
-    const conversation = (state.conversations || []).find(item => item.id === conversationId) || null;
-    return { matched: true, data: conversation };
-  }
-  if (parts.length === 3 && parts[2] === "attachments") {
-    return { matched: true, data: state.attachments?.[conversationId] || [] };
-  }
-  if (parts.length === 3 && parts[2] === "artifacts") {
-    return { matched: true, data: state.artifacts?.[conversationId] || [] };
-  }
-
-  return { matched: false, data: null };
-};
-
-const localStateAdapter = config => async () => {
-  if (pendingMutationRevision !== null && stateBridge?.waitForRevision) {
-    const waitingFor = pendingMutationRevision;
-    await stateBridge.waitForRevision(waitingFor, 2_500);
-    if (pendingMutationRevision === waitingFor) pendingMutationRevision = null;
-  }
-
-  const snapshot = stateBridge?.read?.() || null;
-  const resolved = stateBackedRead(config.url, snapshot);
-  if (!resolved.matched) throw new Error(`State-backed request no longer matches: ${config.url}`);
-
-  return {
-    data: structuredClone(resolved.data),
-    status: resolved.data === null ? 404 : 200,
-    statusText: resolved.data === null ? "Not Found" : "OK",
-    headers: {},
-    config,
-    request: null,
-  };
-};
-
-api.interceptors.request.use(config => {
-  if (isConversationSend(config)) config.timeout = SEND_REQUEST_TIMEOUT_MS;
-
-  const method = String(config.method || "get").toLowerCase();
-  if (method === "get" && stateBridge) {
-    const resolved = stateBackedRead(config.url, stateBridge.read());
-    if (resolved.matched) config.adapter = localStateAdapter(config);
-  } else if (stateBridge && isStateMutation(config)) {
-    config.__officeStateRevision = stateBridge.read()?.revision ?? null;
-  }
-
-  return config;
-});
-
-api.interceptors.response.use(response => {
-  if (Number.isSafeInteger(response.config?.__officeStateRevision)) {
-    const baseline = response.config.__officeStateRevision;
-    pendingMutationRevision = pendingMutationRevision === null
-      ? baseline
-      : Math.max(pendingMutationRevision, baseline);
-  }
-  return response;
-}, error => Promise.reject(error));
 
 export const endpoints = {
   ping: () => "/ping",
@@ -133,6 +17,7 @@ export const endpoints = {
   conversationMessage: (id, messageId) => `/conversations/${id}/messages/${messageId}`,
   conversationModel: id => `/conversations/${id}/model`,
   conversationRequest: id => `/conversations/${id}/requests`,
+  conversationRequestJob: (id, requestId) => `/conversations/${id}/requests/${requestId}`,
   conversationAttachments: id => `/conversations/${id}/attachments`,
   conversationAttachment: (id, attachmentId) => `/conversations/${id}/attachments/${attachmentId}`,
   conversationArtifacts: id => `/conversations/${id}/artifacts`,
