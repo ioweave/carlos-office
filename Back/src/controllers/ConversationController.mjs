@@ -3,8 +3,14 @@ import { basename, dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
-import { createAttachment, deleteAttachments, getAttachment } from "./AttachmentController.mjs";
-import { deleteArtifacts, getArtifact, readArtifact } from "./ArtifactController.mjs";
+import { createAttachment, deleteAttachments, getAttachment, listAttachments, readAttachment } from "./AttachmentController.mjs";
+import {
+  createArtifact,
+  deleteArtifacts,
+  getArtifact,
+  listArtifacts,
+  readArtifact,
+} from "./ArtifactController.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const conversationsDir = resolve(here, "../../ObsidianVault/Conversations");
@@ -20,6 +26,21 @@ const validateConversationId = id => {
   ) {
     throw new Error(`Invalid conversation ID: ${id}`);
   }
+};
+
+const normalizeMessageId = id => {
+  if (id == null) return `message-${randomUUID()}`;
+  if (
+    typeof id !== "string"
+    || !id.trim()
+    || basename(id) !== id
+    || id === "."
+    || id === ".."
+    || id.length > 180
+  ) {
+    throw new Error(`Invalid message ID: ${id}`);
+  }
+  return id.trim();
 };
 
 const validateModelSelection = selection => {
@@ -308,7 +329,7 @@ export const editCarlosMessage = async (conversationId, messageId, content, remo
 
 export const addMessage = async (
   conversationId,
-  { actor, content, attachments = [], artifacts = [], workflowId = null },
+  { id = null, actor, content, attachments = [], artifacts = [], workflowId = null },
 ) => {
   if (!actor || typeof actor !== "string") throw new Error("Message actor must be a non-empty string");
   if (typeof content !== "string" || !content.trim()) {
@@ -328,9 +349,23 @@ export const addMessage = async (
   }
 
   const current = await ensureLoaded(conversationId);
+  const messageId = normalizeMessageId(id);
+  const existing = current.messages.find(message => message.id === messageId);
+  if (existing) {
+    const exactRetry = (
+      existing.actor === actor
+      && existing.content === content.trim()
+      && JSON.stringify(existing.attachments ?? []) === JSON.stringify(attachments)
+      && JSON.stringify(existing.artifacts ?? []) === JSON.stringify(artifacts)
+      && (existing.workflowId ?? null) === (workflowId?.trim() || null)
+    );
+    if (exactRetry) return structuredClone(existing);
+    throw new Error(`Message ID already exists: ${messageId}`);
+  }
+
   const conversation = structuredClone(current);
   const message = {
-    id: `message-${randomUUID()}`,
+    id: messageId,
     actor,
     at: new Date().toISOString(),
     content: content.trim(),
@@ -386,4 +421,179 @@ export const removeWorkflowReference = async workflowId => {
   }
 
   return updated;
+};
+
+const requestError = (message, statusCode = 400) => {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+};
+
+const partsFrom = pathname => pathname.split("/").filter(Boolean).map(decodeURIComponent);
+const safeFilename = value => String(value || "file").replaceAll('"', "");
+
+/**
+ * HTTP transport for conversation requests and binary resources. Kept here so Conversation
+ * ownership is centralized in one controller module instead of a parallel resource controller.
+ */
+export const createConversationResourceController = ({
+  allowedOrigin,
+  nora,
+}) => {
+  if (!allowedOrigin || typeof allowedOrigin !== "string") {
+    throw new Error("Conversation resource controller requires one allowed frontend origin");
+  }
+
+  const readJson = async req => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    if (!chunks.length) return {};
+    try {
+      return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    } catch {
+      throw requestError("Invalid JSON request body");
+    }
+  };
+
+  const matches = req => {
+    const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
+    const parts = partsFrom(url.pathname);
+    if (parts[0] !== "conversations" || !parts[1]) return false;
+    if (parts[2] === "requests" && parts.length === 3) return true;
+    if (["attachments", "artifacts"].includes(parts[2]) && [3, 4].includes(parts.length)) return true;
+    return false;
+  };
+
+  const handle = async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
+    const parts = partsFrom(url.pathname);
+    const method = req.method ?? "GET";
+    const origin = req.headers.origin ?? null;
+
+    if (origin && origin !== allowedOrigin) {
+      res.writeHead(403, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ error: "Origin not allowed" }));
+      return;
+    }
+
+    const cors = {
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+      ...(origin ? { "Access-Control-Allow-Origin": origin, Vary: "Origin" } : {}),
+    };
+    const sendJson = (status, data) => {
+      res.writeHead(status, { ...cors, "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify(data));
+    };
+    const sendError = (status, message) => sendJson(status, { error: message });
+
+    if (method === "OPTIONS") {
+      res.writeHead(204, cors);
+      res.end();
+      return;
+    }
+
+    try {
+      const conversationId = parts[1];
+      const resource = parts[2];
+      const resourceId = parts[3] ?? null;
+
+      if (method === "POST" && resource === "requests" && parts.length === 3) {
+        const body = await readJson(req);
+        const result = await nora.handleCarlosRequest({
+          conversationId,
+          content: body.content,
+          attachments: body.attachments ?? [],
+          messageId: body.messageId ?? null,
+          reprocessExisting: false,
+        });
+        sendJson(200, result);
+        return;
+      }
+
+      if (resource === "attachments" && parts.length === 3 && method === "GET") {
+        sendJson(200, await listAttachments(conversationId));
+        return;
+      }
+
+      if (resource === "attachments" && parts.length === 3 && method === "POST") {
+        const body = await readJson(req);
+        const attachment = await createAttachment({
+          conversationId,
+          name: body.name,
+          type: body.type,
+          createdBy: body.createdBy ?? "Carlos",
+          content: body.encoding === "base64"
+            ? Buffer.from(body.content ?? "", "base64")
+            : body.content ?? "",
+        });
+        sendJson(201, attachment);
+        return;
+      }
+
+      if (resource === "artifacts" && parts.length === 3 && method === "GET") {
+        sendJson(200, await listArtifacts(conversationId));
+        return;
+      }
+
+      if (resource === "artifacts" && parts.length === 3 && method === "POST") {
+        const body = await readJson(req);
+        const artifact = await createArtifact({
+          conversationId,
+          name: body.name,
+          type: body.type,
+          createdBy: body.createdBy ?? "Carlos",
+          content: body.encoding === "base64"
+            ? Buffer.from(body.content ?? "", "base64")
+            : body.content ?? "",
+        });
+        sendJson(201, artifact);
+        return;
+      }
+
+      if (parts.length === 4 && method === "GET" && resource === "attachments") {
+        const attachment = await getAttachment(conversationId, resourceId);
+        if (!attachment) {
+          sendError(404, "Attachment not found");
+          return;
+        }
+        const content = await readAttachment(conversationId, resourceId);
+        const disposition = url.searchParams.get("download") === "1" ? "attachment" : "inline";
+        res.writeHead(200, {
+          ...cors,
+          "Content-Type": attachment.type ?? "application/octet-stream",
+          "Content-Disposition": `${disposition}; filename="${safeFilename(attachment.name)}"`,
+          "Cache-Control": "no-store",
+        });
+        res.end(content);
+        return;
+      }
+
+      if (parts.length === 4 && method === "GET" && resource === "artifacts") {
+        const artifact = await getArtifact(conversationId, resourceId);
+        if (!artifact) {
+          sendError(404, "Artifact not found");
+          return;
+        }
+        const content = await readArtifact(conversationId, resourceId);
+        const disposition = url.searchParams.get("download") === "1" ? "attachment" : "inline";
+        res.writeHead(200, {
+          ...cors,
+          "Content-Type": artifact.type ?? "application/octet-stream",
+          "Content-Disposition": `${disposition}; filename="${safeFilename(artifact.name)}"`,
+          "Cache-Control": "no-store",
+        });
+        res.end(content);
+        return;
+      }
+
+      sendError(404, "Route not found");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
+      sendError(status, message);
+    }
+  };
+
+  return { matches, handle };
 };
