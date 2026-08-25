@@ -25,6 +25,12 @@ const finish = message => {
   setImmediate(() => process.exit(0));
 };
 
+const failureDiagnostics = error => ({
+  phase: typeof error?.phase === "string" && error.phase ? error.phase : "agent",
+  code: typeof error?.code === "string" && error.code ? error.code : "agent_failure",
+  message: error instanceof Error ? error.message : String(error),
+});
+
 process.on("message", message => {
   if (message?.type === "tool-result") {
     const pending = pendingTools.get(message.requestId);
@@ -49,7 +55,12 @@ process.on("message", message => {
   void (async () => {
     try {
       const provider = providers.get(message.provider);
-      if (!provider) throw new Error(`Unknown model provider: ${message.provider}`);
+      if (!provider) {
+        const error = new Error(`Unknown model provider: ${message.provider}`);
+        error.phase = "setup";
+        error.code = "unknown_provider";
+        throw error;
+      }
       const agent = new Agent({
         provider,
         model: message.model,
@@ -71,6 +82,7 @@ process.on("message", message => {
       finish({
         type: "failed",
         error: error instanceof Error ? error.message : String(error),
+        diagnostics: failureDiagnostics(error),
       });
     }
   })();
