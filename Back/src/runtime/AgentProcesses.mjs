@@ -197,7 +197,7 @@ const runTool = async (entry, message) => {
     };
     entry.toolFailures.push(failure);
 
-    await recordEvent("tool.failed", {
+    recordAgentEvent("tool.failed", {
       workflowId,
       taskId,
       agentId: entry.id,
