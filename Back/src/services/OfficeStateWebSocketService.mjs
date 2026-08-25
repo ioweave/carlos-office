@@ -49,7 +49,7 @@ export const attachOfficeStateWebSocket = ({ server, allowedOrigin, service }) =
     }
 
     let lastRevision = requestedSince;
-    const clientInstance = url.searchParams.get("instance");
+    let clientInstance = url.searchParams.get("instance");
     let sendQueue = Promise.resolve();
     ws.isAlive = true;
 
@@ -62,6 +62,7 @@ export const attachOfficeStateWebSocket = ({ server, allowedOrigin, service }) =
         });
         if (!payload.reset && !payload.changed.length) return;
         lastRevision = payload.revision;
+        clientInstance = payload.instance;
         ws.send(JSON.stringify({ type: "state", ...payload }));
       });
       sendQueue = next;
