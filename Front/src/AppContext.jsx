@@ -4,7 +4,6 @@ import api, { endpoints, setOfficeMutationListener } from "./api";
 
 const PAGES = new Set(["office", "chat", "processes", "operations", "capabilities", "store", "providers"]);
 const ACTIVE_PAGE_STORAGE_KEY = "office-active-page-v1";
-const ACTIVE_CONVERSATION_KEY = "office-active-conversation-v2";
 const THEME_STORAGE_KEY = "office-theme";
 const LONG_POLL_WAIT_MS = 240_000;
 const PING_TIMEOUT_MS = 250_000;
@@ -169,13 +168,6 @@ export const AppProvider = ({ children }) => {
     }
 
     const previous = conversationRevisionRef.current;
-    const activeConversationId = (() => {
-      try {
-        return sessionStorage.getItem(ACTIVE_CONVERSATION_KEY) || "";
-      } catch {
-        return "";
-      }
-    })();
 
     setUnreadConversationIds(current => {
       const unread = new Set(current);
@@ -187,13 +179,6 @@ export const AppProvider = ({ children }) => {
       for (const [id, snapshot] of next) {
         const prior = previous.get(id);
         if (!prior || snapshot.lastMessageId === prior.lastMessageId) continue;
-
-        const currentlyReading = activePage === "chat" && activeConversationId === id;
-        if (currentlyReading) {
-          unread.delete(id);
-          continue;
-        }
-
         if (snapshot.lastActor === "Nora") unread.add(id);
       }
 
@@ -201,7 +186,7 @@ export const AppProvider = ({ children }) => {
     });
 
     conversationRevisionRef.current = next;
-  }, [activePage, officeState.conversationsRevision]);
+  }, [officeState.conversationsRevision]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = effectiveTheme;
