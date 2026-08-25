@@ -5,6 +5,7 @@ import { recordEvent } from "../controllers/EventController.mjs";
 import {
   addTaskAttempt,
   getReadyTasks,
+  getTaskAttempt,
   getWorkflow,
   listTaskAttempts,
   setTaskStatus,
@@ -19,6 +20,11 @@ import {
   runAgentProcess,
   stopAllAgents,
 } from "../runtime/AgentProcesses.mjs";
+import {
+  executeTaskWithGroups,
+  materializeMapData,
+} from "./TaskExecutionService.mjs";
+import { getTaskExecutionGroups } from "./WorkflowGraphService.mjs";
 
 const activeRuns = new Map();
 const workflowTransitions = new Map();
@@ -76,15 +82,23 @@ const latestCompletedAttempt = task => [...(task.attempts ?? [])]
   .reverse()
   .find(attempt => attempt.status === "completed") ?? null;
 
+const attemptValue = attempt => attempt?.data != null ? attempt.data : attempt?.output;
+
 const resolveTaskInput = (workflow, taskId, task) => {
-  const available = structuredClone(workflow.inputs ?? {});
+  const retainedMapIds = new Set(
+    getTaskExecutionGroups(workflow, taskId)
+      .filter(group => group.type === "map")
+      .map(group => group.id),
+  );
+  const available = materializeMapData(structuredClone(workflow.inputs ?? {}), retainedMapIds);
 
   for (const upstreamId of upstreamTaskIds(workflow, taskId)) {
     const upstream = workflow.tasks[upstreamId];
     const attempt = latestCompletedAttempt(upstream);
     if (!attempt) continue;
-    if (upstream.output) available[upstream.output] = structuredClone(attempt.output);
-    available[upstreamId] = structuredClone(attempt.output);
+    const value = materializeMapData(attemptValue(attempt), retainedMapIds);
+    if (upstream.output) available[upstream.output] = structuredClone(value);
+    available[upstreamId] = structuredClone(value);
   }
 
   if (!Array.isArray(task.inputs) || !task.inputs.length) return available;
@@ -183,7 +197,9 @@ const failSetup = async (workflowId, taskId, error) => {
       startedAt: now,
       endedAt: now,
       output: null,
+      data: null,
       artifacts: [],
+      invocations: [],
       error: message,
       diagnostics,
       blockedReason: null,
@@ -245,6 +261,7 @@ export const selectTaskExecution = async ({
           config: workflow.config,
         },
         task: { id: taskId, ...task },
+        executionGroups: getTaskExecutionGroups(workflow, taskId),
         fixed: { model: fixedModel, tools: fixedTools, skills: fixedSkills },
         availableModels,
         availableTools,
@@ -273,15 +290,14 @@ export const selectTaskExecution = async ({
   };
 };
 
-const importDeclaredArtifacts = async (workflow, result, createdBy) => {
-  const completion = isObject(result.output) && typeof result.output.output === "string"
-    ? result.output
-    : { output: result.output, artifacts: [] };
-  const declarations = Array.isArray(completion.artifacts) ? completion.artifacts : [];
-  if (!declarations.length) return { output: completion.output, artifacts: [] };
+const importDeclaredArtifacts = async (workflow, completion) => {
+  const declarations = Array.isArray(completion.artifactDeclarations) ? completion.artifactDeclarations : [];
+  if (!declarations.length) {
+    return { output: completion.output, data: completion.data ?? null, artifacts: [] };
+  }
 
   const conversationId = workflow?.config?.conversationId;
-  if (!conversationId) return { output: completion.output, artifacts: [] };
+  if (!conversationId) return { output: completion.output, data: completion.data ?? null, artifacts: [] };
 
   const artifactIds = [];
   for (const declaration of declarations) {
@@ -293,15 +309,25 @@ const importDeclaredArtifacts = async (workflow, result, createdBy) => {
       sourcePath: declaration.path,
       name: declaration.name ?? null,
       type: declaration.type ?? null,
-      createdBy: createdBy || "Temporary Agent",
+      createdBy: declaration.createdBy || "Temporary Agent",
     });
     artifactIds.push(artifact.id);
   }
 
-  return { output: completion.output, artifacts: artifactIds };
+  return { output: completion.output, data: completion.data ?? null, artifacts: artifactIds };
 };
 
-const runTask = async ({ workflowId, taskId, execution, runState }) => {
+const appendInvocation = (workflowId, taskId, attemptId, invocation) => withWorkflowTransition(
+  workflowId,
+  async () => {
+    const current = getTaskAttempt(workflowId, taskId, attemptId);
+    if (!current) return null;
+    const invocations = [...(current.invocations ?? []), structuredClone(invocation)];
+    return updateTaskAttempt(workflowId, taskId, attemptId, { invocations });
+  },
+);
+
+const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSelection }) => {
   if (runState?.cancelled) return null;
 
   const tools = loadTools(execution.tools);
@@ -330,6 +356,9 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
 
     const input = resolveTaskInput(latestWorkflow, taskId, latestTask);
     const previousAttempts = listTaskAttempts(workflowId, taskId);
+    const checkpointAttempt = latestTask.resumeCheckpointAttemptId
+      ? previousAttempts.find(item => item.id === latestTask.resumeCheckpointAttemptId) ?? null
+      : null;
     const attempt = {
       id: `attempt-${randomUUID()}`,
       workflowId,
@@ -343,13 +372,17 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
       input: structuredClone(input),
       tools: [...execution.tools],
       skills: [...execution.skills],
+      executionGroups: getTaskExecutionGroups(latestWorkflow, taskId),
       startedAt: new Date().toISOString(),
       endedAt: null,
       output: null,
+      data: null,
       artifacts: [],
+      invocations: [],
       error: null,
       diagnostics: null,
       blockedReason: null,
+      checkpointFromAttemptId: checkpointAttempt?.id ?? null,
     };
 
     await addTaskAttempt(workflowId, taskId, attempt);
@@ -369,11 +402,11 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
       throw error;
     }
 
-    return { attempt, input, task: structuredClone(latestTask) };
+    return { attempt, input, task: structuredClone(latestTask), workflow: latestWorkflow, checkpointAttempt };
   });
 
   if (!prepared) return null;
-  const { attempt, input, task } = prepared;
+  const { attempt, input, task, workflow, checkpointAttempt } = prepared;
 
   await recordEvent("attempt.started", {
     workflowId,
@@ -381,6 +414,7 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
     attemptId: attempt.id,
     provider: execution.provider,
     model: execution.model,
+    executionGroups: attempt.executionGroups.map(group => group.id),
   });
 
   if (runState?.cancelled) {
@@ -393,30 +427,68 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
 
   let result;
   try {
-    result = await runAgentProcess({
-      workflowId,
+    result = await executeTaskWithGroups({
+      workflow,
       taskId,
-      task: { ...task, input },
-      provider: execution.provider,
-      model: execution.model,
-      tools,
-      skills,
+      task,
+      input,
+      checkpointInvocations: checkpointAttempt?.invocations ?? [],
+      isCancelled: () => Boolean(runState?.cancelled || getWorkflow(workflowId)?.status === "paused"),
+      recordInvocation: invocation => appendInvocation(workflowId, taskId, attempt.id, invocation),
+      runAgent: ({ invocationId, input: invocationInput }) => runAgentProcess({
+        workflowId,
+        taskId,
+        invocationId,
+        task: { ...task, input: invocationInput },
+        provider: execution.provider,
+        model: execution.model,
+        tools,
+        skills,
+      }),
+      review: ({ group, iteration, candidate }) => decide(
+        [
+          "You are Nora acting as the independent quality controller for one Loop execution.",
+          "Assess the candidate result against the Task objective, completion criteria, and the Loop criteria.",
+          "Be strict: mediocre, incomplete, unsupported, or materially incorrect work must fail.",
+          "Return only JSON:",
+          '{"passed":true,"score":0.0,"feedback":"specific feedback for the next retry if rejected"}',
+          "score must be between 0 and 1. passed must reflect your qualitative assessment; Carlos Office also enforces the configured minimum score.",
+        ].join("\n\n"),
+        {
+          workflow: { id: workflow.id, process: workflow.process },
+          task: {
+            id: taskId,
+            name: task.name ?? taskId,
+            objective: task.objective ?? "",
+            completion: task.completion ?? "",
+          },
+          loop: {
+            id: group.id,
+            name: group.name ?? group.id,
+            iteration,
+            maxIterations: group.maxIterations,
+            minimumScore: group.minimumScore,
+            criteria: group.criteria ?? "",
+          },
+          candidate,
+        },
+        noraSelection,
+      ),
     });
   } catch (error) {
     result = {
       status: "failed",
       error: errorMessage(error),
-      diagnostics: failureDiagnostics(error, "process", "agent_launch_failure"),
+      diagnostics: failureDiagnostics(error, "process", "task_execution_failure"),
       agentId: null,
       pid: null,
     };
   }
 
-  const runtime = { agentId: result.agentId ?? null, pid: result.pid ?? null };
-  let completion = { output: result.output, artifacts: [] };
+  let completion = { output: result.output, data: result.data ?? null, artifacts: [] };
   if (result.status === "completed") {
     try {
-      completion = await importDeclaredArtifacts(getWorkflow(workflowId), result, runtime.agentId);
+      completion = await importDeclaredArtifacts(getWorkflow(workflowId), result);
     } catch (error) {
       const message = `Could not register Task Artifact: ${errorMessage(error)}`;
       result = {
@@ -432,6 +504,10 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
     }
   }
 
+  const runtime = {
+    agentId: result.agentId ?? null,
+    pid: result.pid ?? null,
+  };
   const outcome = await withWorkflowTransition(workflowId, async () => {
     const current = getWorkflow(workflowId);
     const currentTask = current?.tasks?.[taskId];
@@ -443,6 +519,7 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
       || taskWasCancelled
       || result.status === "cancelled"
       || current?.status === "cancelled"
+      || current?.status === "paused"
     );
 
     if (executionWasCancelled) {
@@ -462,6 +539,7 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
         ...runtime,
         status: "completed",
         output: completion.output,
+        data: completion.data,
         artifacts: completion.artifacts,
         error: null,
         diagnostics: null,
@@ -546,11 +624,12 @@ const runWorkflowInternal = async ({
       if (runState.cancelled) break;
       try {
         const currentWorkflow = getWorkflow(workflowId);
+        const noraSelection = getNoraSelection(currentWorkflow);
         const execution = await selectTaskExecution({
           workflowId,
           taskId: task.id,
           decide,
-          noraSelection: getNoraSelection(currentWorkflow),
+          noraSelection,
           models,
           validateModelSelection,
         });
@@ -560,15 +639,15 @@ const runWorkflowInternal = async ({
           || latest?.status !== "running"
           || latest.tasks?.[task.id]?.status !== "ready"
         ) continue;
-        assignments.push({ taskId: task.id, execution });
+        assignments.push({ taskId: task.id, execution, noraSelection });
       } catch (error) {
         if (runState.cancelled || getWorkflow(workflowId)?.status === "paused") continue;
         await failSetup(workflowId, task.id, error);
       }
     }
 
-    const batch = (await Promise.all(assignments.map(({ taskId, execution }) => (
-      runTask({ workflowId, taskId, execution, runState })
+    const batch = (await Promise.all(assignments.map(({ taskId, execution, noraSelection }) => (
+      runTask({ workflowId, taskId, execution, runState, decide, noraSelection })
     )))).filter(Boolean);
     attempts.push(...batch);
   }
