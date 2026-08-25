@@ -24,23 +24,15 @@ const EMPTY_OFFICE_STATE = {
 };
 
 const systemPrefersDark = () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
-
 const storedActivePage = () => {
   try {
     const stored = sessionStorage.getItem(ACTIVE_PAGE_STORAGE_KEY);
     const value = stored === "credentials" ? "store" : stored;
     return PAGES.has(value) ? value : "office";
-  } catch {
-    return "office";
-  }
+  } catch { return "office"; }
 };
-
 const storedActiveConversation = () => {
-  try {
-    return sessionStorage.getItem(ACTIVE_CONVERSATION_STORAGE_KEY) || "";
-  } catch {
-    return "";
-  }
+  try { return sessionStorage.getItem(ACTIVE_CONVERSATION_STORAGE_KEY) || ""; } catch { return ""; }
 };
 
 const conversationRevision = conversations => new Map((conversations || []).map(conversation => {
@@ -52,6 +44,30 @@ const conversationRevision = conversations => new Map((conversations || []).map(
     lastActor: lastMessage?.actor ?? "",
   }];
 }));
+
+const applyEntityPatch = (current, patch) => {
+  const byId = new Map((Array.isArray(current) ? current : []).filter(item => item?.id).map(item => [item.id, item]));
+  for (const id of patch.remove || []) byId.delete(id);
+  for (const item of patch.upsert || []) if (item?.id) byId.set(item.id, item);
+  return [...byId.values()];
+};
+
+const applyResourcePatch = (current, patch) => {
+  const next = { ...(current && typeof current === "object" ? current : {}) };
+  for (const id of patch.remove || []) delete next[id];
+  for (const entry of patch.upsert || []) if (entry?.id) next[entry.id] = entry.value;
+  return next;
+};
+
+const applyPatches = (base, patches) => {
+  let next = { ...base };
+  for (const patch of Array.isArray(patches) ? patches : []) {
+    if (!patch?.domain) continue;
+    if (patch.kind === "entities") next[patch.domain] = applyEntityPatch(next[patch.domain], patch);
+    if (patch.kind === "resources") next[patch.domain] = applyResourcePatch(next[patch.domain], patch);
+  }
+  return next;
+};
 
 const websocketUrl = () => {
   const base = new URL(api.defaults.baseURL || window.location.origin, window.location.href);
@@ -87,7 +103,6 @@ export const AppProvider = ({ children }) => {
 
   const applyStatePayload = useCallback(payload => {
     if (!payload || payload.ok !== true) return false;
-
     const nextRevision = Number.isSafeInteger(payload.revision) ? payload.revision : revisionRef.current;
     const nextInstance = typeof payload.instance === "string" ? payload.instance : instanceRef.current;
     const isNewInstance = Boolean(nextInstance && nextInstance !== instanceRef.current);
@@ -95,8 +110,10 @@ export const AppProvider = ({ children }) => {
     const shouldApply = resetting || nextRevision > revisionRef.current;
 
     if (shouldApply) {
-      const base = resetting ? EMPTY_OFFICE_STATE : stateRef.current;
-      const nextState = { ...base, ...(payload.state || {}) };
+      let nextState = resetting
+        ? { ...EMPTY_OFFICE_STATE, ...(payload.state || {}) }
+        : { ...stateRef.current, ...(payload.state || {}) };
+      if (!resetting) nextState = applyPatches(nextState, payload.patches);
       stateRef.current = nextState;
       setOfficeState(nextState);
     }
@@ -124,29 +141,19 @@ export const AppProvider = ({ children }) => {
     } catch (error) {
       const cancelled = error?.code === "ERR_CANCELED" || error?.name === "CanceledError";
       if (!cancelled) {
-        console.error("[app] Office ping failed.", {
-          message: error instanceof Error ? error.message : String(error),
-        });
+        console.error("[app] Office ping failed.", { message: error instanceof Error ? error.message : String(error) });
         if (!websocketReadyRef.current) setConnected(false);
       }
       return null;
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }, [applyStatePayload]);
 
-  const refresh = useCallback(async () => {
-    await requestPing({ waitMs: 0 });
-  }, [requestPing]);
-
+  const refresh = useCallback(async () => { await requestPing({ waitMs: 0 }); }, [requestPing]);
   const setActivePage = useCallback(value => {
     if (!PAGES.has(value)) return;
     setActivePageState(value);
-    try {
-      sessionStorage.setItem(ACTIVE_PAGE_STORAGE_KEY, value);
-    } catch {}
+    try { sessionStorage.setItem(ACTIVE_PAGE_STORAGE_KEY, value); } catch {}
   }, []);
-
   const markConversationRead = useCallback(conversationId => {
     if (!conversationId) return;
     setUnreadConversationIds(current => {
@@ -156,7 +163,6 @@ export const AppProvider = ({ children }) => {
       return next;
     });
   }, []);
-
   const setActiveConversationId = useCallback(conversationId => {
     const id = typeof conversationId === "string" ? conversationId : "";
     setActiveConversationIdState(id);
@@ -166,29 +172,24 @@ export const AppProvider = ({ children }) => {
     } catch {}
     if (id) markConversationRead(id);
   }, [markConversationRead]);
-
   const setTheme = value => {
     if (!["system", "light", "dark"].includes(value)) return;
     setThemeState(value);
     localStorage.setItem(THEME_STORAGE_KEY, value);
   };
-
   const cycleTheme = () => {
     const order = ["system", "light", "dark"];
     setTheme(order[(order.indexOf(theme) + 1) % order.length]);
   };
-
   const openConversation = conversationId => {
     setActiveConversationId(conversationId);
     setChatRequest({ conversationId, token: Date.now() });
     setActivePage("chat");
   };
-
   const askNora = prefill => {
     setChatRequest({ prefill, token: Date.now() });
     setActivePage("chat");
   };
-
   const openOperations = workflowId => {
     setOperationsRequest(workflowId ? { workflowId, token: Date.now() } : null);
     setActivePage("operations");
@@ -201,16 +202,11 @@ export const AppProvider = ({ children }) => {
       conversationRevisionReadyRef.current = true;
       return;
     }
-
     const previous = conversationRevisionRef.current;
     const visibleConversationId = activePage === "chat" ? activeConversationId : "";
     setUnreadConversationIds(current => {
       const unread = new Set(current);
-
-      for (const id of previous.keys()) {
-        if (!next.has(id)) unread.delete(id);
-      }
-
+      for (const id of previous.keys()) if (!next.has(id)) unread.delete(id);
       for (const [id, snapshot] of next) {
         const prior = previous.get(id);
         if (!prior || snapshot.lastMessageId === prior.lastMessageId || snapshot.lastActor !== "Nora") continue;
@@ -219,15 +215,11 @@ export const AppProvider = ({ children }) => {
       }
       return unread;
     });
-
     if (activeConversationId && !next.has(activeConversationId)) setActiveConversationId("");
     conversationRevisionRef.current = next;
   }, [activeConversationId, activePage, officeState.conversations, setActiveConversationId]);
 
-  useEffect(() => {
-    document.documentElement.dataset.theme = effectiveTheme;
-  }, [effectiveTheme]);
-
+  useEffect(() => { document.documentElement.dataset.theme = effectiveTheme; }, [effectiveTheme]);
   useEffect(() => {
     const query = window.matchMedia("(prefers-color-scheme: dark)");
     const handleChange = event => setSystemDark(event.matches);
@@ -249,7 +241,6 @@ export const AppProvider = ({ children }) => {
       fallbackController?.abort();
       fallbackController = null;
     };
-
     const scheduleFallback = delay => {
       if (stopped || websocketReadyRef.current || document.hidden) return;
       if (fallbackTimer !== null) window.clearTimeout(fallbackTimer);
@@ -258,7 +249,6 @@ export const AppProvider = ({ children }) => {
         void fallbackPoll();
       }, delay);
     };
-
     const fallbackPoll = async () => {
       if (stopped || websocketReadyRef.current || document.hidden || fallbackController) return;
       fallbackController = new AbortController();
@@ -270,7 +260,6 @@ export const AppProvider = ({ children }) => {
       if (stopped || websocketReadyRef.current || document.hidden) return;
       scheduleFallback(payload ? 0 : FALLBACK_RETRY_MS);
     };
-
     const scheduleReconnect = () => {
       if (stopped || document.hidden || reconnectTimer !== null) return;
       reconnectTimer = window.setTimeout(() => {
@@ -279,19 +268,15 @@ export const AppProvider = ({ children }) => {
       }, reconnectDelay);
       reconnectDelay = Math.min(Math.round(reconnectDelay * 1.7), WS_RECONNECT_MAX_MS);
     };
-
     const connectWebSocket = () => {
       if (stopped || document.hidden) return;
       const current = websocketRef.current;
       if (current && [WebSocket.CONNECTING, WebSocket.OPEN].includes(current.readyState)) return;
-
       const url = websocketUrl();
       url.searchParams.set("since", String(revisionRef.current));
       if (instanceRef.current) url.searchParams.set("instance", instanceRef.current);
-
       const socket = new WebSocket(url);
       websocketRef.current = socket;
-
       socket.onopen = () => {
         if (stopped || websocketRef.current !== socket) return;
         websocketReadyRef.current = true;
@@ -299,19 +284,15 @@ export const AppProvider = ({ children }) => {
         setConnected(true);
         stopFallback();
       };
-
       socket.onmessage = event => {
         if (stopped || websocketRef.current !== socket) return;
         try {
           const payload = JSON.parse(event.data);
           if (payload?.type === "state") applyStatePayload(payload);
         } catch (error) {
-          console.error("[app] Invalid Office state WebSocket message.", {
-            message: error instanceof Error ? error.message : String(error),
-          });
+          console.error("[app] Invalid Office state WebSocket message.", { message: error instanceof Error ? error.message : String(error) });
         }
       };
-
       socket.onerror = () => {};
       socket.onclose = () => {
         if (websocketRef.current === socket) websocketRef.current = null;
@@ -322,14 +303,12 @@ export const AppProvider = ({ children }) => {
         scheduleReconnect();
       };
     };
-
     const bootstrap = async () => {
       await requestPing({ waitMs: 0 });
       if (stopped) return;
       connectWebSocket();
       if (!websocketReadyRef.current) scheduleFallback(FALLBACK_RETRY_MS);
     };
-
     const handleVisibility = () => {
       if (document.hidden) {
         stopFallback();
@@ -340,10 +319,8 @@ export const AppProvider = ({ children }) => {
       }
       void requestPing({ waitMs: 0 }).then(() => connectWebSocket());
     };
-
     void bootstrap();
     document.addEventListener("visibilitychange", handleVisibility);
-
     return () => {
       stopped = true;
       stopFallback();
