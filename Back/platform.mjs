@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 
 import config from "./src/config.mjs";
 import { createRouter } from "./src/Router.mjs";
-import { stopNora } from "./src/runtime/NoraProcess.mjs";
+import { listModels as listNoraModels, stopNora } from "./src/runtime/NoraProcess.mjs";
 import { loadKnowledge } from "./src/services/KnowledgeService.mjs";
 import { createOfficeStateService } from "./src/services/OfficeStateService.mjs";
 import { attachOfficeStateWebSocket } from "./src/services/OfficeStateWebSocketService.mjs";
@@ -82,9 +82,13 @@ const providerResources = providers.createProviderResourceController({ allowedOr
 const credentials = createCredentialController({ allowedOrigin: config.frontendOrigin });
 const knowledge = createKnowledgeController({ allowedOrigin: config.frontendOrigin });
 const variables = createVariableController({ allowedOrigin: config.frontendOrigin });
+const officeStateNora = {
+  getNoraState: nora.getNoraState,
+  listModels: listNoraModels,
+};
 
 const officeStateService = createOfficeStateService({
-  nora,
+  nora: officeStateNora,
   processes,
   conversations,
   authorization,
