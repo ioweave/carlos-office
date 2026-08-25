@@ -500,12 +500,44 @@ export const createConversationResourceController = ({
 
       if (method === "POST" && resource === "requests" && parts.length === 3) {
         const body = await readJson(req);
+        const messageId = body.messageId == null ? null : normalizeMessageId(body.messageId);
+
+        if (messageId) {
+          const current = await getConversation(conversationId);
+          if (!current) throw requestError("Conversation not found", 404);
+          const existingIndex = current.messages.findIndex(message => message.id === messageId);
+          if (existingIndex >= 0) {
+            const existing = current.messages[existingIndex];
+            const sameRequest = (
+              existing.actor === "Carlos"
+              && existing.content === String(body.content ?? "").trim()
+              && JSON.stringify(existing.attachments ?? []) === JSON.stringify(body.attachments ?? [])
+            );
+            if (!sameRequest) throw requestError(`Message ID already exists: ${messageId}`, 409);
+
+            const hasFollowUp = current.messages.slice(existingIndex + 1).some(message => message.actor === "Nora");
+            if (hasFollowUp) {
+              sendJson(200, { action: "existing", message: null, workflow: null, deduplicated: true });
+              return;
+            }
+          } else {
+            await addMessage(conversationId, {
+              id: messageId,
+              actor: "Carlos",
+              content: body.content,
+              attachments: body.attachments ?? [],
+            });
+          }
+
+          const result = await nora.handleCarlosRequest({ conversationId, messageId });
+          sendJson(200, result);
+          return;
+        }
+
         const result = await nora.handleCarlosRequest({
           conversationId,
           content: body.content,
           attachments: body.attachments ?? [],
-          messageId: body.messageId ?? null,
-          reprocessExisting: false,
         });
         sendJson(200, result);
         return;
