@@ -23,6 +23,7 @@ import OperationsPage from "./pages/OperationsPage";
 import ProcessesPage from "./pages/ProcessesPage";
 import ProvidersPage from "./pages/ProvidersPage";
 import StorePage from "./pages/StorePage";
+import "./styles/navigation.scss";
 
 const NAV_ITEMS = [
   { id: "office", label: "Office", icon: IconBuildingSkyscraper },
