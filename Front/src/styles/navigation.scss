@@ -1,0 +1,30 @@
+.office-nav__brand-row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.office-nav__brand-row .office-nav__brand {
+  width: auto;
+  min-width: 0;
+  flex: 1 1 auto;
+  border-bottom: 0;
+}
+
+.office-nav__theme {
+  display: inline-flex;
+  width: 42px;
+  min-width: 42px;
+  align-items: center;
+  justify-content: center;
+  margin: 12px 10px 12px 0;
+  padding: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-muted);
+}
+
+.office-nav__theme:hover {
+  background: var(--color-surface-soft);
+  color: var(--color-text);
+}

@@ -8,12 +8,12 @@ const requestError = message => {
   return error;
 };
 
-export const createOfficeStateController = ({ allowedOrigin, noraRegistry, nora, ...dependencies }) => {
+export const createOfficeStateController = ({ allowedOrigin, noraRegistry, nora, service = null, ...dependencies }) => {
   if (!allowedOrigin || typeof allowedOrigin !== "string") {
     throw new Error("Office State controller requires one allowed frontend origin");
   }
 
-  const service = createOfficeStateService({ nora, ...dependencies });
+  const stateService = service ?? createOfficeStateService({ nora, ...dependencies });
   const urlFrom = req => new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
   const matches = req => {
     const pathname = urlFrom(req).pathname;
@@ -69,6 +69,7 @@ export const createOfficeStateController = ({ allowedOrigin, noraRegistry, nora,
       if (url.pathname === "/nora") {
         const selection = validateNoraSelection(await readJson(req));
         await noraRegistry.saveNoraDefinition(selection);
+        await stateService.invalidate(["nora", "models"]);
         return sendJson(200, nora.getNoraState());
       }
 
@@ -97,7 +98,7 @@ export const createOfficeStateController = ({ allowedOrigin, noraRegistry, nora,
       res.once("close", handleClose);
 
       try {
-        const payload = await service.ping({
+        const payload = await stateService.ping({
           since,
           waitMs,
           clientInstance: url.searchParams.get("instance"),
@@ -116,5 +117,5 @@ export const createOfficeStateController = ({ allowedOrigin, noraRegistry, nora,
     }
   };
 
-  return { matches, handle };
+  return { matches, handle, service: stateService };
 };
