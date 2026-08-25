@@ -11,6 +11,9 @@ import {
   IconZoomOut,
 } from "@tabler/icons-react";
 
+import { useAppContext } from "../AppContext";
+import api, { endpoints } from "../api";
+
 const NODE_WIDTH = 108;
 const NODE_HEIGHT = 68;
 const X_GAP = 150;
@@ -21,6 +24,7 @@ const GROUP_MIN_HEIGHT = 120;
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2.2;
 const EDGE_OFFSET = 30;
+const EDGE_BACKTRACK_OFFSET = 90;
 const EDGE_RADIUS = 9;
 const FIT_PADDING = 56;
 
@@ -55,6 +59,20 @@ const validGroup = group => (
   && Number.isFinite(Number(group.height))
 );
 const clampZoom = value => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, value));
+const edgeKey = (from, to) => JSON.stringify([from, to]);
+
+const cloneEdgeRoutes = value => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result = {};
+  for (const [key, route] of Object.entries(value)) {
+    if (!route || typeof route !== "object" || Array.isArray(route)) continue;
+    const dx = Number(route.dx ?? 0);
+    const dy = Number(route.dy ?? 0);
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) continue;
+    result[key] = { dx: Math.round(dx), dy: Math.round(dy) };
+  }
+  return result;
+};
 
 const autoLayout = (tasks, edges, start, direction = "horizontal") => {
   const ids = Object.keys(tasks || {});
@@ -117,31 +135,15 @@ const resolvePositions = (tasks, edges, start, savedPositions) => {
   ]));
 };
 
-const center = rect => ({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
 const nodeRect = position => ({ x: position.x, y: position.y, width: NODE_WIDTH, height: NODE_HEIGHT });
 
-const sideFor = (sourceRect, targetRect) => {
-  const sourceCenter = center(sourceRect);
-  const targetCenter = center(targetRect);
-  const dx = targetCenter.x - sourceCenter.x;
-  const dy = targetCenter.y - sourceCenter.y;
-  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? ["right", "left"] : ["left", "right"];
-  return dy >= 0 ? ["bottom", "top"] : ["top", "bottom"];
-};
+const port = (rect, side) => side === "left"
+  ? { x: rect.x, y: rect.y + rect.height / 2 }
+  : { x: rect.x + rect.width, y: rect.y + rect.height / 2 };
 
-const port = (rect, side) => {
-  if (side === "left") return { x: rect.x, y: rect.y + rect.height / 2 };
-  if (side === "right") return { x: rect.x + rect.width, y: rect.y + rect.height / 2 };
-  if (side === "top") return { x: rect.x + rect.width / 2, y: rect.y };
-  return { x: rect.x + rect.width / 2, y: rect.y + rect.height };
-};
-
-const outwardPoint = (point, side, amount = EDGE_OFFSET) => {
-  if (side === "left") return { x: point.x - amount, y: point.y };
-  if (side === "right") return { x: point.x + amount, y: point.y };
-  if (side === "top") return { x: point.x, y: point.y - amount };
-  return { x: point.x, y: point.y + amount };
-};
+const outwardPoint = (point, side, amount = EDGE_OFFSET) => side === "left"
+  ? { x: point.x - amount, y: point.y }
+  : { x: point.x + amount, y: point.y };
 
 const cleanPoints = points => {
   const result = [];
@@ -165,35 +167,6 @@ const cleanPoints = points => {
     }
   }
   return result;
-};
-
-const smoothStepPoints = (sourceRect, targetRect) => {
-  const [sourceSide, targetSide] = sideFor(sourceRect, targetRect);
-  const start = port(sourceRect, sourceSide);
-  const end = port(targetRect, targetSide);
-  const sourceOut = outwardPoint(start, sourceSide);
-  const targetOut = outwardPoint(end, targetSide);
-  const horizontal = sourceSide === "left" || sourceSide === "right";
-
-  const points = horizontal
-    ? [
-        start,
-        sourceOut,
-        { x: (sourceOut.x + targetOut.x) / 2, y: sourceOut.y },
-        { x: (sourceOut.x + targetOut.x) / 2, y: targetOut.y },
-        targetOut,
-        end,
-      ]
-    : [
-        start,
-        sourceOut,
-        { x: sourceOut.x, y: (sourceOut.y + targetOut.y) / 2 },
-        { x: targetOut.x, y: (sourceOut.y + targetOut.y) / 2 },
-        targetOut,
-        end,
-      ];
-
-  return { sourceSide, targetSide, points: cleanPoints(points) };
 };
 
 const distance = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
@@ -224,6 +197,48 @@ const roundedPath = points => {
   }
   const last = cleaned.at(-1);
   return `${path} L ${last.x} ${last.y}`;
+};
+
+const edgeRoute = (sourceRect, targetRect, override = null) => {
+  const start = port(sourceRect, "right");
+  const end = port(targetRect, "left");
+  const sourceOut = outwardPoint(start, "right");
+  const targetOut = outwardPoint(end, "left");
+  const forward = targetOut.x >= sourceOut.x + EDGE_OFFSET;
+  const baseControl = {
+    x: forward
+      ? (sourceOut.x + targetOut.x) / 2
+      : Math.max(sourceOut.x, targetOut.x) + EDGE_BACKTRACK_OFFSET,
+    y: (sourceOut.y + targetOut.y) / 2,
+  };
+  const dx = Number(override?.dx ?? 0);
+  const dy = Number(override?.dy ?? 0);
+  const control = {
+    x: baseControl.x + (Number.isFinite(dx) ? dx : 0),
+    y: baseControl.y + (Number.isFinite(dy) ? dy : 0),
+  };
+
+  const points = Math.abs(control.y - baseControl.y) < 0.5
+    ? [
+        start,
+        sourceOut,
+        { x: control.x, y: sourceOut.y },
+        { x: control.x, y: targetOut.y },
+        targetOut,
+        end,
+      ]
+    : [
+        start,
+        sourceOut,
+        { x: control.x, y: sourceOut.y },
+        control,
+        { x: targetOut.x, y: control.y },
+        targetOut,
+        end,
+      ];
+
+  const cleaned = cleanPoints(points);
+  return { start, end, sourceOut, targetOut, baseControl, control, points: cleaned, path: roundedPath(cleaned) };
 };
 
 const groupDepths = groups => {
@@ -320,6 +335,15 @@ export default function ProcessGraph({
   onGroupsChange,
   onCanvasClick,
 }) {
+  const { officeState } = useAppContext();
+  const workflowForGraph = useMemo(
+    () => (officeState.workflows || []).find(item => item.tasks === tasks) || null,
+    [officeState.workflows, tasks],
+  );
+  const storedEdgeRoutes = useMemo(
+    () => cloneEdgeRoutes(workflowForGraph?.config?._ui?.edgeRoutes),
+    [workflowForGraph?.id, workflowForGraph?.config?._ui?.edgeRoutes],
+  );
   const initialPositions = useMemo(
     () => resolvePositions(tasks, edges, start, savedPositions),
     [tasks, edges, start, savedPositions],
@@ -330,10 +354,13 @@ export default function ProcessGraph({
   const [draggingId, setDraggingId] = useState("");
   const [panning, setPanning] = useState(false);
   const [connecting, setConnecting] = useState(null);
+  const [edgeRoutes, setEdgeRoutes] = useState(storedEdgeRoutes);
   const dragRef = useRef(null);
   const panRef = useRef(null);
   const groupDragRef = useRef(null);
   const connectRef = useRef(null);
+  const edgeDragRef = useRef(null);
+  const edgeRoutesRef = useRef(storedEdgeRoutes);
   const viewportRef = useRef(null);
   const suppressCanvasClickRef = useRef(false);
   const initialFitRef = useRef(false);
@@ -341,6 +368,47 @@ export default function ProcessGraph({
   useEffect(() => {
     if (!dragRef.current) setPositions(initialPositions);
   }, [initialPositions]);
+
+  useEffect(() => {
+    if (edgeDragRef.current) return;
+    edgeRoutesRef.current = storedEdgeRoutes;
+    setEdgeRoutes(storedEdgeRoutes);
+  }, [storedEdgeRoutes]);
+
+  const setEdgeRoutesLive = next => {
+    edgeRoutesRef.current = next;
+    setEdgeRoutes(next);
+  };
+
+  const persistEdgeRoutes = async routes => {
+    if (!workflowForGraph?.id) return;
+    const liveKeys = new Set((edges || []).map(([from, to]) => edgeKey(from, to)));
+    const compact = {};
+    for (const [key, route] of Object.entries(routes || {})) {
+      if (!liveKeys.has(key)) continue;
+      const dx = Math.round(Number(route?.dx ?? 0));
+      const dy = Math.round(Number(route?.dy ?? 0));
+      if (!Number.isFinite(dx) || !Number.isFinite(dy)) continue;
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+      compact[key] = { dx, dy };
+    }
+
+    const nextConfig = { ...(workflowForGraph.config || {}) };
+    const nextUi = { ...(nextConfig._ui || {}) };
+    if (Object.keys(compact).length) nextUi.edgeRoutes = compact;
+    else delete nextUi.edgeRoutes;
+    if (Object.keys(nextUi).length) nextConfig._ui = nextUi;
+    else delete nextConfig._ui;
+
+    try {
+      await api.patch(endpoints.workflowConfig(workflowForGraph.id), nextConfig);
+    } catch (error) {
+      console.error("[workflow-graph] Could not persist edge route.", error);
+      const fallback = cloneEdgeRoutes(workflowForGraph?.config?._ui?.edgeRoutes);
+      edgeRoutesRef.current = fallback;
+      setEdgeRoutes(fallback);
+    }
+  };
 
   const resolvedGroups = useMemo(() => resolveGroups(groups, positions), [groups, positions]);
   const depths = useMemo(() => groupDepths(resolvedGroups), [resolvedGroups]);
@@ -357,9 +425,9 @@ export default function ProcessGraph({
     const source = rectangles[from];
     const target = rectangles[to];
     if (!source || !target) return null;
-    const route = smoothStepPoints(source, target);
-    return { from, to, ...route, path: roundedPath(route.points) };
-  }).filter(Boolean), [edges, rectangles]);
+    const key = edgeKey(from, to);
+    return { from, to, key, ...edgeRoute(source, target, edgeRoutes[key]) };
+  }).filter(Boolean), [edges, rectangles, edgeRoutes]);
 
   const graphPoint = event => {
     const rect = viewportRef.current?.getBoundingClientRect();
@@ -469,6 +537,7 @@ export default function ProcessGraph({
       || event.target.closest?.(".process-node-wrap")
       || event.target.closest?.(".workflow-group")
       || event.target.closest?.(".process-edge-hit")
+      || event.target.closest?.(".process-edge-handle")
       || event.target.closest?.(".process-graph__controls")
     ) return;
     event.preventDefault();
@@ -501,7 +570,7 @@ export default function ProcessGraph({
     setPanning(false);
   };
 
-  const beginConnect = (event, from, side) => {
+  const beginConnect = (event, from) => {
     if (!editable || !onConnect || event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
@@ -509,7 +578,7 @@ export default function ProcessGraph({
     const rect = rectangles[from];
     if (!rect) return;
     connectRef.current = { pointerId: event.pointerId, from };
-    setConnecting({ from, start: port(rect, side), pointer: graphPoint(event) });
+    setConnecting({ from, start: port(rect, "right"), pointer: graphPoint(event) });
   };
 
   const moveConnect = event => {
@@ -529,6 +598,59 @@ export default function ProcessGraph({
     if (to && to !== connection.from) onConnect?.(connection.from, to);
     connectRef.current = null;
     setConnecting(null);
+  };
+
+  const beginEdgeDrag = (event, edge) => {
+    if (!editable || !workflowForGraph?.id || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    onEdgeSelect?.([edge.from, edge.to]);
+    onSelect?.(null);
+    onGroupSelect?.(null);
+    const origin = edgeRoutesRef.current[edge.key] || { dx: 0, dy: 0 };
+    edgeDragRef.current = {
+      pointerId: event.pointerId,
+      key: edge.key,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin,
+      moved: false,
+    };
+  };
+
+  const moveEdgeDrag = event => {
+    const drag = edgeDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const dx = (event.clientX - drag.startX) / zoom;
+    const dy = (event.clientY - drag.startY) / zoom;
+    const next = {
+      ...edgeRoutesRef.current,
+      [drag.key]: {
+        dx: Math.round((drag.origin.dx || 0) + dx),
+        dy: Math.round((drag.origin.dy || 0) + dy),
+      },
+    };
+    drag.moved ||= Math.abs(dx) > 2 || Math.abs(dy) > 2;
+    setEdgeRoutesLive(next);
+  };
+
+  const endEdgeDrag = event => {
+    const drag = edgeDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    edgeDragRef.current = null;
+    if (drag.moved) void persistEdgeRoutes(edgeRoutesRef.current);
+  };
+
+  const resetEdgeRoute = (event, edge) => {
+    if (!editable || !workflowForGraph?.id) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const next = { ...edgeRoutesRef.current };
+    delete next[edge.key];
+    setEdgeRoutesLive(next);
+    void persistEdgeRoutes(next);
   };
 
   const groupDescendants = groupId => {
@@ -632,6 +754,7 @@ export default function ProcessGraph({
       event.target.closest?.(".process-node-wrap")
       || event.target.closest?.(".workflow-group")
       || event.target.closest?.(".process-edge-hit")
+      || event.target.closest?.(".process-edge-handle")
       || event.target.closest?.(".process-graph__controls")
     ) return;
     onCanvasClick?.(graphPoint(event));
@@ -655,7 +778,8 @@ export default function ProcessGraph({
   const previewPath = connecting
     ? roundedPath(cleanPoints([
         connecting.start,
-        { x: connecting.pointer.x, y: connecting.start.y },
+        { x: (connecting.start.x + connecting.pointer.x) / 2, y: connecting.start.y },
+        { x: (connecting.start.x + connecting.pointer.x) / 2, y: connecting.pointer.y },
         connecting.pointer,
       ]))
     : "";
@@ -733,7 +857,7 @@ export default function ProcessGraph({
             </marker>
           </defs>
           {routedEdges.map(edge => (
-            <g key={`${edge.from}-${edge.to}`}>
+            <g key={edge.key}>
               <path
                 className={sameEdge(selectedEdge, edge.from, edge.to) ? "process-edge process-edge--selected" : "process-edge"}
                 d={edge.path}
@@ -756,18 +880,37 @@ export default function ProcessGraph({
           {connecting && <path className="process-edge process-edge--preview" d={previewPath} />}
         </svg>
 
+        {editable && workflowForGraph?.id && routedEdges
+          .filter(edge => sameEdge(selectedEdge, edge.from, edge.to))
+          .map(edge => (
+            <button
+              key={`route-${edge.key}`}
+              type="button"
+              className="process-edge-handle"
+              style={{ left: edge.control.x, top: edge.control.y }}
+              onPointerDown={event => beginEdgeDrag(event, edge)}
+              onPointerMove={moveEdgeDrag}
+              onPointerUp={endEdgeDrag}
+              onPointerCancel={endEdgeDrag}
+              onDoubleClick={event => resetEdgeRoute(event, edge)}
+              onClick={event => event.stopPropagation()}
+              title="Drag to reroute this edge · double-click to reset"
+              aria-label={`Reroute ${edge.from} to ${edge.to}`}
+            />
+          ))}
+
         {nodes.map(node => {
           const Icon = nodeTypeIcon(node.task?.type);
           const status = statuses[node.id] || node.task?.status || "";
           const selected = selectedId === node.id;
           const dragging = draggingId === node.id;
-          const canOutput = editable && node.task?.type !== "end";
+          const canInput = node.task?.type !== "start";
+          const canOutput = node.task?.type !== "end";
           return (
             <div
               key={node.id}
               className={`process-node-wrap ${selected ? "process-node-wrap--selected" : ""} ${dragging ? "process-node-wrap--dragging" : ""}`}
               style={{ left: node.x, top: node.y, width: NODE_WIDTH, height: NODE_HEIGHT }}
-              data-connect-input={node.task?.type !== "start" ? node.id : undefined}
             >
               {onRevise && node.task?.type === "task" && (
                 <div className="process-node__toolbar">
@@ -801,17 +944,23 @@ export default function ProcessGraph({
                 <span className="process-node__icon"><Icon size={20} stroke={1.7} /></span>
                 {status && <span className="process-node__status" title={status} />}
               </button>
-              {canOutput && ["top", "right", "bottom", "left"].map(side => (
+              {canInput && (
                 <span
-                  key={side}
-                  className={`process-node__connector process-node__connector--${side}`}
-                  onPointerDown={event => beginConnect(event, node.id, side)}
-                  onPointerMove={moveConnect}
-                  onPointerUp={endConnect}
-                  onPointerCancel={endConnect}
-                  title={`Connect from ${side}`}
+                  className="process-node__port process-node__port--input"
+                  data-connect-input={node.id}
+                  title="Incoming connection"
                 />
-              ))}
+              )}
+              {canOutput && (
+                <span
+                  className={`process-node__port process-node__port--output ${editable ? "process-node__port--interactive" : ""}`}
+                  onPointerDown={editable ? event => beginConnect(event, node.id) : undefined}
+                  onPointerMove={editable ? moveConnect : undefined}
+                  onPointerUp={editable ? endConnect : undefined}
+                  onPointerCancel={editable ? endConnect : undefined}
+                  title={editable ? "Drag to connect" : "Outgoing connection"}
+                />
+              )}
               <span className="process-node__description">
                 <strong>{nodeLabel(node.id, node.task)}</strong>
                 <small>{nodeSubtitle(node.task)}</small>
