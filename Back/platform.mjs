@@ -21,6 +21,8 @@ import { createKnowledgeController } from "./src/controllers/KnowledgeController
 import * as nora from "./src/controllers/NoraController.mjs";
 import { createOfficeStateController } from "./src/controllers/OfficeStateController.mjs";
 import * as processes from "./src/controllers/ProcessController.mjs";
+import * as providers from "./src/controllers/ProviderController.mjs";
+import { createProviderResourceController } from "./src/controllers/ProviderResourceController.mjs";
 import * as schedules from "./src/controllers/ScheduleController.mjs";
 import { createVariableController } from "./src/controllers/VariableController.mjs";
 import * as engine from "./src/services/ProcessEngine.mjs";
@@ -31,6 +33,7 @@ await events.loadEvents();
 await authorization.loadAuthorizations();
 await tools.loadTools();
 await skills.loadSkills();
+await providers.loadProviderPreferences();
 await noraRegistry.loadNoraDefinition();
 await processes.loadProcesses();
 await reconcileInterruptedWorkflows();
@@ -85,6 +88,10 @@ const conversationResources = createConversationResourceController({
   artifacts,
   attachments,
 });
+const providerResources = createProviderResourceController({
+  allowedOrigin: config.frontendOrigin,
+  providers,
+});
 const credentials = createCredentialController({ allowedOrigin: config.frontendOrigin });
 const knowledge = createKnowledgeController({ allowedOrigin: config.frontendOrigin });
 const variables = createVariableController({ allowedOrigin: config.frontendOrigin });
@@ -105,6 +112,10 @@ const officeState = createOfficeStateController({
 const server = createServer((req, res) => {
   if (conversationResources.matches(req)) {
     void conversationResources.handle(req, res);
+    return;
+  }
+  if (providerResources.matches(req)) {
+    void providerResources.handle(req, res);
     return;
   }
   if (officeState.matches(req)) {
