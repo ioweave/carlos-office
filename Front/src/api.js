@@ -15,14 +15,28 @@ export const setOfficeStateBridge = bridge => {
   if (!stateBridge) pendingMutationRevision = null;
 };
 
+const requestPath = config => String(config.url || "").split("?", 1)[0];
+
 const isConversationSend = config => {
   const method = String(config.method || "get").toLowerCase();
-  const path = String(config.url || "").split("?", 1)[0];
+  const path = requestPath(config);
 
   return (
     (method === "post" && /\/conversations\/[^/]+\/requests$/.test(path))
     || (method === "patch" && /\/conversations\/[^/]+\/messages\/[^/]+$/.test(path))
   );
+};
+
+const isStateMutation = config => {
+  const method = String(config.method || "get").toLowerCase();
+  if (["get", "head", "options"].includes(method)) return false;
+  const path = requestPath(config);
+  return path === "/nora"
+    || path.startsWith("/conversations")
+    || path.startsWith("/workflows")
+    || path.startsWith("/approvals")
+    || path.startsWith("/providers")
+    || path.startsWith("/skills");
 };
 
 const decodePart = value => {
@@ -90,7 +104,7 @@ api.interceptors.request.use(config => {
   if (method === "get" && stateBridge) {
     const resolved = stateBackedRead(config.url, stateBridge.read());
     if (resolved.matched) config.adapter = localStateAdapter(config);
-  } else if (method !== "get" && stateBridge) {
+  } else if (stateBridge && isStateMutation(config)) {
     config.__officeStateRevision = stateBridge.read()?.revision ?? null;
   }
 
@@ -98,8 +112,7 @@ api.interceptors.request.use(config => {
 });
 
 api.interceptors.response.use(response => {
-  const method = String(response.config?.method || "get").toLowerCase();
-  if (method !== "get" && Number.isSafeInteger(response.config?.__officeStateRevision)) {
+  if (Number.isSafeInteger(response.config?.__officeStateRevision)) {
     const baseline = response.config.__officeStateRevision;
     pendingMutationRevision = pendingMutationRevision === null
       ? baseline
