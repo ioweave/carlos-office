@@ -188,3 +188,7 @@
 .process-graph--editable .process-node {
   cursor: move;
 }
+
+.process-graph:not(.process-graph--editable) .workflow-group {
+  pointer-events: none;
+}
