@@ -1,5 +1,5 @@
-.operations-studio--editing .studio-layout__canvas {
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 35%, transparent);
+.operations-studio--editable .studio-layout__canvas {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 28%, transparent);
 }
 
 .workflow-layout-toolbar--editor {
@@ -16,20 +16,133 @@
   white-space: nowrap;
 }
 
-.process-graph--editable .process-node::before,
-.process-graph--editable .process-node::after {
-  display: none;
+.workflow-layout-toolbar__locked {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text-faint);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.workflow-group-menu {
+  position: relative;
+}
+
+.workflow-group-menu__popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  display: flex;
+  width: 180px;
+  flex-direction: column;
+  padding: 5px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+  z-index: 20;
+}
+
+.workflow-group-menu__popover button {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+}
+
+.workflow-group-menu__popover button:hover {
+  background: var(--color-surface-soft);
+}
+
+.workflow-group-menu__popover strong {
+  font-size: 10px;
+}
+
+.workflow-group-menu__popover small {
+  color: var(--color-text-faint);
+  font-size: 8px;
+  line-height: 1.35;
+}
+
+.process-graph {
+  position: relative;
+}
+
+.process-graph__zoom-space {
+  position: relative;
+  min-width: 100%;
+  min-height: 100%;
+}
+
+.process-graph__canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.process-graph__controls {
+  position: sticky;
+  top: 12px;
+  left: calc(100% - 250px);
+  display: flex;
+  width: max-content;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-surface) 94%, transparent);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(8px);
+  z-index: 30;
+}
+
+.process-graph__controls button {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-muted);
+}
+
+.process-graph__controls button:hover {
+  background: var(--color-surface-soft);
+  color: var(--color-text);
+}
+
+.process-graph__controls span {
+  width: 42px;
+  color: var(--color-text-faint);
+  font-size: 8px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
 .process-graph__edges {
-  z-index: 1;
+  z-index: 4;
 }
 
 .process-graph__edges .process-edge {
   fill: none;
-  stroke: color-mix(in srgb, var(--color-text-faint) 72%, transparent);
+  stroke: color-mix(in srgb, var(--color-text-faint) 75%, transparent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
   stroke-width: 1.5;
   pointer-events: none;
+}
+
+.process-edge__arrow {
+  fill: color-mix(in srgb, var(--color-text-faint) 82%, transparent);
 }
 
 .process-graph__edges .process-edge--selected {
@@ -46,83 +159,153 @@
 .process-graph__edges .process-edge-hit {
   fill: none;
   stroke: transparent;
+  stroke-linecap: round;
+  stroke-linejoin: round;
   stroke-width: 14;
   cursor: pointer;
   pointer-events: stroke;
 }
 
 .process-node-wrap {
-  z-index: 2;
+  z-index: 10;
 }
 
 .process-node__connector {
   position: absolute;
-  top: 50%;
   display: block;
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   border: 2px solid var(--color-accent);
   border-radius: 50%;
   background: var(--color-surface);
   box-shadow: 0 0 0 2px var(--color-surface);
   cursor: crosshair;
+  opacity: 0;
   touch-action: none;
-  transform: translateY(-50%);
-  z-index: 5;
+  transition: opacity var(--motion-fast), transform var(--motion-fast), background var(--motion-fast);
+  z-index: 15;
 }
 
-.process-node__connector--input {
+.process-graph--editable .process-node-wrap:hover .process-node__connector,
+.process-graph--editable .process-node-wrap--selected .process-node__connector {
+  opacity: 1;
+}
+
+.process-node__connector--left {
+  top: 50%;
   left: -7px;
+  transform: translateY(-50%);
 }
 
-.process-node__connector--output {
+.process-node__connector--right {
+  top: 50%;
   right: -7px;
+  transform: translateY(-50%);
+}
+
+.process-node__connector--top {
+  top: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.process-node__connector--bottom {
+  bottom: -7px;
+  left: 50%;
+  transform: translateX(-50%);
 }
 
 .process-node__connector:hover {
   background: var(--color-accent);
-  transform: translateY(-50%) scale(1.15);
+}
+
+.process-node__connector--left:hover,
+.process-node__connector--right:hover {
+  transform: translateY(-50%) scale(1.18);
+}
+
+.process-node__connector--top:hover,
+.process-node__connector--bottom:hover {
+  transform: translateX(-50%) scale(1.18);
+}
+
+.process-graph--editable .process-node::before,
+.process-graph--editable .process-node::after {
+  display: none;
+}
+
+.process-graph--locked .process-node {
+  cursor: default;
 }
 
 .workflow-group {
   position: absolute;
-  border: 1px dashed color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--color-accent-soft) 32%, transparent);
-  cursor: grab;
+  border: 2px solid color-mix(in srgb, var(--color-accent) 35%, var(--color-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-accent-soft) 11%, transparent);
+  cursor: pointer;
   touch-action: none;
   user-select: none;
-  z-index: 0;
 }
 
-.process-graph--editable .workflow-group:hover {
+.workflow-group--map {
+  border-color: color-mix(in srgb, var(--color-info) 50%, var(--color-border));
+  background: color-mix(in srgb, var(--color-info) 4%, transparent);
+}
+
+.workflow-group--loop {
+  border-color: color-mix(in srgb, var(--color-warning) 52%, var(--color-border));
+  background: color-mix(in srgb, var(--color-warning) 4%, transparent);
+}
+
+.process-graph--editable .workflow-group {
+  cursor: move;
+}
+
+.process-graph--editable .workflow-group:hover,
+.workflow-group--selected {
   border-color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent-soft) 52%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 12%, transparent);
 }
 
 .workflow-group__title {
   position: absolute;
-  top: -11px;
-  left: 12px;
-  max-width: calc(100% - 42px);
-  overflow: hidden;
-  padding: 2px 7px;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  background: var(--color-surface);
+  top: -28px;
+  left: 8px;
+  display: inline-flex;
+  max-width: calc(100% - 16px);
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: var(--color-bg);
   color: var(--color-text-muted);
-  font-size: 9px;
-  font-weight: 700;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workflow-group__title strong {
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.workflow-group__title span {
+  max-width: 160px;
+  overflow: hidden;
+  font-size: 9px;
+  text-overflow: ellipsis;
+}
+
+.workflow-group__title small {
+  color: var(--color-text-faint);
+  font-size: 8px;
 }
 
 .workflow-group__resize {
   position: absolute;
-  right: -5px;
-  bottom: -5px;
-  width: 13px;
-  height: 13px;
+  right: -6px;
+  bottom: -6px;
+  width: 14px;
+  height: 14px;
   border: 1px solid var(--color-accent);
   border-radius: 3px;
   background: var(--color-surface);
@@ -142,33 +325,82 @@
   line-height: 1.55;
 }
 
-.workflow-groups-list {
-  margin-top: 18px;
-  padding-top: 14px;
+.execution-group-form {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.execution-group-form .field small {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-text-faint);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.execution-group-form textarea {
+  width: 100%;
+  min-height: 92px;
+  padding: 9px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  resize: vertical;
+}
+
+.execution-group-form__section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-top: 12px;
   border-top: 1px solid var(--color-border);
 }
 
-.workflow-groups-list h3 {
-  margin: 0 0 8px;
-  font-size: 11px;
-}
-
-.workflow-group-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.workflow-group-row span {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  color: var(--color-text-muted);
+.execution-group-form__section > strong {
   font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.execution-group-form__section > span,
+.execution-group-form__note {
+  margin: 0;
+  color: var(--color-text-faint);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.execution-group-form__inline {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.execution-group-form__reviewer {
+  margin: 0;
+}
+
+.execution-group-form__members {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface-soft);
+}
+
+.execution-group-form__members span {
+  color: var(--color-text-faint);
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.execution-group-form__members strong {
+  color: var(--color-text-muted);
+  font-size: 9px;
+  overflow-wrap: anywhere;
 }
 
 .workflow-data-editor__locked {
@@ -177,11 +409,11 @@
   padding: 0 16px 16px;
 }
 
-.process-graph--editable {
+.process-graph--pannable {
   cursor: grab;
 }
 
-.process-graph--editable.process-graph--panning {
+.process-graph--panning {
   cursor: grabbing;
 }
 
@@ -189,6 +421,64 @@
   cursor: move;
 }
 
-.process-graph:not(.process-graph--editable) .workflow-group {
-  pointer-events: none;
+.operations-studio__tasks .inspector-panel--floating {
+  position: absolute;
+  top: 58px;
+  right: 16px;
+  bottom: 16px;
+  width: min(390px, calc(100% - 32px));
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  box-shadow: 0 14px 36px color-mix(in srgb, var(--color-text) 15%, transparent);
+  z-index: 40;
+}
+
+.workflow-inspector-tabs {
+  display: flex;
+  gap: 4px;
+  margin: -4px 0 12px;
+}
+
+.workflow-inspector-tabs button {
+  flex: 1 1 0;
+  padding: 6px;
+  border-radius: 6px;
+  background: var(--color-surface-soft);
+  color: var(--color-text-muted);
+  font-size: 9px;
+}
+
+.workflow-inspector-tabs button[aria-selected="true"] {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-weight: 700;
+}
+
+.workflow-compact-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 5px;
+  color: var(--color-text-faint);
+  font-size: 9px;
+}
+
+@media (max-width: 760px) {
+  .process-graph__controls {
+    left: calc(100% - 180px);
+  }
+
+  .process-graph__controls button:nth-last-child(-n+2) {
+    display: none;
+  }
+
+  .operations-studio__tasks .inspector-panel--floating {
+    top: auto;
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+    width: auto;
+    max-height: 58%;
+  }
 }
