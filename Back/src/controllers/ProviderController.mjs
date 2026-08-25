@@ -223,10 +223,12 @@ export const updateModelPreferences = async (provider, modelName, changes) => {
   preferences[provider].models ??= {};
   const previous = preferenceFor(provider, modelName);
   const next = { ...previous };
+  const updated = clone(current);
 
   if (changes.enabled != null) {
     if (typeof changes.enabled !== "boolean") throw new Error("Model enabled must be boolean");
     next.enabled = changes.enabled;
+    updated.enabled = changes.enabled;
   }
 
   if (changes.capabilities != null) {
@@ -239,6 +241,7 @@ export const updateModelPreferences = async (provider, modelName, changes) => {
         throw new Error(`Model ${modelName} does not report ${name} support`);
       }
       next.capabilities[name] = enabled;
+      updated.capabilities[name].enabled = enabled;
     }
   }
 
@@ -254,12 +257,15 @@ export const updateModelPreferences = async (provider, modelName, changes) => {
         throw new Error(`${key} must be a non-negative number or null`);
       }
       next.costPerMillionTokens[key] = value;
+      updated.costPerMillionTokens[key] = value;
     }
   }
 
   preferences[provider].models[modelName] = next;
   await persistPreferences();
-  catalogLoadedAt = 0;
-  const refreshed = await listProviders({ refresh: true });
-  return refreshed.find(entry => entry.provider === provider)?.models.find(model => model.name === modelName) ?? null;
+
+  const providerEntry = catalog.find(entry => entry.provider === provider);
+  const index = providerEntry?.models.findIndex(model => model.name === modelName) ?? -1;
+  if (providerEntry && index >= 0) providerEntry.models[index] = clone(updated);
+  return updated;
 };
