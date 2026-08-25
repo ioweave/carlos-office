@@ -45,6 +45,9 @@ process.on("message", message => {
     const error = new Error(message.error || "Tool execution failed");
     error.blocked = Boolean(message.blocked);
     error.approvalId = message.approvalId ?? null;
+    if (typeof message.code === "string" && message.code) error.code = message.code;
+    if (typeof message.retryable === "boolean") error.retryable = message.retryable;
+    if (typeof message.hint === "string" && message.hint.trim()) error.hint = message.hint.trim();
     pending.reject(error);
     return;
   }
