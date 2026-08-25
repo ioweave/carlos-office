@@ -6,6 +6,8 @@ const NODE_HEIGHT = 64;
 const X_GAP = 130;
 const Y_GAP = 78;
 const PADDING = 72;
+const GROUP_MIN_WIDTH = 180;
+const GROUP_MIN_HEIGHT = 120;
 
 const humanizeId = id => String(id || "")
   .replace(/[_-]+/g, " ")
@@ -32,6 +34,15 @@ const validPosition = value => (
   value
   && Number.isFinite(value.x)
   && Number.isFinite(value.y)
+);
+
+const validGroup = group => (
+  group
+  && typeof group.id === "string"
+  && Number.isFinite(group.x)
+  && Number.isFinite(group.y)
+  && Number.isFinite(group.width)
+  && Number.isFinite(group.height)
 );
 
 const autoLayout = (tasks, edges, start) => {
@@ -96,25 +107,39 @@ const resolvePositions = (tasks, edges, start, savedPositions) => {
   ]));
 };
 
-const graphGeometry = (positions, edges) => {
+const edgePath = (source, target) => {
+  const x1 = source.x + NODE_WIDTH;
+  const y1 = source.y + NODE_HEIGHT / 2;
+  const x2 = target.x;
+  const y2 = target.y + NODE_HEIGHT / 2;
+  const mid = x1 + (x2 - x1) / 2;
+  return `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`;
+};
+
+const graphGeometry = (positions, edges, groups) => {
   const points = Object.values(positions).filter(validPosition);
-  const width = Math.max(720, ...points.map(point => point.x + NODE_WIDTH + PADDING));
-  const height = Math.max(420, ...points.map(point => point.y + NODE_HEIGHT + PADDING));
+  const validGroups = (groups || []).filter(validGroup);
+  const width = Math.max(
+    720,
+    ...points.map(point => point.x + NODE_WIDTH + PADDING),
+    ...validGroups.map(group => group.x + group.width + PADDING),
+  );
+  const height = Math.max(
+    420,
+    ...points.map(point => point.y + NODE_HEIGHT + PADDING),
+    ...validGroups.map(group => group.y + group.height + PADDING),
+  );
   const lines = (edges || []).map(([from, to]) => {
     const source = positions[from];
     const target = positions[to];
     if (!validPosition(source) || !validPosition(target)) return null;
-
-    const x1 = source.x + NODE_WIDTH;
-    const y1 = source.y + NODE_HEIGHT / 2;
-    const x2 = target.x;
-    const y2 = target.y + NODE_HEIGHT / 2;
-    const mid = x1 + (x2 - x1) / 2;
-    return { from, to, path: `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}` };
+    return { from, to, path: edgePath(source, target) };
   }).filter(Boolean);
 
   return { width, height, lines };
 };
+
+const sameEdge = (edge, from, to) => edge?.[0] === from && edge?.[1] === to;
 
 export default function ProcessGraph({
   tasks = {},
@@ -123,9 +148,15 @@ export default function ProcessGraph({
   savedPositions,
   statuses = {},
   selectedId = "",
+  selectedEdge = null,
+  groups = [],
+  editable = false,
   onSelect,
+  onEdgeSelect,
   onRevise,
   onMove,
+  onConnect,
+  onGroupsChange,
   onCanvasClick,
 }) {
   const initialPositions = useMemo(
@@ -135,24 +166,38 @@ export default function ProcessGraph({
   const [positions, setPositions] = useState(initialPositions);
   const [draggingId, setDraggingId] = useState("");
   const [panning, setPanning] = useState(false);
+  const [connecting, setConnecting] = useState(null);
   const dragRef = useRef(null);
   const panRef = useRef(null);
+  const groupDragRef = useRef(null);
+  const connectRef = useRef(null);
   const suppressCanvasClickRef = useRef(false);
+  const canvasRef = useRef(null);
 
   useEffect(() => {
     if (!dragRef.current) setPositions(initialPositions);
   }, [initialPositions]);
 
-  const geometry = useMemo(() => graphGeometry(positions, edges), [positions, edges]);
+  const geometry = useMemo(() => graphGeometry(positions, edges, groups), [positions, edges, groups]);
   const nodes = useMemo(
     () => Object.entries(tasks || {}).map(([id, task]) => ({ id, task, ...positions[id] })),
     [tasks, positions],
   );
 
+  const canvasPoint = event => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return {
+      x: Math.max(0, Math.round(event.clientX - rect.left)),
+      y: Math.max(0, Math.round(event.clientY - rect.top)),
+    };
+  };
+
   const beginDrag = (event, node) => {
     if (event.button !== 0 || !validPosition(positions[node.id])) return;
     event.stopPropagation();
     onSelect?.({ id: node.id, ...node.task });
+    onEdgeSelect?.(null);
     if (!onMove) return;
 
     event.preventDefault();
@@ -211,7 +256,13 @@ export default function ProcessGraph({
   };
 
   const beginPan = event => {
-    if (event.button !== 0 || event.target.closest?.(".process-node-wrap")) return;
+    if (
+      event.button !== 0
+      || event.target.closest?.(".process-node-wrap")
+      || event.target.closest?.(".workflow-group")
+      || event.target.closest?.(".process-edge-hit")
+      || event.target.closest?.(".process-node__connector")
+    ) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     panRef.current = {
@@ -253,21 +304,123 @@ export default function ProcessGraph({
     setPanning(false);
   };
 
-  const handleCanvasClick = () => {
+  const beginConnect = (event, from) => {
+    if (!editable || !onConnect || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const source = positions[from];
+    if (!validPosition(source)) return;
+    const pointer = canvasPoint(event);
+    connectRef.current = { pointerId: event.pointerId, from };
+    setConnecting({
+      from,
+      start: { x: source.x + NODE_WIDTH, y: source.y + NODE_HEIGHT / 2 },
+      pointer,
+    });
+  };
+
+  const moveConnect = event => {
+    const connection = connectRef.current;
+    if (!connection || connection.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    setConnecting(current => current ? { ...current, pointer: canvasPoint(event) } : current);
+  };
+
+  const endConnect = event => {
+    const connection = connectRef.current;
+    if (!connection || connection.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest?.("[data-connect-input]");
+    const to = target?.dataset?.connectInput;
+    if (to && to !== connection.from) onConnect?.(connection.from, to);
+    connectRef.current = null;
+    setConnecting(null);
+  };
+
+  const cancelConnect = event => {
+    const connection = connectRef.current;
+    if (!connection || connection.pointerId !== event.pointerId) return;
+    connectRef.current = null;
+    setConnecting(null);
+  };
+
+  const beginGroupDrag = (event, group, mode) => {
+    if (!editable || !onGroupsChange || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    groupDragRef.current = {
+      pointerId: event.pointerId,
+      id: group.id,
+      mode,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: group,
+      groups,
+      moved: false,
+    };
+  };
+
+  const moveGroup = event => {
+    const drag = groupDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    const next = drag.mode === "resize"
+      ? {
+          ...drag.origin,
+          width: Math.max(GROUP_MIN_WIDTH, Math.round(drag.origin.width + dx)),
+          height: Math.max(GROUP_MIN_HEIGHT, Math.round(drag.origin.height + dy)),
+        }
+      : {
+          ...drag.origin,
+          x: Math.max(12, Math.round(drag.origin.x + dx)),
+          y: Math.max(12, Math.round(drag.origin.y + dy)),
+        };
+    drag.groups = groups.map(item => item.id === drag.id ? next : item);
+    drag.moved = drag.moved || Math.abs(dx) > 2 || Math.abs(dy) > 2;
+    onGroupsChange?.(drag.groups, false);
+  };
+
+  const endGroup = event => {
+    const drag = groupDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    groupDragRef.current = null;
+    if (drag.moved) onGroupsChange?.(drag.groups, true);
+  };
+
+  const handleCanvasClick = event => {
     if (suppressCanvasClickRef.current) {
       suppressCanvasClickRef.current = false;
       return;
     }
-    onCanvasClick?.();
+    if (
+      event.target.closest?.(".process-node-wrap")
+      || event.target.closest?.(".workflow-group")
+      || event.target.closest?.(".process-edge-hit")
+    ) return;
+    onCanvasClick?.(canvasPoint(event));
   };
 
   if (!nodes.length) {
     return <div className="process-graph process-graph--empty">No graph data.</div>;
   }
 
+  const previewPath = connecting
+    ? `M ${connecting.start.x} ${connecting.start.y} C ${(connecting.start.x + connecting.pointer.x) / 2} ${connecting.start.y}, ${(connecting.start.x + connecting.pointer.x) / 2} ${connecting.pointer.y}, ${connecting.pointer.x} ${connecting.pointer.y}`
+    : null;
+
   return (
     <div
-      className={`process-graph process-graph--pannable ${panning ? "process-graph--panning" : ""}`}
+      className={`process-graph process-graph--pannable ${panning ? "process-graph--panning" : ""} ${editable ? "process-graph--editable" : ""}`}
       role="region"
       aria-label="Process graph"
       onPointerDown={beginPan}
@@ -276,9 +429,51 @@ export default function ProcessGraph({
       onPointerCancel={cancelPan}
       onClick={handleCanvasClick}
     >
-      <div className="process-graph__canvas" style={{ width: geometry.width, height: geometry.height }}>
+      <div ref={canvasRef} className="process-graph__canvas" style={{ width: geometry.width, height: geometry.height }}>
+        {(groups || []).filter(validGroup).map(group => (
+          <div
+            key={group.id}
+            className="workflow-group"
+            style={{ left: group.x, top: group.y, width: group.width, height: group.height }}
+            onPointerDown={event => beginGroupDrag(event, group, "move")}
+            onPointerMove={moveGroup}
+            onPointerUp={endGroup}
+            onPointerCancel={endGroup}
+          >
+            <span className="workflow-group__title">{group.title || "Group"}</span>
+            {editable && (
+              <span
+                className="workflow-group__resize"
+                onPointerDown={event => beginGroupDrag(event, group, "resize")}
+                onPointerMove={moveGroup}
+                onPointerUp={endGroup}
+                onPointerCancel={endGroup}
+              />
+            )}
+          </div>
+        ))}
+
         <svg className="process-graph__edges" width={geometry.width} height={geometry.height} aria-hidden="true">
-          {geometry.lines.map(line => <path key={`${line.from}-${line.to}`} d={line.path} />)}
+          {geometry.lines.map(line => (
+            <g key={`${line.from}-${line.to}`}>
+              <path
+                className={sameEdge(selectedEdge, line.from, line.to) ? "process-edge process-edge--selected" : "process-edge"}
+                d={line.path}
+              />
+              {editable && (
+                <path
+                  className="process-edge-hit"
+                  d={line.path}
+                  onClick={event => {
+                    event.stopPropagation();
+                    onEdgeSelect?.([line.from, line.to]);
+                    onSelect?.(null);
+                  }}
+                />
+              )}
+            </g>
+          ))}
+          {previewPath && <path className="process-edge process-edge--preview" d={previewPath} />}
         </svg>
 
         {nodes.map(node => {
@@ -286,6 +481,8 @@ export default function ProcessGraph({
           const status = statuses[node.id] || node.task?.status || "";
           const selected = selectedId === node.id;
           const dragging = draggingId === node.id;
+          const canInput = editable && node.task?.type !== "start";
+          const canOutput = editable && node.task?.type !== "end";
           return (
             <div
               key={node.id}
@@ -307,6 +504,13 @@ export default function ProcessGraph({
                   </button>
                 </div>
               )}
+              {canInput && (
+                <span
+                  className="process-node__connector process-node__connector--input"
+                  data-connect-input={node.id}
+                  title="Connection input"
+                />
+              )}
               <button
                 type="button"
                 className={`process-node process-node--${node.task?.type || "task"} ${selected ? "process-node--selected" : ""} ${status ? `process-node--${status}` : ""}`}
@@ -314,8 +518,13 @@ export default function ProcessGraph({
                 onPointerMove={moveDrag}
                 onPointerUp={endDrag}
                 onPointerCancel={cancelDrag}
+                onDoubleClick={event => {
+                  event.stopPropagation();
+                  onSelect?.({ id: node.id, ...node.task, edit: editable });
+                }}
                 onClick={event => {
                   event.stopPropagation();
+                  onEdgeSelect?.(null);
                   onSelect?.({ id: node.id, ...node.task });
                 }}
                 aria-label={`${nodeLabel(node.id, node.task)} · ${nodeSubtitle(node.task)}`}
@@ -323,6 +532,16 @@ export default function ProcessGraph({
                 <span className="process-node__icon"><Icon size={20} stroke={1.7} /></span>
                 {status && <span className="process-node__status" title={status} />}
               </button>
+              {canOutput && (
+                <span
+                  className="process-node__connector process-node__connector--output"
+                  onPointerDown={event => beginConnect(event, node.id)}
+                  onPointerMove={moveConnect}
+                  onPointerUp={endConnect}
+                  onPointerCancel={cancelConnect}
+                  title="Drag to connect"
+                />
+              )}
               <span className="process-node__description">
                 <strong>{nodeLabel(node.id, node.task)}</strong>
                 <small>{nodeSubtitle(node.task)}</small>
