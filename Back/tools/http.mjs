@@ -1,8 +1,55 @@
 import { applyCredential } from "../src/services/CredentialService.mjs";
 
+const MAX_RESPONSE_BYTES = 500 * 1024 * 1024;
+
+const httpError = (message, code, { retryable = false, hint = null } = {}) => {
+  const error = new Error(`http: ${message}`);
+  error.code = code;
+  error.retryable = retryable;
+  error.hint = hint;
+  return error;
+};
+
+const readCompleteBody = async response => {
+  const declaredHeader = response.headers.get("content-length");
+  const declaredLength = declaredHeader == null ? null : Number(declaredHeader);
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
+    throw httpError(
+      `response exceeds the 500 MB body limit (${declaredLength} > ${MAX_RESPONSE_BYTES} bytes)`,
+      "http_response_too_large",
+      {
+        retryable: true,
+        hint: "Request a narrower resource, use query parameters or a Range request, or use another retrieval strategy. Carlos Office will not load one HTTP response larger than 500 MB.",
+      },
+    );
+  }
+
+  if (!response.body) return Buffer.alloc(0);
+
+  const chunks = [];
+  let bodyBytes = 0;
+  for await (const chunk of response.body) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bodyBytes += buffer.length;
+    if (bodyBytes > MAX_RESPONSE_BYTES) {
+      throw httpError(
+        `response body exceeds the 500 MB body limit (${MAX_RESPONSE_BYTES} bytes)`,
+        "http_response_too_large",
+        {
+          retryable: true,
+          hint: "Request a narrower resource, use query parameters or a Range request, or use another retrieval strategy. Carlos Office will not load one HTTP response larger than 500 MB.",
+        },
+      );
+    }
+    chunks.push(buffer);
+  }
+
+  return Buffer.concat(chunks, bodyBytes);
+};
+
 const tool = {
   name: "http",
-  description: "Issues HTTP requests with optional credentials injected locally by service name. Credential secrets never enter Agent or model context and may only be sent to hosts allowed by that credential profile. Google Workspace service-account credentials mint short-lived delegated OAuth tokens server-side and may only access approved Workspace API routes.",
+  description: "Issues HTTP requests with optional credentials injected locally by service name. Responses are read completely up to a fixed 500 MB body limit; the model cannot lower that limit. Credential secrets never enter Agent or model context and may only be sent to hosts allowed by that credential profile. Google Workspace service-account credentials mint short-lived delegated OAuth tokens server-side and may only access approved Workspace API routes.",
   requiresApproval: false,
   provider: null,
   model: null,
@@ -42,13 +89,8 @@ const tool = {
       responseType: {
         type: "string",
         enum: ["auto", "text", "json"],
-        description: "Response parser. Defaults to auto.",
+        description: "Response parser. Defaults to auto. The complete response body is returned when it is at most 500 MB.",
         default: "auto",
-      },
-      maxBytes: {
-        type: "number",
-        description: "Maximum response body size. Defaults to 10 MB.",
-        default: 10485760,
       },
       auth: {
         type: "object",
@@ -84,22 +126,20 @@ const tool = {
   },
   async execute(inputs = {}) {
     const url = typeof inputs.url === "string" ? inputs.url.trim() : "";
-    if (!url) throw new Error('http: "url" is required and must be a non-empty string.');
+    if (!url) throw httpError('"url" is required and must be a non-empty string.', "http_invalid_url");
 
     const method = typeof inputs.method === "string" && inputs.method ? inputs.method.toUpperCase() : "GET";
     const allowed = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
-    if (!allowed.includes(method)) throw new Error(`http: "method" must be one of ${allowed.join(", ")}`);
+    if (!allowed.includes(method)) throw httpError(`"method" must be one of ${allowed.join(", ")}`, "http_invalid_method");
 
     const headers = inputs.headers && typeof inputs.headers === "object" ? inputs.headers : {};
     const query = inputs.query && typeof inputs.query === "object" ? inputs.query : {};
     const body = inputs.body ?? null;
     const timeoutMs = typeof inputs.timeoutMs === "number" ? inputs.timeoutMs : 30000;
     const responseType = inputs.responseType ?? "auto";
-    const maxBytes = typeof inputs.maxBytes === "number" ? inputs.maxBytes : 10485760;
 
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("timeoutMs must be a positive number");
-    if (!Number.isFinite(maxBytes) || maxBytes <= 0) throw new Error("maxBytes must be a positive number");
-    if (!["auto", "text", "json"].includes(responseType)) throw new Error("responseType must be one of: auto, text, json");
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw httpError("timeoutMs must be a positive number", "http_invalid_timeout");
+    if (!["auto", "text", "json"].includes(responseType)) throw httpError("responseType must be one of: auto, text, json", "http_invalid_response_type");
 
     let target;
     try {
@@ -109,7 +149,7 @@ const tool = {
       }
       target = parsed.toString();
     } catch {
-      throw new Error(`http: invalid URL: ${url}`);
+      throw httpError(`invalid URL: ${url}`, "http_invalid_url");
     }
 
     const auth = inputs.auth && typeof inputs.auth === "object" ? inputs.auth : null;
@@ -117,7 +157,7 @@ const tool = {
     let finalHeaders = baseHeaders;
     let sensitiveValues = [];
     if (auth) {
-      if (typeof auth.service !== "string" || !auth.service.trim()) throw new Error("http: auth.service is required.");
+      if (typeof auth.service !== "string" || !auth.service.trim()) throw httpError("auth.service is required.", "http_invalid_auth");
       finalHeaders = await applyCredential({
         service: auth.service.trim(),
         url: target,
@@ -148,13 +188,8 @@ const tool = {
       });
 
       const contentType = response.headers.get("content-type") || "";
-      const declaredLength = Number(response.headers.get("content-length"));
-      if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-        throw new Error(`http: response exceeds maxBytes limit (${declaredLength} > ${maxBytes})`);
-      }
-
-      const rawText = await response.text();
-      if (Buffer.byteLength(rawText, "utf8") > maxBytes) throw new Error(`http: response body exceeds maxBytes limit (${maxBytes})`);
+      const rawBody = await readCompleteBody(response);
+      const rawText = rawBody.toString("utf8");
       const text = redact(rawText, sensitiveValues);
 
       const wantsJson = responseType === "json" || (responseType === "auto" && contentType.includes("application/json"));
@@ -163,7 +198,13 @@ const tool = {
         try {
           responseBody = JSON.parse(text);
         } catch (parseError) {
-          if (responseType === "json") throw new Error(`http: response declared JSON but could not be parsed: ${parseError.message}`);
+          if (responseType === "json") {
+            throw httpError(
+              `response could not be parsed as JSON: ${parseError.message}`,
+              "http_invalid_json_response",
+              { retryable: true, hint: "Retry with responseType=\"text\" if the endpoint does not return valid JSON." },
+            );
+          }
         }
       }
 
@@ -181,14 +222,20 @@ const tool = {
         url: response.url,
         method,
         contentType,
-        bodyBytes: Buffer.byteLength(rawText, "utf8"),
+        bodyBytes: rawBody.length,
         body: responseBody,
         headers: responseHeaders,
         allow,
         corsHeaders,
       };
     } catch (error) {
-      if (error?.name === "AbortError") throw new Error(`http: request timed out after ${timeoutMs} ms`);
+      if (error?.name === "AbortError") {
+        throw httpError(
+          `request timed out after ${timeoutMs} ms`,
+          "http_timeout",
+          { retryable: true, hint: "Retry with a larger timeoutMs or use a narrower request." },
+        );
+      }
       throw error;
     } finally {
       clearTimeout(timer);
