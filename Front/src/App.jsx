@@ -30,7 +30,6 @@ const NAV_ITEMS = [
   { id: "processes", label: "Processes", icon: IconGitBranch },
   { id: "operations", label: "Operations", icon: IconActivity },
   { id: "capabilities", label: "Capabilities", icon: IconTool },
-  { id: "store", label: "Store", icon: IconKey },
   { id: "providers", label: "Providers", icon: IconCpu },
 ];
 
@@ -155,12 +154,23 @@ export default function App() {
   return (
     <div className={`office-app office-app--${active}`}>
       <aside className="office-nav" aria-label="Carlos Office navigation">
-        <button type="button" className="office-nav__brand" onClick={() => setActive("office")}>
-          <span className="office-nav__brand-mark">CO</span>
-          <span className="office-nav__brand-copy">
-            <strong>Carlos Office</strong>
-          </span>
-        </button>
+        <div className="office-nav__brand-row">
+          <button type="button" className="office-nav__brand" onClick={() => setActive("office")}>
+            <span className="office-nav__brand-mark">CO</span>
+            <span className="office-nav__brand-copy">
+              <strong>Carlos Office</strong>
+            </span>
+          </button>
+          <button
+            type="button"
+            className="office-nav__theme"
+            onClick={cycleTheme}
+            title={`Theme: ${theme}`}
+            aria-label={`Cycle theme. Current theme: ${theme}`}
+          >
+            <ThemeIcon size={18} stroke={1.7} />
+          </button>
+        </div>
 
         <nav className="office-nav__pages">
           {NAV_ITEMS.map(item => {
@@ -190,9 +200,13 @@ export default function App() {
             {pendingApprovals.length > 0 && <span className="office-nav__count">{pendingApprovals.length}</span>}
           </button>
 
-          <button type="button" className="office-nav__item" onClick={cycleTheme} title={`Theme: ${theme}`}>
-            <ThemeIcon size={18} stroke={1.7} />
-            <span>{theme === "system" ? "System theme" : `${theme[0].toUpperCase()}${theme.slice(1)} theme`}</span>
+          <button
+            type="button"
+            className={`office-nav__item ${active === "store" ? "office-nav__item--active" : ""}`}
+            onClick={() => setActive("store")}
+          >
+            <IconKey size={18} stroke={1.7} />
+            <span>Store</span>
           </button>
         </div>
 
