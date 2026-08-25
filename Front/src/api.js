@@ -151,6 +151,7 @@ export const endpoints = {
   workflowCancel: id => `/workflows/${id}/cancel`,
   workflowInputs: id => `/workflows/${id}/inputs`,
   workflowConfig: id => `/workflows/${id}/config`,
+  workflowDesign: id => `/workflows/${id}/design`,
   workflowEdges: id => `/workflows/${id}/edges`,
   workflowTask: (id, taskId) => `/workflows/${id}/tasks/${taskId}`,
   workflowTaskSkip: (id, taskId) => `/workflows/${id}/tasks/${taskId}/skip`,
