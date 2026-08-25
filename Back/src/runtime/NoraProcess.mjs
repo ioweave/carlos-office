@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { NORA_DECISION_SCHEMA } from "../NoraActions.mjs";
+import { filterModelOptions, getRoutingModels } from "../controllers/ProviderController.mjs";
 import { getNora } from "../registry/Nora.mjs";
 import { getKnowledge } from "../services/KnowledgeService.mjs";
 
@@ -41,6 +42,30 @@ const defaultFormat = context => (
     ? NORA_DECISION_SCHEMA
     : null
 );
+
+const routedDecision = async (instruction, context) => {
+  if (!Array.isArray(context?.availableModels) || !context.availableModels.some(entry => Array.isArray(entry?.models))) {
+    return { instruction, context };
+  }
+
+  const availableModels = await getRoutingModels(context.availableModels);
+  return {
+    context: { ...context, availableModels },
+    instruction: [
+      instruction,
+      "",
+      "Model routing policy:",
+      "- availableModels is the complete set of models currently enabled and available for this Task.",
+      "- Each capability has supported and enabled values. A capability is eligible only when both are true.",
+      "- Infer which special capabilities the Task actually requires: thinking, vision, audio, or embeddings.",
+      "- When a special capability is required, select only a model where that capability is eligible.",
+      "- Do not infer support from the model name when supported is false or unknown.",
+      "- Prefer a model intentionally enabled for the Task's relevant capability instead of using one general model for everything.",
+      "- If multiple eligible models are otherwise equally suitable, prefer the lower token cost when cost metadata is known.",
+      "- Return a provider/model pair exactly matching one availableModels entry.",
+    ].join("\n"),
+  };
+};
 
 export const startNora = async () => {
   if (child && readyPromise) return readyPromise;
@@ -93,6 +118,7 @@ export const decide = async ({ definition, selection, instruction, context, form
 
   const id = randomUUID();
   const responseFormat = format ?? defaultFormat(context);
+  const routed = await routedDecision(instruction, context);
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject });
     child.send({
@@ -100,15 +126,15 @@ export const decide = async ({ definition, selection, instruction, context, form
       id,
       definition: structuredClone(definition),
       selection: structuredClone(selection),
-      instruction,
-      context: structuredClone(context),
+      instruction: routed.instruction,
+      context: structuredClone(routed.context),
       knowledge: getKnowledge(),
       format: responseFormat ? structuredClone(responseFormat) : null,
     });
   });
 };
 
-export const listModels = () => structuredClone(models);
+export const listModels = () => filterModelOptions(models);
 
 export const getNoraProcessState = () => ({
   pid: child?.pid ?? null,

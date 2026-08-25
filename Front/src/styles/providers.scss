@@ -1,0 +1,103 @@
+.providers-page {
+  min-height: 0;
+  overflow: auto;
+}
+
+.providers-page > .filter-table {
+  margin: var(--density-md) var(--margin-page) var(--density-lg);
+}
+
+.providers-table__model {
+  min-width: 230px;
+  font-family: var(--font-mono);
+}
+
+.providers-table__capability {
+  width: 92px;
+  text-align: center !important;
+}
+
+.model-runtime,
+.model-status,
+.model-capability {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-round);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.model-runtime {
+  min-width: 54px;
+  padding: 0 8px;
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  text-transform: capitalize;
+}
+
+.model-runtime--cloud {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.model-capability {
+  min-width: 42px;
+  padding: 0 8px;
+}
+
+.model-capability--toggle {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-soft);
+  color: var(--color-text-muted);
+}
+
+.model-capability--toggle:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
+.model-capability--enabled {
+  border-color: var(--color-tertiary);
+  background: var(--color-tertiary-soft);
+  color: var(--color-tertiary);
+}
+
+.model-capability--unsupported,
+.model-capability--unknown {
+  min-width: 24px;
+  color: var(--color-text-faint);
+}
+
+.model-capability--unknown {
+  border: 1px dashed var(--color-border);
+}
+
+.model-status {
+  min-width: 78px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-soft);
+}
+
+.model-status--active {
+  border-color: var(--color-tertiary);
+  background: var(--color-tertiary-soft);
+  color: var(--color-tertiary);
+}
+
+.model-status--disabled {
+  color: var(--color-text-muted);
+}
+
+.model-status--unavailable {
+  border-color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+  color: var(--color-danger);
+}
+
+.model-cost {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
