@@ -101,10 +101,12 @@ export default function OperationsPage({ onAskNora, openRequest }) {
   }, []);
 
   const workflow = workflows.find(item => item.id === selectedId) || null;
-  const persistedLayout = workflow?.layout && Object.keys(workflow.layout).length
-    ? workflow.layout
-    : workflow?.config?._ui?.layout || {};
-  const persistedGroups = workflow?.config?._ui?.groups || [];
+  const persistedLayout = useMemo(() => (
+    workflow?.layout && Object.keys(workflow.layout).length
+      ? workflow.layout
+      : workflow?.config?._ui?.layout || {}
+  ), [workflow]);
+  const persistedGroups = useMemo(() => workflow?.config?._ui?.groups || [], [workflow]);
   const layoutDirty = stableKey(layoutDraft) !== stableKey(layoutBaseline)
     || stableKey(groupsDraft) !== stableKey(groupsBaseline);
   const workflowEditable = Boolean(workflow && editMode && workflow.status !== "running");
@@ -138,7 +140,7 @@ export default function OperationsPage({ onAskNora, openRequest }) {
     setLayoutDraft(nextLayout);
     setGroupsBaseline(nextGroups);
     setGroupsDraft(nextGroups);
-  }, [workflow?.id, stableKey(persistedLayout), stableKey(persistedGroups)]);
+  }, [workflow?.id, persistedLayout, persistedGroups]);
 
   useEffect(() => {
     if (!workflow) return;
@@ -147,14 +149,6 @@ export default function OperationsPage({ onAskNora, openRequest }) {
       to: workflow.tasks?.[current.to] ? current.to : workflow.end,
     }));
   }, [workflow?.id, workflow?.start, workflow?.end, workflow?.tasks]);
-
-  useEffect(() => {
-    if (workflow?.status === "running" && editMode) {
-      setEditMode(false);
-      setPlacementMode("");
-      setEditingTask(false);
-    }
-  }, [workflow?.status, editMode]);
 
   const sortedWorkflows = useMemo(() => [...workflows].sort((left, right) => {
     const statusDelta = STATUS_ORDER.indexOf(left.status) - STATUS_ORDER.indexOf(right.status);
@@ -460,6 +454,14 @@ export default function OperationsPage({ onAskNora, openRequest }) {
     }
   };
 
+  const renameGroup = group => {
+    const title = window.prompt("Group / wrapper name", group.title || "Group")?.trim();
+    if (!title) return;
+    setGroupsDraft(current => current.map(item => item.id === group.id
+      ? { ...item, title: title.slice(0, 60) }
+      : item));
+  };
+
   const removeGroup = groupId => {
     setGroupsDraft(current => current.filter(group => group.id !== groupId));
   };
@@ -737,6 +739,7 @@ export default function OperationsPage({ onAskNora, openRequest }) {
                   {groupsDraft.map(group => (
                     <div key={group.id} className="workflow-group-row">
                       <span>{group.title}</span>
+                      <button type="button" className="icon-button" onClick={() => renameGroup(group)} aria-label={`Rename group ${group.title}`}><IconEdit size={13} /></button>
                       <button type="button" className="icon-button" onClick={() => removeGroup(group.id)} aria-label={`Remove group ${group.title}`}><IconTrash size={13} /></button>
                     </div>
                   ))}
