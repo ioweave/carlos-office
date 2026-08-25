@@ -91,6 +91,9 @@ export const endpoints = {
   variable: key => `/variables/${encodeURIComponent(key)}`,
   knowledge: () => "/knowledge",
 
+  providers: (refresh = false) => `/providers${refresh ? "?refresh=1" : ""}`,
+  providerModel: (provider, model) => `/providers/${encodeURIComponent(provider)}/models/${encodeURIComponent(model)}`,
+
   schedules: () => "/schedules",
   schedule: id => `/schedules/${id}`,
   scheduleTrigger: id => `/schedules/${id}/trigger`,
