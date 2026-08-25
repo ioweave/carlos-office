@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { IconCpu, IconRefresh } from "@tabler/icons-react";
+import { IconCpu, IconPlus, IconRefresh, IconServer, IconTrash, IconX } from "@tabler/icons-react";
 import { toast } from "sonner";
 
 import api, { endpoints } from "../api";
@@ -7,6 +7,8 @@ import FilterableSortableTable from "../components/FilterableSortableTable";
 import "../styles/providers.scss";
 
 const CAPABILITIES = ["thinking", "vision", "audio", "embeddings"];
+const emptyProvider = { name: "", type: "ollama", baseUrl: "http://localhost:11434/api", apiKeyEnv: "OLLAMA_API_KEY" };
+const emptyModel = { provider: "", name: "", location: "local", parameters: "", supportedCapabilities: [] };
 
 const formatParameters = value => {
   if (!Number.isFinite(value)) return "—";
@@ -30,7 +32,6 @@ const formatCost = model => {
 };
 
 const statusFor = model => !model.available ? "unavailable" : model.enabled ? "active" : "disabled";
-
 const capabilityFilterOptions = [
   { value: "all", label: "All" },
   { value: "enabled", label: "Enabled" },
@@ -43,6 +44,10 @@ export default function ProvidersPage() {
   const [providers, setProviders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(new Set());
+  const [providerFormOpen, setProviderFormOpen] = useState(false);
+  const [modelFormOpen, setModelFormOpen] = useState(false);
+  const [providerDraft, setProviderDraft] = useState(emptyProvider);
+  const [modelDraft, setModelDraft] = useState(emptyModel);
 
   const load = useCallback(async (refresh = false) => {
     setLoading(true);
@@ -63,10 +68,8 @@ export default function ProvidersPage() {
 
   const providerOptions = useMemo(() => [
     { value: "all", label: "All providers" },
-    ...[...new Set(rows.map(row => row.provider))]
-      .sort((left, right) => left.localeCompare(right))
-      .map(provider => ({ value: provider, label: provider })),
-  ], [rows]);
+    ...providers.map(item => ({ value: item.provider, label: item.provider })),
+  ], [providers]);
 
   const replaceModel = useCallback(updated => {
     if (!updated) return;
@@ -80,10 +83,7 @@ export default function ProvidersPage() {
     const savingKey = `${model.provider}:${model.name}:${key}`;
     setSaving(current => new Set(current).add(savingKey));
     try {
-      const updated = (
-        await api.patch(endpoints.providerModel(model.provider, model.name), changes)
-      ).data;
-      replaceModel(updated);
+      replaceModel((await api.patch(endpoints.providerModel(model.provider, model.name), changes)).data);
     } catch (error) {
       toast.error(error.response?.data?.error || `Could not update ${model.name}.`);
     } finally {
@@ -94,6 +94,50 @@ export default function ProvidersPage() {
       });
     }
   }, [replaceModel]);
+
+  const registerProvider = async event => {
+    event.preventDefault();
+    try {
+      const response = await api.post(endpoints.providers(), providerDraft);
+      setProviders(response.data || []);
+      setProviderDraft(emptyProvider);
+      setProviderFormOpen(false);
+      toast.success("Provider registered. Restart the backend before assigning it to Nora.");
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Could not register provider.");
+    }
+  };
+
+  const registerModel = async event => {
+    event.preventDefault();
+    try {
+      const response = await api.post(endpoints.providerModels(modelDraft.provider), modelDraft);
+      setProviders(response.data || []);
+      setModelDraft(current => ({ ...emptyModel, provider: current.provider }));
+      setModelFormOpen(false);
+      toast.success("Model registered. Restart the backend before assigning it to Nora.");
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Could not register model.");
+    }
+  };
+
+  const removeProvider = async provider => {
+    if (provider.builtIn || !window.confirm(`Remove provider ${provider.provider}?`)) return;
+    try {
+      setProviders((await api.delete(endpoints.provider(provider.provider))).data || []);
+    } catch (error) {
+      toast.error(error.response?.data?.error || `Could not remove ${provider.provider}.`);
+    }
+  };
+
+  const removeModel = async model => {
+    if (!model.registered || !window.confirm(`Remove registered model ${model.name}?`)) return;
+    try {
+      setProviders((await api.delete(endpoints.providerModel(model.provider, model.name))).data || []);
+    } catch (error) {
+      toast.error(error.response?.data?.error || `Could not remove ${model.name}.`);
+    }
+  };
 
   const renderCapability = useCallback((model, capability) => {
     const definition = model.capabilities?.[capability] || { supported: null, enabled: false };
@@ -106,7 +150,6 @@ export default function ProvidersPage() {
         className={`model-capability model-capability--toggle ${definition.enabled ? "model-capability--enabled" : ""}`}
         disabled={saving.has(key) || !model.available}
         aria-pressed={definition.enabled}
-        title={definition.enabled ? `Disable ${capability} routing` : `Enable ${capability} routing`}
         onClick={() => void patchModel(model, { capabilities: { [capability]: !definition.enabled } }, capability)}
       >
         {definition.enabled ? "On" : "Off"}
@@ -127,13 +170,7 @@ export default function ProvidersPage() {
       render: row => renderCapability(row, capability),
       className: "providers-table__capability",
     })),
-    {
-      key: "cost",
-      label: "Cost / 1M tokens",
-      sortType: "number",
-      value: row => row.costPerMillionTokens?.inputUsd,
-      render: row => <span className="model-cost">{formatCost(row)}</span>,
-    },
+    { key: "cost", label: "Cost / 1M tokens", sortType: "number", value: row => row.costPerMillionTokens?.inputUsd, render: row => <span className="model-cost">{formatCost(row)}</span> },
     {
       key: "status",
       label: "Usage",
@@ -144,65 +181,27 @@ export default function ProvidersPage() {
         const key = `${model.provider}:${model.name}:enabled`;
         if (!model.available) return <span className="model-status model-status--unavailable">Unavailable</span>;
         return (
-          <button
-            type="button"
-            className={`model-status model-status--${status}`}
-            disabled={saving.has(key)}
-            aria-pressed={model.enabled}
-            onClick={() => void patchModel(model, { enabled: !model.enabled }, "enabled")}
-          >
+          <button type="button" className={`model-status model-status--${status}`} disabled={saving.has(key)} aria-pressed={model.enabled} onClick={() => void patchModel(model, { enabled: !model.enabled }, "enabled")}>
             {model.enabled ? "Enabled" : "Disabled"}
           </button>
         );
       },
     },
+    {
+      key: "registry",
+      label: "Registry",
+      sortType: "text",
+      value: row => row.registered ? "registered" : "discovered",
+      render: row => row.registered ? (
+        <button type="button" className="icon-button" onClick={() => void removeModel(row)} title="Remove manual registration" aria-label={`Remove ${row.name}`}><IconTrash size={14} /></button>
+      ) : <span className="model-source">discovered</span>,
+    },
   ], [patchModel, renderCapability, saving]);
 
   const filters = useMemo(() => [
-    {
-      key: "search",
-      label: "Search",
-      type: "search",
-      placeholder: "Provider or model…",
-      value: row => `${row.provider} ${row.name}`,
-    },
+    { key: "search", label: "Search", type: "search", placeholder: "Provider or model…", value: row => `${row.provider} ${row.name}` },
     { key: "provider", label: "Provider", type: "select", defaultValue: "all", options: providerOptions },
-    {
-      key: "location",
-      label: "Runtime",
-      type: "select",
-      defaultValue: "all",
-      options: [
-        { value: "all", label: "All runtimes" },
-        { value: "local", label: "Local" },
-        { value: "cloud", label: "Cloud" },
-      ],
-    },
-    {
-      key: "parameters",
-      label: "Parameters",
-      type: "select",
-      defaultValue: "all",
-      options: [
-        { value: "all", label: "Any size" },
-        { value: "lt1b", label: "< 1B" },
-        { value: "1b10b", label: "1B – 10B" },
-        { value: "10b100b", label: "10B – 100B" },
-        { value: "100b1t", label: "100B – 1T" },
-        { value: "gte1t", label: "≥ 1T" },
-        { value: "unknown", label: "Unknown" },
-      ],
-      predicate: (row, selected) => {
-        const value = row.parameters;
-        if (selected === "unknown") return !Number.isFinite(value);
-        if (!Number.isFinite(value)) return false;
-        if (selected === "lt1b") return value < 1e9;
-        if (selected === "1b10b") return value >= 1e9 && value < 1e10;
-        if (selected === "10b100b") return value >= 1e10 && value < 1e11;
-        if (selected === "100b1t") return value >= 1e11 && value < 1e12;
-        return selected === "gte1t" ? value >= 1e12 : true;
-      },
-    },
+    { key: "location", label: "Runtime", type: "select", defaultValue: "all", options: [{ value: "all", label: "All runtimes" }, { value: "local", label: "Local" }, { value: "cloud", label: "Cloud" }] },
     ...CAPABILITIES.map(capability => ({
       key: capability,
       label: capability[0].toUpperCase() + capability.slice(1),
@@ -218,20 +217,15 @@ export default function ProvidersPage() {
         return true;
       },
     })),
-    {
-      key: "status",
-      label: "Usage",
-      type: "select",
-      defaultValue: "all",
-      options: [
-        { value: "all", label: "All statuses" },
-        { value: "active", label: "Enabled" },
-        { value: "disabled", label: "Disabled" },
-        { value: "unavailable", label: "Unavailable" },
-      ],
-      predicate: (row, selected) => statusFor(row) === selected,
-    },
+    { key: "status", label: "Usage", type: "select", defaultValue: "all", options: [{ value: "all", label: "All statuses" }, { value: "active", label: "Enabled" }, { value: "disabled", label: "Disabled" }, { value: "unavailable", label: "Unavailable" }], predicate: (row, selected) => statusFor(row) === selected },
   ], [providerOptions]);
+
+  const toggleCapability = capability => setModelDraft(current => ({
+    ...current,
+    supportedCapabilities: current.supportedCapabilities.includes(capability)
+      ? current.supportedCapabilities.filter(item => item !== capability)
+      : [...current.supportedCapabilities, capability],
+  }));
 
   return (
     <div className="workspace-page providers-page">
@@ -239,34 +233,64 @@ export default function ProvidersPage() {
         <div className="page-header__copy">
           <span className="eyebrow">Model routing policy</span>
           <h1>Providers</h1>
-          <p>Control which models Carlos Office can use and which supported capabilities Nora may route to each model.</p>
+          <p>Register model endpoints, add models, and control which capabilities Nora may route to them.</p>
         </div>
         <div className="page-header__actions">
-          <button type="button" className="icon-button" onClick={() => void load(true)} disabled={loading} aria-label="Refresh provider models" title="Refresh provider models">
-            <IconRefresh size={18} />
-          </button>
+          <button type="button" className="button button--quiet" onClick={() => setProviderFormOpen(true)}><IconPlus size={15} /> Provider</button>
+          <button type="button" className="button button--primary" onClick={() => { setModelDraft(current => ({ ...current, provider: current.provider || providers[0]?.provider || "" })); setModelFormOpen(true); }} disabled={!providers.length}><IconPlus size={15} /> Model</button>
+          <button type="button" className="icon-button" onClick={() => void load(true)} disabled={loading} aria-label="Refresh provider models"><IconRefresh size={18} /></button>
         </div>
       </header>
 
-      {loading && !rows.length ? (
-        <div className="page-state"><span className="spinner" /> Loading provider models</div>
+      <section className="provider-registry" aria-label="Registered providers">
+        {providers.map(provider => (
+          <article key={provider.provider} className={`provider-card ${provider.available ? "provider-card--available" : "provider-card--offline"}`}>
+            <div className="provider-card__icon"><IconServer size={18} /></div>
+            <div className="provider-card__copy">
+              <strong>{provider.provider}</strong>
+              <span>{provider.type} · {provider.baseUrl}</span>
+              {provider.apiKeyEnv && <small>API key env: {provider.apiKeyEnv}</small>}
+              {provider.error && <small className="provider-card__error">{provider.error}</small>}
+            </div>
+            <span className={`status-pill ${provider.available ? "status-pill--completed" : "status-pill--failed"}`}>{provider.available ? "Available" : provider.enabled ? "Offline" : "Disabled"}</span>
+            {!provider.builtIn && <button type="button" className="icon-button" onClick={() => void removeProvider(provider)} aria-label={`Remove ${provider.provider}`}><IconTrash size={15} /></button>}
+          </article>
+        ))}
+      </section>
+
+      {providerFormOpen && (
+        <form className="provider-editor panel" onSubmit={registerProvider}>
+          <div className="panel__header"><div><span className="eyebrow">Registry</span><h2>Register provider</h2></div><button type="button" className="icon-button" onClick={() => setProviderFormOpen(false)}><IconX size={17} /></button></div>
+          <div className="provider-editor__grid">
+            <label className="field"><span>Name</span><input value={providerDraft.name} onChange={event => setProviderDraft(current => ({ ...current, name: event.target.value }))} placeholder="ollama-cloud" required /></label>
+            <label className="field"><span>Adapter</span><select value={providerDraft.type} onChange={event => setProviderDraft(current => ({ ...current, type: event.target.value }))}><option value="ollama">Ollama / Ollama-compatible</option></select></label>
+            <label className="field provider-editor__wide"><span>Base URL</span><input value={providerDraft.baseUrl} onChange={event => setProviderDraft(current => ({ ...current, baseUrl: event.target.value }))} placeholder="http://localhost:11434/api" required /></label>
+            <label className="field provider-editor__wide"><span>API key environment variable · optional</span><input value={providerDraft.apiKeyEnv} onChange={event => setProviderDraft(current => ({ ...current, apiKeyEnv: event.target.value }))} placeholder="OLLAMA_API_KEY" /></label>
+          </div>
+          <footer className="form-actions"><button type="button" className="button button--quiet" onClick={() => setProviderFormOpen(false)}>Cancel</button><button type="submit" className="button button--primary">Register provider</button></footer>
+        </form>
+      )}
+
+      {modelFormOpen && (
+        <form className="provider-editor panel" onSubmit={registerModel}>
+          <div className="panel__header"><div><span className="eyebrow">Registry</span><h2>Add model</h2></div><button type="button" className="icon-button" onClick={() => setModelFormOpen(false)}><IconX size={17} /></button></div>
+          <div className="provider-editor__grid">
+            <label className="field"><span>Provider</span><select value={modelDraft.provider} onChange={event => setModelDraft(current => ({ ...current, provider: event.target.value }))} required><option value="">Select provider</option>{providers.map(provider => <option key={provider.provider} value={provider.provider}>{provider.provider}</option>)}</select></label>
+            <label className="field"><span>Model name</span><input value={modelDraft.name} onChange={event => setModelDraft(current => ({ ...current, name: event.target.value }))} placeholder="qwen3:8b" required /></label>
+            <label className="field"><span>Runtime</span><select value={modelDraft.location} onChange={event => setModelDraft(current => ({ ...current, location: event.target.value }))}><option value="local">Local</option><option value="cloud">Cloud</option></select></label>
+            <label className="field"><span>Parameters · optional</span><input value={modelDraft.parameters} onChange={event => setModelDraft(current => ({ ...current, parameters: event.target.value }))} placeholder="8B" /></label>
+          </div>
+          <div className="provider-capabilities"><span>Supported capabilities</span>{CAPABILITIES.map(capability => <label key={capability}><input type="checkbox" checked={modelDraft.supportedCapabilities.includes(capability)} onChange={() => toggleCapability(capability)} /> {capability}</label>)}</div>
+          <footer className="form-actions"><button type="button" className="button button--quiet" onClick={() => setModelFormOpen(false)}>Cancel</button><button type="submit" className="button button--primary">Add model</button></footer>
+        </form>
+      )}
+
+      {loading && !providers.length ? (
+        <div className="page-state"><span className="spinner" /> Loading provider registry</div>
       ) : !rows.length ? (
-        <div className="empty-state">
-          <IconCpu size={28} stroke={1.4} />
-          <strong>No models discovered</strong>
-          <span>Check the configured model provider and refresh this page.</span>
-        </div>
+        <div className="empty-state"><IconCpu size={28} stroke={1.4} /><strong>No models registered or discovered</strong><span>The provider remains visible above even when its endpoint is offline. Add a model manually or fix the endpoint and refresh.</span></div>
       ) : (
-        <FilterableSortableTable
-          rows={rows}
-          columns={columns}
-          filters={filters}
-          filtering
-          sorting
-          defaultSort={{ key: "provider", direction: "asc" }}
-          rowKey={row => `${row.provider}:${row.name}`}
-          emptyMessage="No models match the current filters."
-        />
+        <FilterableSortableTable rows={rows} columns={columns} filters={filters} filtering sorting defaultSort={{ key: "provider", direction: "asc" }} rowKey={row => `${row.provider}:${row.name}`} emptyMessage="No models match the current filters." />
       )}
     </div>
   );
