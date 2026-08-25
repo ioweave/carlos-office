@@ -99,6 +99,19 @@ const request = async (url, options, apiKey) => {
   return response.json();
 };
 
+const mapWithConcurrency = async (items, concurrency, mapper) => {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await mapper(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+};
+
 export const createOllamaProvider = ({
   baseUrl = "http://localhost:11434/api",
   apiKey = null,
@@ -148,7 +161,36 @@ export const createOllamaProvider = ({
 
     async listModels() {
       const result = await request(`${apiUrl}/tags`, { method: "GET" }, apiKey);
-      return (result.models ?? []).map(model => model.name ?? model.model);
+      return (result.models ?? []).map(model => model.name ?? model.model).filter(Boolean);
+    },
+
+    async listModelMetadata() {
+      const result = await request(`${apiUrl}/tags`, { method: "GET" }, apiKey);
+      const taggedModels = (result.models ?? []).filter(model => model?.name || model?.model);
+
+      return mapWithConcurrency(taggedModels, 4, async tagged => {
+        const name = tagged.name ?? tagged.model;
+        let shown = null;
+        try {
+          shown = await request(
+            `${apiUrl}/show`,
+            { method: "POST", body: JSON.stringify({ model: name }) },
+            apiKey,
+          );
+        } catch {
+          // Some remote/cloud catalogs expose tags but not full /show metadata.
+        }
+
+        return {
+          name,
+          location: /(?:^|[-:])cloud$/i.test(name) ? "cloud" : "local",
+          details: shown?.details ?? tagged.details ?? null,
+          capabilities: Array.isArray(shown?.capabilities) ? shown.capabilities : null,
+          modelInfo: shown?.model_info ?? null,
+          pricing: shown?.pricing ?? tagged.pricing ?? null,
+          available: true,
+        };
+      });
     },
 
     async refreshModels() {
