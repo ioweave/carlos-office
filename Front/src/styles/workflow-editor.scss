@@ -1,0 +1,190 @@
+.operations-studio--editing .studio-layout__canvas {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+
+.workflow-layout-toolbar--editor {
+  gap: 6px;
+}
+
+.workflow-layout-toolbar__hint {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--color-text-faint);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.process-graph--editable .process-node::before,
+.process-graph--editable .process-node::after {
+  display: none;
+}
+
+.process-graph__edges {
+  z-index: 1;
+}
+
+.process-edge {
+  fill: none;
+  stroke: color-mix(in srgb, var(--color-text-faint) 72%, transparent);
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+
+.process-edge--selected {
+  stroke: var(--color-accent);
+  stroke-width: 2.5;
+}
+
+.process-edge--preview {
+  stroke: var(--color-accent);
+  stroke-dasharray: 5 4;
+  stroke-width: 2;
+}
+
+.process-edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  cursor: pointer;
+  pointer-events: stroke;
+}
+
+.process-node-wrap {
+  z-index: 2;
+}
+
+.process-node__connector {
+  position: absolute;
+  top: 50%;
+  display: block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--color-accent);
+  border-radius: 50%;
+  background: var(--color-surface);
+  box-shadow: 0 0 0 2px var(--color-surface);
+  cursor: crosshair;
+  touch-action: none;
+  transform: translateY(-50%);
+  z-index: 5;
+}
+
+.process-node__connector--input {
+  left: -7px;
+}
+
+.process-node__connector--output {
+  right: -7px;
+}
+
+.process-node__connector:hover {
+  background: var(--color-accent);
+  transform: translateY(-50%) scale(1.15);
+}
+
+.workflow-group {
+  position: absolute;
+  border: 1px dashed color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-accent-soft) 32%, transparent);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  z-index: 0;
+}
+
+.process-graph--editable .workflow-group:hover {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent-soft) 52%, transparent);
+}
+
+.workflow-group__title {
+  position: absolute;
+  top: -11px;
+  left: 12px;
+  max-width: calc(100% - 42px);
+  overflow: hidden;
+  padding: 2px 7px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 9px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-group__resize {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--color-accent);
+  border-radius: 3px;
+  background: var(--color-surface);
+  cursor: nwse-resize;
+}
+
+.workflow-edge-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.workflow-edge-inspector p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.workflow-groups-list {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border);
+}
+
+.workflow-groups-list h3 {
+  margin: 0 0 8px;
+  font-size: 11px;
+}
+
+.workflow-group-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.workflow-group-row span {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-data-editor__locked {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 16px 16px;
+}
+
+.process-graph--editable {
+  cursor: grab;
+}
+
+.process-graph--editable.process-graph--panning {
+  cursor: grabbing;
+}
+
+.process-graph--editable .process-node {
+  cursor: move;
+}
