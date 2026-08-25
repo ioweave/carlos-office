@@ -18,9 +18,11 @@ const Y_GAP = 92;
 const PADDING = 90;
 const GROUP_MIN_WIDTH = 190;
 const GROUP_MIN_HEIGHT = 120;
-const MIN_ZOOM = 0.25;
-const MAX_ZOOM = 2;
-const ROUTE_CLEARANCE = 16;
+const MIN_ZOOM = 0.2;
+const MAX_ZOOM = 2.2;
+const EDGE_OFFSET = 30;
+const EDGE_RADIUS = 9;
+const FIT_PADDING = 56;
 
 const humanizeId = id => String(id || "")
   .replace(/[_-]+/g, " ")
@@ -123,9 +125,7 @@ const sideFor = (sourceRect, targetRect) => {
   const targetCenter = center(targetRect);
   const dx = targetCenter.x - sourceCenter.x;
   const dy = targetCenter.y - sourceCenter.y;
-  if (Math.abs(dx) >= Math.abs(dy)) {
-    return dx >= 0 ? ["right", "left"] : ["left", "right"];
-  }
+  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? ["right", "left"] : ["left", "right"];
   return dy >= 0 ? ["bottom", "top"] : ["top", "bottom"];
 };
 
@@ -136,31 +136,11 @@ const port = (rect, side) => {
   return { x: rect.x + rect.width / 2, y: rect.y + rect.height };
 };
 
-const expandRect = (rect, amount = ROUTE_CLEARANCE) => ({
-  x: rect.x - amount,
-  y: rect.y - amount,
-  width: rect.width + amount * 2,
-  height: rect.height + amount * 2,
-});
-
-const segmentHitsRect = (a, b, rect) => {
-  const left = rect.x;
-  const right = rect.x + rect.width;
-  const top = rect.y;
-  const bottom = rect.y + rect.height;
-  if (a.x === b.x) {
-    if (a.x <= left || a.x >= right) return false;
-    const minY = Math.min(a.y, b.y);
-    const maxY = Math.max(a.y, b.y);
-    return maxY > top && minY < bottom;
-  }
-  if (a.y === b.y) {
-    if (a.y <= top || a.y >= bottom) return false;
-    const minX = Math.min(a.x, b.x);
-    const maxX = Math.max(a.x, b.x);
-    return maxX > left && minX < right;
-  }
-  return false;
+const outwardPoint = (point, side, amount = EDGE_OFFSET) => {
+  if (side === "left") return { x: point.x - amount, y: point.y };
+  if (side === "right") return { x: point.x + amount, y: point.y };
+  if (side === "top") return { x: point.x, y: point.y - amount };
+  return { x: point.x, y: point.y + amount };
 };
 
 const cleanPoints = points => {
@@ -187,54 +167,63 @@ const cleanPoints = points => {
   return result;
 };
 
-const routeScore = points => {
-  let length = 0;
-  for (let index = 1; index < points.length; index += 1) {
-    length += Math.abs(points[index].x - points[index - 1].x) + Math.abs(points[index].y - points[index - 1].y);
-  }
-  return length + Math.max(0, points.length - 2) * 26;
-};
-
-const routeValid = (points, obstacles) => {
-  for (let index = 1; index < points.length; index += 1) {
-    if (obstacles.some(rect => segmentHitsRect(points[index - 1], points[index], rect))) return false;
-  }
-  return true;
-};
-
-const orthogonalRoute = (sourceRect, targetRect, obstacles) => {
+const smoothStepPoints = (sourceRect, targetRect) => {
   const [sourceSide, targetSide] = sideFor(sourceRect, targetRect);
   const start = port(sourceRect, sourceSide);
   const end = port(targetRect, targetSide);
-  const expanded = obstacles.map(rect => expandRect(rect));
-  const midX = (start.x + end.x) / 2;
-  const midY = (start.y + end.y) / 2;
-  const xCorridors = new Set([midX, start.x, end.x]);
-  const yCorridors = new Set([midY, start.y, end.y]);
+  const sourceOut = outwardPoint(start, sourceSide);
+  const targetOut = outwardPoint(end, targetSide);
+  const horizontal = sourceSide === "left" || sourceSide === "right";
 
-  for (const rect of expanded) {
-    xCorridors.add(rect.x - ROUTE_CLEARANCE);
-    xCorridors.add(rect.x + rect.width + ROUTE_CLEARANCE);
-    yCorridors.add(rect.y - ROUTE_CLEARANCE);
-    yCorridors.add(rect.y + rect.height + ROUTE_CLEARANCE);
-  }
+  const points = horizontal
+    ? [
+        start,
+        sourceOut,
+        { x: (sourceOut.x + targetOut.x) / 2, y: sourceOut.y },
+        { x: (sourceOut.x + targetOut.x) / 2, y: targetOut.y },
+        targetOut,
+        end,
+      ]
+    : [
+        start,
+        sourceOut,
+        { x: sourceOut.x, y: (sourceOut.y + targetOut.y) / 2 },
+        { x: targetOut.x, y: (sourceOut.y + targetOut.y) / 2 },
+        targetOut,
+        end,
+      ];
 
-  const candidates = [
-    [start, { x: midX, y: start.y }, { x: midX, y: end.y }, end],
-    [start, { x: start.x, y: midY }, { x: end.x, y: midY }, end],
-  ];
-  for (const x of xCorridors) candidates.push([start, { x, y: start.y }, { x, y: end.y }, end]);
-  for (const y of yCorridors) candidates.push([start, { x: start.x, y }, { x: end.x, y }, end]);
+  return { sourceSide, targetSide, points: cleanPoints(points) };
+};
 
-  const valid = candidates
-    .map(cleanPoints)
-    .filter(points => routeValid(points, expanded))
-    .sort((left, right) => routeScore(left) - routeScore(right));
+const distance = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
+const pointToward = (from, to, amount) => {
+  const length = distance(from, to);
+  if (!length) return { ...from };
+  const ratio = amount / length;
   return {
-    sourceSide,
-    targetSide,
-    points: valid[0] || cleanPoints([start, { x: midX, y: start.y }, { x: midX, y: end.y }, end]),
+    x: from.x + (to.x - from.x) * ratio,
+    y: from.y + (to.y - from.y) * ratio,
   };
+};
+
+const roundedPath = points => {
+  const cleaned = cleanPoints(points);
+  if (!cleaned.length) return "";
+  if (cleaned.length === 1) return `M ${cleaned[0].x} ${cleaned[0].y}`;
+
+  let path = `M ${cleaned[0].x} ${cleaned[0].y}`;
+  for (let index = 1; index < cleaned.length - 1; index += 1) {
+    const previous = cleaned[index - 1];
+    const current = cleaned[index];
+    const next = cleaned[index + 1];
+    const radius = Math.min(EDGE_RADIUS, distance(previous, current) / 2, distance(current, next) / 2);
+    const before = pointToward(current, previous, radius);
+    const after = pointToward(current, next, radius);
+    path += ` L ${before.x} ${before.y} Q ${current.x} ${current.y} ${after.x} ${after.y}`;
+  }
+  const last = cleaned.at(-1);
+  return `${path} L ${last.x} ${last.y}`;
 };
 
 const groupDepths = groups => {
@@ -256,7 +245,16 @@ const groupDepths = groups => {
 };
 
 const fallbackGroupGeometry = (group, positions, groupsById) => {
-  if (validGroup(group)) return { ...group, x: Number(group.x), y: Number(group.y), width: Number(group.width), height: Number(group.height) };
+  if (validGroup(group)) {
+    return {
+      ...group,
+      x: Number(group.x),
+      y: Number(group.y),
+      width: Number(group.width),
+      height: Number(group.height),
+    };
+  }
+
   const boxes = [];
   const visit = member => {
     if (validPosition(positions[member])) boxes.push(nodeRect(positions[member]));
@@ -265,14 +263,15 @@ const fallbackGroupGeometry = (group, positions, groupsById) => {
   };
   for (const member of group.members || []) visit(member);
   if (!boxes.length) return { ...group, x: PADDING, y: PADDING, width: 320, height: 190 };
+
   const left = Math.min(...boxes.map(box => box.x)) - 42;
   const top = Math.min(...boxes.map(box => box.y)) - 54;
   const right = Math.max(...boxes.map(box => box.x + box.width)) + 42;
   const bottom = Math.max(...boxes.map(box => box.y + box.height)) + 48;
   return {
     ...group,
-    x: Math.max(12, left),
-    y: Math.max(12, top),
+    x: left,
+    y: top,
     width: Math.max(GROUP_MIN_WIDTH, right - left),
     height: Math.max(GROUP_MIN_HEIGHT, bottom - top),
   };
@@ -283,18 +282,23 @@ const resolveGroups = (groups, positions) => {
   return (groups || []).map(group => fallbackGroupGeometry(group, positions, byId));
 };
 
-const graphGeometry = (positions, edges, groups) => {
-  const points = Object.values(positions).filter(validPosition);
-  const validGroups = (groups || []).filter(validGroup);
-  return {
-    width: Math.max(900, ...points.map(point => point.x + NODE_WIDTH + PADDING), ...validGroups.map(group => group.x + group.width + PADDING)),
-    height: Math.max(560, ...points.map(point => point.y + NODE_HEIGHT + PADDING), ...validGroups.map(group => group.y + group.height + PADDING)),
-    edges: (edges || []).map(([from, to]) => ({ from, to })),
-  };
+const worldBounds = (positions, groups) => {
+  const boxes = Object.values(positions || {})
+    .filter(validPosition)
+    .map(position => ({ x: position.x, y: position.y, width: NODE_WIDTH, height: NODE_HEIGHT + 46 }));
+  for (const group of groups || []) {
+    if (validGroup(group)) boxes.push({ x: group.x, y: group.y, width: group.width, height: group.height });
+  }
+  if (!boxes.length) return { left: 0, top: 0, right: 1, bottom: 1, width: 1, height: 1 };
+
+  const left = Math.min(...boxes.map(box => box.x));
+  const top = Math.min(...boxes.map(box => box.y));
+  const right = Math.max(...boxes.map(box => box.x + box.width));
+  const bottom = Math.max(...boxes.map(box => box.y + box.height));
+  return { left, top, right, bottom, width: right - left, height: bottom - top };
 };
 
 const sameEdge = (edge, from, to) => edge?.[0] === from && edge?.[1] === to;
-const pointsText = points => points.map(point => `${Math.round(point.x)},${Math.round(point.y)}`).join(" ");
 
 export default function ProcessGraph({
   tasks = {},
@@ -316,9 +320,13 @@ export default function ProcessGraph({
   onGroupsChange,
   onCanvasClick,
 }) {
-  const initialPositions = useMemo(() => resolvePositions(tasks, edges, start, savedPositions), [tasks, edges, start, savedPositions]);
+  const initialPositions = useMemo(
+    () => resolvePositions(tasks, edges, start, savedPositions),
+    [tasks, edges, start, savedPositions],
+  );
   const [positions, setPositions] = useState(initialPositions);
   const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
   const [draggingId, setDraggingId] = useState("");
   const [panning, setPanning] = useState(false);
   const [connecting, setConnecting] = useState(null);
@@ -328,6 +336,7 @@ export default function ProcessGraph({
   const connectRef = useRef(null);
   const viewportRef = useRef(null);
   const suppressCanvasClickRef = useRef(false);
+  const initialFitRef = useRef(false);
 
   useEffect(() => {
     if (!dragRef.current) setPositions(initialPositions);
@@ -335,55 +344,72 @@ export default function ProcessGraph({
 
   const resolvedGroups = useMemo(() => resolveGroups(groups, positions), [groups, positions]);
   const depths = useMemo(() => groupDepths(resolvedGroups), [resolvedGroups]);
-  const geometry = useMemo(() => graphGeometry(positions, edges, resolvedGroups), [positions, edges, resolvedGroups]);
-  const nodes = useMemo(() => Object.entries(tasks || {}).map(([id, task]) => ({ id, task, ...positions[id] })), [tasks, positions]);
-  const rectangles = useMemo(() => Object.fromEntries(nodes.filter(node => validPosition(node)).map(node => [node.id, nodeRect(node)])), [nodes]);
-  const routedEdges = useMemo(() => geometry.edges.map(edge => {
-    const source = rectangles[edge.from];
-    const target = rectangles[edge.to];
+  const bounds = useMemo(() => worldBounds(positions, resolvedGroups), [positions, resolvedGroups]);
+  const nodes = useMemo(
+    () => Object.entries(tasks || {}).map(([id, task]) => ({ id, task, ...positions[id] })),
+    [tasks, positions],
+  );
+  const rectangles = useMemo(
+    () => Object.fromEntries(nodes.filter(node => validPosition(node)).map(node => [node.id, nodeRect(node)])),
+    [nodes],
+  );
+  const routedEdges = useMemo(() => (edges || []).map(([from, to]) => {
+    const source = rectangles[from];
+    const target = rectangles[to];
     if (!source || !target) return null;
-    const obstacles = Object.entries(rectangles)
-      .filter(([id]) => id !== edge.from && id !== edge.to)
-      .map(([, rect]) => rect);
-    return { ...edge, ...orthogonalRoute(source, target, obstacles) };
-  }).filter(Boolean), [geometry.edges, rectangles]);
+    const route = smoothStepPoints(source, target);
+    return { from, to, ...route, path: roundedPath(route.points) };
+  }).filter(Boolean), [edges, rectangles]);
 
   const graphPoint = event => {
-    const viewport = viewportRef.current;
-    const rect = viewport?.getBoundingClientRect();
-    if (!viewport || !rect) return { x: 0, y: 0 };
+    const rect = viewportRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
     return {
-      x: Math.max(0, Math.round((event.clientX - rect.left + viewport.scrollLeft) / zoom)),
-      y: Math.max(0, Math.round((event.clientY - rect.top + viewport.scrollTop) / zoom)),
+      x: Math.round((event.clientX - rect.left - pan.x) / zoom),
+      y: Math.round((event.clientY - rect.top - pan.y) / zoom),
     };
   };
 
-  const setZoomAroundCenter = value => {
+  const zoomAt = (value, clientX = null, clientY = null) => {
     const viewport = viewportRef.current;
+    const rect = viewport?.getBoundingClientRect();
     const next = clampZoom(value);
-    if (!viewport || next === zoom) return setZoom(next);
-    const centerX = (viewport.scrollLeft + viewport.clientWidth / 2) / zoom;
-    const centerY = (viewport.scrollTop + viewport.clientHeight / 2) / zoom;
-    setZoom(next);
-    requestAnimationFrame(() => {
-      viewport.scrollLeft = centerX * next - viewport.clientWidth / 2;
-      viewport.scrollTop = centerY * next - viewport.clientHeight / 2;
+    if (!viewport || !rect || next === zoom) return setZoom(next);
+
+    const anchorX = clientX ?? rect.left + viewport.clientWidth / 2;
+    const anchorY = clientY ?? rect.top + viewport.clientHeight / 2;
+    const worldX = (anchorX - rect.left - pan.x) / zoom;
+    const worldY = (anchorY - rect.top - pan.y) / zoom;
+    setPan({
+      x: anchorX - rect.left - worldX * next,
+      y: anchorY - rect.top - worldY * next,
     });
+    setZoom(next);
   };
 
   const fitView = () => {
     const viewport = viewportRef.current;
     if (!viewport) return;
+    const availableWidth = Math.max(1, viewport.clientWidth - FIT_PADDING * 2);
+    const availableHeight = Math.max(1, viewport.clientHeight - FIT_PADDING * 2);
     const next = clampZoom(Math.min(
-      (viewport.clientWidth - 40) / Math.max(1, geometry.width),
-      (viewport.clientHeight - 40) / Math.max(1, geometry.height),
+      availableWidth / Math.max(1, bounds.width),
+      availableHeight / Math.max(1, bounds.height),
+      1.25,
     ));
     setZoom(next);
-    requestAnimationFrame(() => {
-      viewport.scrollLeft = 0;
-      viewport.scrollTop = 0;
+    setPan({
+      x: viewport.clientWidth / 2 - (bounds.left + bounds.width / 2) * next,
+      y: viewport.clientHeight / 2 - (bounds.top + bounds.height / 2) * next,
     });
   };
+
+  useEffect(() => {
+    if (initialFitRef.current || !nodes.length) return;
+    initialFitRef.current = true;
+    const frame = requestAnimationFrame(fitView);
+    return () => cancelAnimationFrame(frame);
+  }, [nodes.length]);
 
   const applyAutoLayout = direction => {
     if (!editable || !onMove) return;
@@ -420,8 +446,8 @@ export default function ProcessGraph({
     const dx = (event.clientX - drag.startX) / zoom;
     const dy = (event.clientY - drag.startY) / zoom;
     const next = {
-      x: Math.max(18, Math.round(drag.origin.x + dx)),
-      y: Math.max(18, Math.round(drag.origin.y + dy)),
+      x: Math.round(drag.origin.x + dx),
+      y: Math.round(drag.origin.y + dy),
     };
     drag.positions = { ...drag.positions, [drag.id]: next };
     drag.moved ||= Math.abs(dx) > 2 || Math.abs(dy) > 2;
@@ -451,28 +477,26 @@ export default function ProcessGraph({
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
-      scrollLeft: event.currentTarget.scrollLeft,
-      scrollTop: event.currentTarget.scrollTop,
+      origin: pan,
       moved: false,
     };
     setPanning(true);
   };
 
   const movePan = event => {
-    const pan = panRef.current;
-    if (!pan || pan.pointerId !== event.pointerId) return;
-    const dx = event.clientX - pan.startX;
-    const dy = event.clientY - pan.startY;
-    event.currentTarget.scrollLeft = pan.scrollLeft - dx;
-    event.currentTarget.scrollTop = pan.scrollTop - dy;
-    pan.moved ||= Math.abs(dx) > 3 || Math.abs(dy) > 3;
+    const active = panRef.current;
+    if (!active || active.pointerId !== event.pointerId) return;
+    const dx = event.clientX - active.startX;
+    const dy = event.clientY - active.startY;
+    setPan({ x: active.origin.x + dx, y: active.origin.y + dy });
+    active.moved ||= Math.abs(dx) > 3 || Math.abs(dy) > 3;
   };
 
   const endPan = event => {
-    const pan = panRef.current;
-    if (!pan || pan.pointerId !== event.pointerId) return;
+    const active = panRef.current;
+    if (!active || active.pointerId !== event.pointerId) return;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    suppressCanvasClickRef.current = pan.moved;
+    suppressCanvasClickRef.current = active.moved;
     panRef.current = null;
     setPanning(false);
   };
@@ -568,16 +592,16 @@ export default function ProcessGraph({
       const moveIds = new Set([drag.id, ...drag.descendants.groupIds]);
       nextGroups = drag.groups.map(item => moveIds.has(item.id) ? {
         ...item,
-        x: Math.max(8, Math.round(item.x + dx)),
-        y: Math.max(8, Math.round(item.y + dy)),
+        x: Math.round(item.x + dx),
+        y: Math.round(item.y + dy),
       } : item);
       nextPositions = { ...drag.positions };
       for (const taskId of drag.descendants.taskIds) {
         const point = drag.positions[taskId];
         if (!point) continue;
         nextPositions[taskId] = {
-          x: Math.max(8, Math.round(point.x + dx)),
-          y: Math.max(8, Math.round(point.y + dy)),
+          x: Math.round(point.x + dx),
+          y: Math.round(point.y + dy),
         };
       }
     }
@@ -614,21 +638,39 @@ export default function ProcessGraph({
   };
 
   const handleWheel = event => {
-    if (!event.ctrlKey && !event.metaKey) return;
     event.preventDefault();
-    setZoomAroundCenter(zoom * (event.deltaY > 0 ? 0.9 : 1.1));
+    if (event.ctrlKey || event.metaKey) {
+      zoomAt(zoom * (event.deltaY > 0 ? 0.9 : 1.1), event.clientX, event.clientY);
+      return;
+    }
+    setPan(current => ({
+      x: current.x - event.deltaX,
+      y: current.y - event.deltaY,
+    }));
   };
 
   if (!nodes.length) return <div className="process-graph process-graph--empty">No graph data.</div>;
 
   const sortedGroups = [...resolvedGroups].sort((left, right) => (depths[left.id] || 0) - (depths[right.id] || 0));
+  const previewPath = connecting
+    ? roundedPath(cleanPoints([
+        connecting.start,
+        { x: connecting.pointer.x, y: connecting.start.y },
+        connecting.pointer,
+      ]))
+    : "";
 
   return (
     <div
       ref={viewportRef}
-      className={`process-graph process-graph--pannable ${panning ? "process-graph--panning" : ""} ${editable ? "process-graph--editable" : "process-graph--locked"}`}
+      className={`process-graph process-graph--infinite ${panning ? "process-graph--panning" : ""} ${editable ? "process-graph--editable" : "process-graph--locked"}`}
       role="region"
       aria-label="Process graph"
+      style={{
+        "--graph-grid-size": `${20 * zoom}px`,
+        "--graph-grid-x": `${pan.x}px`,
+        "--graph-grid-y": `${pan.y}px`,
+      }}
       onPointerDown={beginPan}
       onPointerMove={movePan}
       onPointerUp={endPan}
@@ -637,157 +679,146 @@ export default function ProcessGraph({
       onWheel={handleWheel}
     >
       <div className="process-graph__controls" onPointerDown={event => event.stopPropagation()}>
-        <button type="button" onClick={() => setZoomAroundCenter(zoom / 1.2)} title="Zoom out" aria-label="Zoom out"><IconZoomOut size={15} /></button>
+        <button type="button" onClick={() => zoomAt(zoom / 1.2)} title="Zoom out" aria-label="Zoom out"><IconZoomOut size={15} /></button>
         <span>{Math.round(zoom * 100)}%</span>
-        <button type="button" onClick={() => setZoomAroundCenter(zoom * 1.2)} title="Zoom in" aria-label="Zoom in"><IconZoomIn size={15} /></button>
+        <button type="button" onClick={() => zoomAt(zoom * 1.2)} title="Zoom in" aria-label="Zoom in"><IconZoomIn size={15} /></button>
         <button type="button" onClick={fitView} title="Fit graph" aria-label="Fit graph"><IconFocus2 size={15} /></button>
         {editable && <button type="button" onClick={() => applyAutoLayout("horizontal")} title="Auto-layout left to right" aria-label="Auto-layout horizontally"><IconArrowsHorizontal size={15} /></button>}
         {editable && <button type="button" onClick={() => applyAutoLayout("vertical")} title="Auto-layout top to bottom" aria-label="Auto-layout vertically"><IconArrowsVertical size={15} /></button>}
       </div>
 
-      <div className="process-graph__zoom-space" style={{ width: geometry.width * zoom, height: geometry.height * zoom }}>
-        <div
-          className="process-graph__canvas"
-          style={{ width: geometry.width, height: geometry.height, transform: `scale(${zoom})`, transformOrigin: "0 0" }}
-        >
-          {sortedGroups.map(group => (
-            <div
-              key={group.id}
-              className={`workflow-group workflow-group--${group.type || "group"} ${selectedGroupId === group.id ? "workflow-group--selected" : ""}`}
-              style={{
-                left: group.x,
-                top: group.y,
-                width: group.width,
-                height: group.height,
-                zIndex: Math.max(0, depths[group.id] || 0),
-              }}
-              onPointerDown={event => beginGroupDrag(event, group, "move")}
-              onPointerMove={moveGroup}
-              onPointerUp={endGroup}
-              onPointerCancel={endGroup}
-            >
-              <span className="workflow-group__title">
-                <strong>{group.type === "map" ? "Map" : group.type === "loop" ? "Loop" : "Group"}</strong>
-                {group.name && <span>{group.name}</span>}
-                {group.type === "map" && <small>Concurrency {group.concurrency ?? 1}</small>}
-                {group.type === "loop" && <small>QC ≥ {Math.round((group.minimumScore ?? 0.8) * 100)}%</small>}
-              </span>
-              {editable && (
-                <span
-                  className="workflow-group__resize"
-                  onPointerDown={event => beginGroupDrag(event, group, "resize")}
-                  onPointerMove={moveGroup}
-                  onPointerUp={endGroup}
-                  onPointerCancel={endGroup}
-                  title="Resize execution group"
-                />
-              )}
-            </div>
-          ))}
-
-          <svg className="process-graph__edges" width={geometry.width} height={geometry.height} aria-hidden="true">
-            <defs>
-              <marker id="workflow-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto" markerUnits="strokeWidth">
-                <path d="M 0 0 L 7 3.5 L 0 7 z" className="process-edge__arrow" />
-              </marker>
-            </defs>
-            {routedEdges.map(edge => (
-              <g key={`${edge.from}-${edge.to}`}>
-                <polyline
-                  className={sameEdge(selectedEdge, edge.from, edge.to) ? "process-edge process-edge--selected" : "process-edge"}
-                  points={pointsText(edge.points)}
-                  markerEnd="url(#workflow-arrow)"
-                />
-                {editable && (
-                  <polyline
-                    className="process-edge-hit"
-                    points={pointsText(edge.points)}
-                    onClick={event => {
-                      event.stopPropagation();
-                      onEdgeSelect?.([edge.from, edge.to]);
-                      onSelect?.(null);
-                      onGroupSelect?.(null);
-                    }}
-                  />
-                )}
-              </g>
-            ))}
-            {connecting && (
-              <polyline
-                className="process-edge process-edge--preview"
-                points={pointsText(cleanPoints([
-                  connecting.start,
-                  { x: connecting.pointer.x, y: connecting.start.y },
-                  connecting.pointer,
-                ]))}
+      <div
+        className="process-graph__world"
+        style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` }}
+      >
+        {sortedGroups.map(group => (
+          <div
+            key={group.id}
+            className={`workflow-group workflow-group--${group.type || "group"} ${selectedGroupId === group.id ? "workflow-group--selected" : ""}`}
+            style={{
+              left: group.x,
+              top: group.y,
+              width: group.width,
+              height: group.height,
+              zIndex: Math.max(0, depths[group.id] || 0),
+            }}
+            onPointerDown={event => beginGroupDrag(event, group, "move")}
+            onPointerMove={moveGroup}
+            onPointerUp={endGroup}
+            onPointerCancel={endGroup}
+          >
+            <span className="workflow-group__title">
+              <strong>{group.type === "map" ? "Map" : group.type === "loop" ? "Loop" : "Group"}</strong>
+              {group.name && <span>{group.name}</span>}
+              {group.type === "map" && <small>Concurrency {group.concurrency ?? 1}</small>}
+              {group.type === "loop" && <small>QC ≥ {Math.round((group.minimumScore ?? 0.8) * 100)}%</small>}
+            </span>
+            {editable && (
+              <span
+                className="workflow-group__resize"
+                onPointerDown={event => beginGroupDrag(event, group, "resize")}
+                onPointerMove={moveGroup}
+                onPointerUp={endGroup}
+                onPointerCancel={endGroup}
+                title="Resize execution group"
               />
             )}
-          </svg>
+          </div>
+        ))}
 
-          {nodes.map(node => {
-            const Icon = nodeTypeIcon(node.task?.type);
-            const status = statuses[node.id] || node.task?.status || "";
-            const selected = selectedId === node.id;
-            const dragging = draggingId === node.id;
-            const canOutput = editable && node.task?.type !== "end";
-            return (
-              <div
-                key={node.id}
-                className={`process-node-wrap ${selected ? "process-node-wrap--selected" : ""} ${dragging ? "process-node-wrap--dragging" : ""}`}
-                style={{ left: node.x, top: node.y, width: NODE_WIDTH, height: NODE_HEIGHT }}
-                data-connect-input={node.task?.type !== "start" ? node.id : undefined}
-              >
-                {onRevise && node.task?.type === "task" && (
-                  <div className="process-node__toolbar">
-                    <button
-                      type="button"
-                      onClick={event => {
-                        event.stopPropagation();
-                        onRevise({ id: node.id, ...node.task });
-                      }}
-                      aria-label={`Ask Nora to revise ${nodeLabel(node.id, node.task)}`}
-                      title="Ask Nora to revise"
-                    >
-                      <IconSparkles size={14} />
-                    </button>
-                  </div>
-                )}
-                <button
-                  type="button"
-                  className={`process-node process-node--${node.task?.type || "task"} ${selected ? "process-node--selected" : ""} ${status ? `process-node--${status}` : ""}`}
-                  onPointerDown={event => beginNodeDrag(event, node)}
-                  onPointerMove={moveNode}
-                  onPointerUp={endNodeDrag}
-                  onPointerCancel={endNodeDrag}
+        <svg className="process-graph__edges" width="1" height="1" aria-hidden="true">
+          <defs>
+            <marker id="workflow-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+              <path d="M 0 0 L 8 4 L 0 8 z" className="process-edge__arrow" />
+            </marker>
+          </defs>
+          {routedEdges.map(edge => (
+            <g key={`${edge.from}-${edge.to}`}>
+              <path
+                className={sameEdge(selectedEdge, edge.from, edge.to) ? "process-edge process-edge--selected" : "process-edge"}
+                d={edge.path}
+                markerEnd="url(#workflow-arrow)"
+              />
+              {editable && (
+                <path
+                  className="process-edge-hit"
+                  d={edge.path}
                   onClick={event => {
                     event.stopPropagation();
-                    onSelect?.({ id: node.id, ...node.task });
-                    onEdgeSelect?.(null);
+                    onEdgeSelect?.([edge.from, edge.to]);
+                    onSelect?.(null);
                     onGroupSelect?.(null);
                   }}
-                >
-                  <span className="process-node__icon"><Icon size={20} stroke={1.7} /></span>
-                  {status && <span className="process-node__status" title={status} />}
-                </button>
-                {canOutput && ["top", "right", "bottom", "left"].map(side => (
-                  <span
-                    key={side}
-                    className={`process-node__connector process-node__connector--${side}`}
-                    onPointerDown={event => beginConnect(event, node.id, side)}
-                    onPointerMove={moveConnect}
-                    onPointerUp={endConnect}
-                    onPointerCancel={endConnect}
-                    title={`Connect from ${side}`}
-                  />
-                ))}
-                <span className="process-node__description">
-                  <strong>{nodeLabel(node.id, node.task)}</strong>
-                  <small>{nodeSubtitle(node.task)}</small>
-                </span>
-              </div>
-            );
-          })}
-        </div>
+                />
+              )}
+            </g>
+          ))}
+          {connecting && <path className="process-edge process-edge--preview" d={previewPath} />}
+        </svg>
+
+        {nodes.map(node => {
+          const Icon = nodeTypeIcon(node.task?.type);
+          const status = statuses[node.id] || node.task?.status || "";
+          const selected = selectedId === node.id;
+          const dragging = draggingId === node.id;
+          const canOutput = editable && node.task?.type !== "end";
+          return (
+            <div
+              key={node.id}
+              className={`process-node-wrap ${selected ? "process-node-wrap--selected" : ""} ${dragging ? "process-node-wrap--dragging" : ""}`}
+              style={{ left: node.x, top: node.y, width: NODE_WIDTH, height: NODE_HEIGHT }}
+              data-connect-input={node.task?.type !== "start" ? node.id : undefined}
+            >
+              {onRevise && node.task?.type === "task" && (
+                <div className="process-node__toolbar">
+                  <button
+                    type="button"
+                    onClick={event => {
+                      event.stopPropagation();
+                      onRevise({ id: node.id, ...node.task });
+                    }}
+                    aria-label={`Ask Nora to revise ${nodeLabel(node.id, node.task)}`}
+                    title="Ask Nora to revise"
+                  >
+                    <IconSparkles size={14} />
+                  </button>
+                </div>
+              )}
+              <button
+                type="button"
+                className={`process-node process-node--${node.task?.type || "task"} ${selected ? "process-node--selected" : ""} ${status ? `process-node--${status}` : ""}`}
+                onPointerDown={event => beginNodeDrag(event, node)}
+                onPointerMove={moveNode}
+                onPointerUp={endNodeDrag}
+                onPointerCancel={endNodeDrag}
+                onClick={event => {
+                  event.stopPropagation();
+                  onSelect?.({ id: node.id, ...node.task });
+                  onEdgeSelect?.(null);
+                  onGroupSelect?.(null);
+                }}
+              >
+                <span className="process-node__icon"><Icon size={20} stroke={1.7} /></span>
+                {status && <span className="process-node__status" title={status} />}
+              </button>
+              {canOutput && ["top", "right", "bottom", "left"].map(side => (
+                <span
+                  key={side}
+                  className={`process-node__connector process-node__connector--${side}`}
+                  onPointerDown={event => beginConnect(event, node.id, side)}
+                  onPointerMove={moveConnect}
+                  onPointerUp={endConnect}
+                  onPointerCancel={endConnect}
+                  title={`Connect from ${side}`}
+                />
+              ))}
+              <span className="process-node__description">
+                <strong>{nodeLabel(node.id, node.task)}</strong>
+                <small>{nodeSubtitle(node.task)}</small>
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
