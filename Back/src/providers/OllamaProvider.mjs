@@ -115,9 +115,12 @@ const mapWithConcurrency = async (items, concurrency, mapper) => {
 const localHost = hostname => ["localhost", "127.0.0.1", "::1"].includes(hostname);
 
 export const createOllamaProvider = ({
+  name = "ollama",
   baseUrl = "http://localhost:11434/api",
   apiKey = null,
 } = {}) => {
+  if (typeof name !== "string" || !name.trim()) throw new Error("Provider name must be a non-empty string");
+  const providerName = name.trim();
   const apiUrl = normalizeBaseUrl(baseUrl);
   const endpointIsCloud = (() => {
     try {
@@ -128,14 +131,14 @@ export const createOllamaProvider = ({
   })();
 
   const provider = {
-    name: "ollama",
+    name: providerName,
     models: [],
 
     async generate({ model, messages, tools = [], format = null, signal = null }) {
       if (!model || typeof model !== "string") {
-        throw new Error("Ollama model must be a non-empty string");
+        throw new Error(`${providerName} model must be a non-empty string`);
       }
-      if (!Array.isArray(messages)) throw new Error("Ollama messages must be an array");
+      if (!Array.isArray(messages)) throw new Error(`${providerName} messages must be an array`);
 
       const body = {
         model,
@@ -178,12 +181,12 @@ export const createOllamaProvider = ({
       const taggedModels = (result.models ?? []).filter(model => model?.name || model?.model);
 
       return mapWithConcurrency(taggedModels, 4, async tagged => {
-        const name = tagged.name ?? tagged.model;
+        const modelName = tagged.name ?? tagged.model;
         let shown = null;
         try {
           shown = await request(
             `${apiUrl}/show`,
-            { method: "POST", body: JSON.stringify({ model: name }) },
+            { method: "POST", body: JSON.stringify({ model: modelName }) },
             apiKey,
           );
         } catch {
@@ -191,8 +194,8 @@ export const createOllamaProvider = ({
         }
 
         return {
-          name,
-          location: endpointIsCloud || /(?:^|[-:])cloud$/i.test(name) ? "cloud" : "local",
+          name: modelName,
+          location: endpointIsCloud || /(?:^|[-:])cloud$/i.test(modelName) ? "cloud" : "local",
           details: shown?.details ?? tagged.details ?? null,
           capabilities: Array.isArray(shown?.capabilities) ? shown.capabilities : null,
           modelInfo: shown?.model_info ?? null,
