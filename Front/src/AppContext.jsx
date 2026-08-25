@@ -91,16 +91,17 @@ export const AppProvider = ({ children }) => {
     const nextRevision = Number.isSafeInteger(payload.revision) ? payload.revision : revisionRef.current;
     const nextInstance = typeof payload.instance === "string" ? payload.instance : instanceRef.current;
     const isNewInstance = Boolean(nextInstance && nextInstance !== instanceRef.current);
-    const shouldApply = payload.reset || isNewInstance || nextRevision > revisionRef.current;
+    const resetting = Boolean(payload.reset || isNewInstance);
+    const shouldApply = resetting || nextRevision > revisionRef.current;
 
     if (shouldApply) {
-      const base = payload.reset || isNewInstance ? EMPTY_OFFICE_STATE : stateRef.current;
+      const base = resetting ? EMPTY_OFFICE_STATE : stateRef.current;
       const nextState = { ...base, ...(payload.state || {}) };
       stateRef.current = nextState;
       setOfficeState(nextState);
     }
 
-    revisionRef.current = Math.max(revisionRef.current, nextRevision);
+    revisionRef.current = resetting ? nextRevision : Math.max(revisionRef.current, nextRevision);
     instanceRef.current = nextInstance;
     setConnected(true);
     setLoading(false);
