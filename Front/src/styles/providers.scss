@@ -7,6 +7,92 @@
   margin: var(--density-md) var(--margin-page) var(--density-lg);
 }
 
+.provider-registry {
+  display: grid;
+  gap: 8px;
+  margin: var(--density-md) var(--margin-page) 0;
+}
+
+.provider-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-soft);
+}
+
+.provider-card--offline {
+  border-color: color-mix(in srgb, var(--color-danger) 45%, var(--color-border));
+}
+
+.provider-card__icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+  color: var(--color-accent);
+}
+
+.provider-card__copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.provider-card__copy > span,
+.provider-card__copy > small {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-card__error {
+  color: var(--color-danger) !important;
+}
+
+.provider-editor {
+  margin: var(--density-md) var(--margin-page) 0;
+  padding: 14px;
+}
+
+.provider-editor__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.provider-editor__wide {
+  grid-column: 1 / -1;
+}
+
+.provider-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+  margin-top: 12px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.provider-capabilities > span {
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.provider-capabilities label {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
 .providers-table__model {
   min-width: 230px;
   font-family: var(--font-mono);
@@ -96,8 +182,27 @@
   color: var(--color-danger);
 }
 
-.model-cost {
+.model-cost,
+.model-source {
   color: var(--color-text-muted);
   font-family: var(--font-mono);
   font-size: 11px;
+}
+
+@media (max-width: 760px) {
+  .provider-card {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .provider-card > .icon-button {
+    grid-column: 3;
+  }
+
+  .provider-editor__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .provider-editor__wide {
+    grid-column: auto;
+  }
 }
