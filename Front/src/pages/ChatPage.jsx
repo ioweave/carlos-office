@@ -178,6 +178,26 @@ export default function ChatPage({
     }
   }, [onConversationRead]);
 
+  const syncActiveConversation = useCallback(async id => {
+    if (!id) return;
+    try {
+      const [record, attachmentResponse, artifactResponse] = await Promise.all([
+        api.get(endpoints.conversation(id)).then(response => response.data),
+        api.get(endpoints.conversationAttachments(id)),
+        api.get(endpoints.conversationArtifacts(id)),
+      ]);
+      if (!record?.id) return;
+      setConversation(record);
+      upsertConversation(record);
+      setAttachments(attachmentResponse.data || []);
+      setArtifacts(artifactResponse.data || []);
+      setWorkflowId(record.workflows?.at(-1) || "");
+      onConversationRead?.(id);
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Could not update conversation.");
+    }
+  }, [onConversationRead, upsertConversation]);
+
   useEffect(() => {
     loadCatalog();
     loadHistory();
@@ -190,12 +210,19 @@ export default function ChatPage({
 
   useEffect(() => {
     if (!openRequest) return;
-    if (openRequest.conversationId) openConversation(openRequest.conversationId);
+    if (openRequest.conversationId) {
+      const isLiveUpdate = Boolean(
+        openRequest.liveMessageId
+        && conversation?.id === openRequest.conversationId
+      );
+      if (isLiveUpdate) void syncActiveConversation(openRequest.conversationId);
+      else openConversation(openRequest.conversationId);
+    }
     if (openRequest.prefill) {
       setInput(openRequest.prefill);
       requestAnimationFrame(() => textareaRef.current?.focus());
     }
-  }, [openRequest, openConversation]);
+  }, [openRequest, openConversation, syncActiveConversation, conversation?.id]);
 
   useEffect(() => {
     if (conversation || modelDraft.provider || !nora?.provider) return;
