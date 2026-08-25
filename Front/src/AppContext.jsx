@@ -1,19 +1,25 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
-import api, { endpoints, setOfficeMutationListener } from "./api";
+import api, { endpoints, setOfficeStateBridge } from "./api";
 
 const PAGES = new Set(["office", "chat", "processes", "operations", "capabilities", "store", "providers"]);
 const ACTIVE_PAGE_STORAGE_KEY = "office-active-page-v1";
 const THEME_STORAGE_KEY = "office-theme";
 const LONG_POLL_WAIT_MS = 240_000;
 const PING_TIMEOUT_MS = 250_000;
-const RETRY_DELAY_MS = 10_000;
+const FALLBACK_RETRY_MS = 5_000;
+const WS_RECONNECT_MAX_MS = 15_000;
 
 const EMPTY_OFFICE_STATE = {
   nora: { provider: "", model: "" },
+  models: [],
   workflows: [],
   approvals: [],
   agents: [],
+  skillsRevision: 0,
+  conversations: [],
+  attachments: {},
+  artifacts: {},
 };
 
 const systemPrefersDark = () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
@@ -28,22 +34,23 @@ const storedActivePage = () => {
   }
 };
 
-const parseConversationRevision = value => {
-  if (!value || typeof value !== "string") return new Map();
-  try {
-    const entries = JSON.parse(value);
-    if (!Array.isArray(entries)) return new Map();
-    return new Map(entries
-      .filter(entry => Array.isArray(entry) && typeof entry[0] === "string")
-      .map(([id, count, lastMessageId, lastMessageAt, lastActor]) => [id, {
-        count: Number.isFinite(count) ? count : 0,
-        lastMessageId: typeof lastMessageId === "string" ? lastMessageId : "",
-        lastMessageAt: typeof lastMessageAt === "string" ? lastMessageAt : "",
-        lastActor: typeof lastActor === "string" ? lastActor : "",
-      }]));
-  } catch {
-    return new Map();
-  }
+const conversationRevision = conversations => new Map((conversations || []).map(conversation => {
+  const lastMessage = conversation.messages?.at(-1) ?? null;
+  return [conversation.id, {
+    count: conversation.messages?.length ?? 0,
+    lastMessageId: lastMessage?.id ?? "",
+    lastMessageAt: lastMessage?.at ?? "",
+    lastActor: lastMessage?.actor ?? "",
+  }];
+}));
+
+const websocketUrl = () => {
+  const base = new URL(api.defaults.baseURL || window.location.origin, window.location.href);
+  base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
+  base.pathname = "/ws";
+  base.search = "";
+  base.hash = "";
+  return base;
 };
 
 const AppContext = createContext(null);
@@ -61,11 +68,45 @@ export const AppProvider = ({ children }) => {
   const stateRef = useRef(EMPTY_OFFICE_STATE);
   const revisionRef = useRef(0);
   const instanceRef = useRef(null);
-  const wakePollRef = useRef(null);
+  const websocketRef = useRef(null);
+  const websocketReadyRef = useRef(false);
+  const revisionWaitersRef = useRef(new Set());
   const conversationRevisionRef = useRef(new Map());
   const conversationRevisionReadyRef = useRef(false);
 
   const effectiveTheme = theme === "system" ? (systemDark ? "dark" : "light") : theme;
+
+  const resolveRevisionWaiters = useCallback(() => {
+    for (const waiter of [...revisionWaitersRef.current]) {
+      if (revisionRef.current <= waiter.baseline) continue;
+      revisionWaitersRef.current.delete(waiter);
+      window.clearTimeout(waiter.timer);
+      waiter.resolve(revisionRef.current);
+    }
+  }, []);
+
+  const applyStatePayload = useCallback(payload => {
+    if (!payload || payload.ok !== true) return false;
+
+    const nextRevision = Number.isSafeInteger(payload.revision) ? payload.revision : revisionRef.current;
+    const nextInstance = typeof payload.instance === "string" ? payload.instance : instanceRef.current;
+    const isNewInstance = Boolean(nextInstance && nextInstance !== instanceRef.current);
+    const shouldApply = payload.reset || isNewInstance || nextRevision > revisionRef.current;
+
+    if (shouldApply) {
+      const base = payload.reset || isNewInstance ? EMPTY_OFFICE_STATE : stateRef.current;
+      const nextState = { ...base, ...(payload.state || {}) };
+      stateRef.current = nextState;
+      setOfficeState(nextState);
+    }
+
+    revisionRef.current = Math.max(revisionRef.current, nextRevision);
+    instanceRef.current = nextInstance;
+    setConnected(true);
+    setLoading(false);
+    resolveRevisionWaiters();
+    return shouldApply;
+  }, [resolveRevisionWaiters]);
 
   const requestPing = useCallback(async ({ waitMs = 0, signal = null } = {}) => {
     try {
@@ -78,40 +119,45 @@ export const AppProvider = ({ children }) => {
         signal,
         timeout: PING_TIMEOUT_MS,
       });
-      const payload = response.data || {};
-      const nextRevision = Number.isSafeInteger(payload.revision) ? payload.revision : revisionRef.current;
-      const nextInstance = typeof payload.instance === "string" ? payload.instance : instanceRef.current;
-      const isNewInstance = Boolean(nextInstance && nextInstance !== instanceRef.current);
-      const shouldApply = payload.reset || isNewInstance || nextRevision > revisionRef.current;
-
-      if (shouldApply) {
-        const base = payload.reset || isNewInstance ? EMPTY_OFFICE_STATE : stateRef.current;
-        const nextState = { ...base, ...(payload.state || {}) };
-        stateRef.current = nextState;
-        setOfficeState(nextState);
-      }
-
-      revisionRef.current = nextRevision;
-      instanceRef.current = nextInstance;
-      setConnected(payload.ok === true);
-      return payload;
+      applyStatePayload(response.data || {});
+      return response.data || null;
     } catch (error) {
       const cancelled = error?.code === "ERR_CANCELED" || error?.name === "CanceledError";
       if (!cancelled) {
         console.error("[app] Office ping failed.", {
           message: error instanceof Error ? error.message : String(error),
         });
-        setConnected(false);
+        if (!websocketReadyRef.current) setConnected(false);
       }
       return null;
     } finally {
       setLoading(false);
     }
+  }, [applyStatePayload]);
+
+  const waitForRevision = useCallback((baseline, timeoutMs = 2_500) => {
+    if (!Number.isSafeInteger(baseline) || revisionRef.current > baseline) {
+      return Promise.resolve(revisionRef.current);
+    }
+
+    return new Promise(resolve => {
+      const waiter = {
+        baseline,
+        resolve,
+        timer: null,
+      };
+      waiter.timer = window.setTimeout(() => {
+        revisionWaitersRef.current.delete(waiter);
+        resolve(revisionRef.current);
+      }, timeoutMs);
+      revisionWaitersRef.current.add(waiter);
+    });
   }, []);
 
-  const refresh = useCallback(() => {
-    wakePollRef.current?.();
-  }, []);
+  const refresh = useCallback(async () => {
+    if (websocketReadyRef.current) return;
+    await requestPing({ waitMs: 0 });
+  }, [requestPing]);
 
   const setActivePage = value => {
     if (!PAGES.has(value)) return;
@@ -160,7 +206,7 @@ export const AppProvider = ({ children }) => {
   };
 
   useEffect(() => {
-    const next = parseConversationRevision(officeState.conversationsRevision);
+    const next = conversationRevision(officeState.conversations);
     if (!conversationRevisionReadyRef.current) {
       conversationRevisionRef.current = next;
       conversationRevisionReadyRef.current = true;
@@ -168,7 +214,6 @@ export const AppProvider = ({ children }) => {
     }
 
     const previous = conversationRevisionRef.current;
-
     setUnreadConversationIds(current => {
       const unread = new Set(current);
 
@@ -186,7 +231,7 @@ export const AppProvider = ({ children }) => {
     });
 
     conversationRevisionRef.current = next;
-  }, [officeState.conversationsRevision]);
+  }, [officeState.conversations]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = effectiveTheme;
@@ -201,68 +246,140 @@ export const AppProvider = ({ children }) => {
   }, []);
 
   useEffect(() => {
-    let stopped = false;
-    let controller = null;
-    let timer = null;
-    let restartRequested = false;
+    setOfficeStateBridge({
+      read: () => ({ state: stateRef.current, revision: revisionRef.current }),
+      waitForRevision,
+    });
+    return () => setOfficeStateBridge(null);
+  }, [waitForRevision]);
 
-    const schedule = delay => {
-      if (stopped || document.hidden) return;
-      if (timer !== null) window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        timer = null;
-        void poll();
+  useEffect(() => {
+    let stopped = false;
+    let fallbackController = null;
+    let fallbackTimer = null;
+    let reconnectTimer = null;
+    let reconnectDelay = 750;
+
+    const stopFallback = () => {
+      if (fallbackTimer !== null) window.clearTimeout(fallbackTimer);
+      fallbackTimer = null;
+      fallbackController?.abort();
+      fallbackController = null;
+    };
+
+    const scheduleFallback = delay => {
+      if (stopped || websocketReadyRef.current || document.hidden) return;
+      if (fallbackTimer !== null) window.clearTimeout(fallbackTimer);
+      fallbackTimer = window.setTimeout(() => {
+        fallbackTimer = null;
+        void fallbackPoll();
       }, delay);
     };
 
-    const restart = () => {
-      if (stopped || document.hidden) return;
-      restartRequested = true;
-      if (controller) controller.abort();
-      else schedule(0);
+    const fallbackPoll = async () => {
+      if (stopped || websocketReadyRef.current || document.hidden || fallbackController) return;
+      fallbackController = new AbortController();
+      const payload = await requestPing({
+        waitMs: instanceRef.current ? LONG_POLL_WAIT_MS : 0,
+        signal: fallbackController.signal,
+      });
+      fallbackController = null;
+      if (stopped || websocketReadyRef.current || document.hidden) return;
+      scheduleFallback(payload ? 0 : FALLBACK_RETRY_MS);
     };
 
-    const poll = async () => {
-      if (stopped || document.hidden || controller) return;
-      controller = new AbortController();
-      const waitMs = instanceRef.current ? LONG_POLL_WAIT_MS : 0;
-      const payload = await requestPing({ waitMs, signal: controller.signal });
-      controller = null;
-      if (stopped || document.hidden) return;
+    const scheduleReconnect = () => {
+      if (stopped || document.hidden || reconnectTimer !== null) return;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connectWebSocket();
+      }, reconnectDelay);
+      reconnectDelay = Math.min(Math.round(reconnectDelay * 1.7), WS_RECONNECT_MAX_MS);
+    };
 
-      if (restartRequested) {
-        restartRequested = false;
-        schedule(0);
-        return;
-      }
-      schedule(payload ? 0 : RETRY_DELAY_MS);
+    const connectWebSocket = () => {
+      if (stopped || document.hidden) return;
+      const current = websocketRef.current;
+      if (current && [WebSocket.CONNECTING, WebSocket.OPEN].includes(current.readyState)) return;
+
+      const url = websocketUrl();
+      url.searchParams.set("since", String(revisionRef.current));
+      if (instanceRef.current) url.searchParams.set("instance", instanceRef.current);
+
+      const socket = new WebSocket(url);
+      websocketRef.current = socket;
+
+      socket.onopen = () => {
+        if (stopped || websocketRef.current !== socket) return;
+        websocketReadyRef.current = true;
+        reconnectDelay = 750;
+        setConnected(true);
+        stopFallback();
+      };
+
+      socket.onmessage = event => {
+        if (stopped || websocketRef.current !== socket) return;
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload?.type === "state") applyStatePayload(payload);
+        } catch (error) {
+          console.error("[app] Invalid Office state WebSocket message.", {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      };
+
+      socket.onerror = () => {
+        // onclose owns reconnect/fallback behavior.
+      };
+
+      socket.onclose = () => {
+        if (websocketRef.current === socket) websocketRef.current = null;
+        websocketReadyRef.current = false;
+        if (stopped) return;
+        setConnected(false);
+        scheduleFallback(0);
+        scheduleReconnect();
+      };
+    };
+
+    const bootstrap = async () => {
+      await requestPing({ waitMs: 0 });
+      if (stopped) return;
+      connectWebSocket();
+      if (!websocketReadyRef.current) scheduleFallback(FALLBACK_RETRY_MS);
     };
 
     const handleVisibility = () => {
       if (document.hidden) {
-        if (timer !== null) window.clearTimeout(timer);
-        timer = null;
-        controller?.abort();
+        stopFallback();
+        if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+        websocketRef.current?.close(1000, "Page hidden");
         return;
       }
-      restartRequested = false;
-      schedule(0);
+      void requestPing({ waitMs: 0 }).then(() => connectWebSocket());
     };
 
-    wakePollRef.current = restart;
-    setOfficeMutationListener(restart);
-    schedule(0);
+    void bootstrap();
     document.addEventListener("visibilitychange", handleVisibility);
 
     return () => {
       stopped = true;
-      wakePollRef.current = null;
-      setOfficeMutationListener(null);
-      if (timer !== null) window.clearTimeout(timer);
-      controller?.abort();
+      stopFallback();
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      websocketRef.current?.close(1000, "App unmounted");
+      websocketRef.current = null;
+      websocketReadyRef.current = false;
       document.removeEventListener("visibilitychange", handleVisibility);
+
+      for (const waiter of revisionWaitersRef.current) {
+        window.clearTimeout(waiter.timer);
+        waiter.resolve(revisionRef.current);
+      }
+      revisionWaitersRef.current.clear();
     };
-  }, [requestPing]);
+  }, [applyStatePayload, requestPing]);
 
   return (
     <AppContext.Provider value={{
