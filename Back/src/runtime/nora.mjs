@@ -8,6 +8,8 @@ const ollama = createOllamaProvider(config.ollama);
 providers.set(ollama.name, ollama);
 const JSON_OBJECT_SCHEMA = Object.freeze({ type: "object" });
 let queue = Promise.resolve();
+const cancelled = new Set();
+const activeControllers = new Map();
 
 const errorMessage = error => error instanceof Error ? error.message : String(error);
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -23,7 +25,7 @@ const parseJson = content => {
   return normalizeNoraDecision(parsed);
 };
 
-const decide = async message => {
+const decide = async (message, signal) => {
   const selection = message.selection;
   const provider = providers.get(selection?.provider);
   if (!provider) throw new Error(`Unknown model provider: ${selection?.provider}`);
@@ -74,6 +76,7 @@ const decide = async message => {
     messages,
     tools: [],
     format: message.format ?? JSON_OBJECT_SCHEMA,
+    signal,
   });
   const content = response?.content ?? "";
 
@@ -107,16 +110,41 @@ send({
 });
 
 process.on("message", message => {
+  if (message?.type === "cancel") {
+    if (typeof message.id !== "string") return;
+    cancelled.add(message.id);
+    activeControllers.get(message.id)?.abort();
+    return;
+  }
   if (message?.type !== "decide") return;
 
   queue = queue.then(async () => {
+    if (cancelled.delete(message.id)) {
+      send({ type: "decision", id: message.id, cancelled: true });
+      return;
+    }
+
+    const controller = new AbortController();
+    activeControllers.set(message.id, controller);
     try {
-      const result = await decide(message);
-      send({ type: "decision", id: message.id, result });
+      const result = await decide(message, controller.signal);
+      if (cancelled.delete(message.id) || controller.signal.aborted) {
+        send({ type: "decision", id: message.id, cancelled: true });
+      } else {
+        send({ type: "decision", id: message.id, result });
+      }
     } catch (error) {
-      send({
-        type: "decision", id: message.id, error: error instanceof Error ? error.message : String(error),
-      });
+      if (cancelled.delete(message.id) || controller.signal.aborted || error?.name === "AbortError") {
+        send({ type: "decision", id: message.id, cancelled: true });
+      } else {
+        send({
+          type: "decision",
+          id: message.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } finally {
+      activeControllers.delete(message.id);
     }
   });
 });
