@@ -64,8 +64,9 @@ const stateBackedRead = (url, snapshot) => {
 
 const localStateAdapter = config => async () => {
   if (pendingMutationRevision !== null && stateBridge?.waitForRevision) {
-    const reached = await stateBridge.waitForRevision(pendingMutationRevision, 2_500);
-    if (reached > pendingMutationRevision) pendingMutationRevision = null;
+    const waitingFor = pendingMutationRevision;
+    await stateBridge.waitForRevision(waitingFor, 2_500);
+    if (pendingMutationRevision === waitingFor) pendingMutationRevision = null;
   }
 
   const snapshot = stateBridge?.read?.() || null;
