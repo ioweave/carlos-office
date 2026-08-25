@@ -1,6 +1,14 @@
+import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { applyCredential } from "../src/services/CredentialService.mjs";
 
 const MAX_RESPONSE_BYTES = 500_000_000;
+const INLINE_RESPONSE_BYTES = 1_000_000;
+const here = dirname(fileURLToPath(import.meta.url));
+const contentDir = resolve(here, "../.runtime/http-content");
 
 const httpError = (message, code, { retryable = false, hint = null } = {}) => {
   const error = new Error(`http: ${message}`);
@@ -47,9 +55,22 @@ const readCompleteBody = async response => {
   return Buffer.concat(chunks, bodyBytes);
 };
 
+const storeLargeBody = async (text, bodyBytes, metadata = {}) => {
+  await mkdir(contentDir, { recursive: true });
+  const id = `http-content-${randomUUID()}`;
+  await writeFile(resolve(contentDir, id), text, "utf8");
+  return {
+    id,
+    bodyBytes,
+    storedBytes: Buffer.byteLength(text, "utf8"),
+    ...metadata,
+    instruction: "The complete response is stored locally. Use the http-content Tool to stat, search, or read byte ranges; do not request the whole body into model context at once.",
+  };
+};
+
 const tool = {
   name: "http",
-  description: "Issues HTTP requests with optional credentials injected locally by service name. Responses are read completely up to a fixed 500 MB body limit; the model cannot lower that limit. Credential secrets never enter Agent or model context and may only be sent to hosts allowed by that credential profile. Google Workspace service-account credentials mint short-lived delegated OAuth tokens server-side and may only access approved Workspace API routes.",
+  description: "Issues HTTP requests with optional credentials injected locally by service name. Carlos Office always receives the complete response up to a fixed 500 MB body limit. Responses up to 1 MB are returned inline; larger complete bodies are preserved locally and returned as an http-content handle so the Agent can search/read only the relevant ranges without flooding model context. Credential secrets never enter Agent or model context and may only be sent to hosts allowed by that credential profile. Google Workspace service-account credentials mint short-lived delegated OAuth tokens server-side and may only access approved Workspace API routes.",
   requiresApproval: false,
   provider: null,
   model: null,
@@ -89,7 +110,7 @@ const tool = {
       responseType: {
         type: "string",
         enum: ["auto", "text", "json"],
-        description: "Response parser. Defaults to auto. The complete response body is returned when it is at most 500 MB.",
+        description: "Response parser. Defaults to auto. Complete bodies over 1 MB are returned through an http-content handle rather than injected wholesale into model context.",
         default: "auto",
       },
       auth: {
@@ -119,6 +140,7 @@ const tool = {
       contentType: { type: "string" },
       bodyBytes: { type: "number" },
       body: { type: ["object", "array", "string", "number", "boolean", "null"] },
+      content: { type: ["object", "null"] },
       headers: { type: "object" },
       allow: { type: "string" },
       corsHeaders: { type: "object" },
@@ -191,6 +213,33 @@ const tool = {
       const rawBody = await readCompleteBody(response);
       const rawText = rawBody.toString("utf8");
       const text = redact(rawText, sensitiveValues);
+      const responseHeaders = sanitizeResponseHeaders(Object.fromEntries(response.headers.entries()), sensitiveValues);
+      const allow = response.headers.get("allow") || "";
+      const corsHeaders = {};
+      for (const [key, value] of Object.entries(responseHeaders)) {
+        if (key.startsWith("access-control-")) corsHeaders[key] = value;
+      }
+
+      if (rawBody.length > INLINE_RESPONSE_BYTES) {
+        const content = await storeLargeBody(text, rawBody.length, {
+          contentType,
+          sourceUrl: response.url,
+        });
+        return {
+          ok: response.ok,
+          status: response.status,
+          statusText: response.statusText,
+          url: response.url,
+          method,
+          contentType,
+          bodyBytes: rawBody.length,
+          body: null,
+          content,
+          headers: responseHeaders,
+          allow,
+          corsHeaders,
+        };
+      }
 
       const wantsJson = responseType === "json" || (responseType === "auto" && contentType.includes("application/json"));
       let responseBody = text;
@@ -208,13 +257,6 @@ const tool = {
         }
       }
 
-      const responseHeaders = sanitizeResponseHeaders(Object.fromEntries(response.headers.entries()), sensitiveValues);
-      const allow = response.headers.get("allow") || "";
-      const corsHeaders = {};
-      for (const [key, value] of Object.entries(responseHeaders)) {
-        if (key.startsWith("access-control-")) corsHeaders[key] = value;
-      }
-
       return {
         ok: response.ok,
         status: response.status,
@@ -224,6 +266,7 @@ const tool = {
         contentType,
         bodyBytes: rawBody.length,
         body: responseBody,
+        content: null,
         headers: responseHeaders,
         allow,
         corsHeaders,
