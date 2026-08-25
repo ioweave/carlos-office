@@ -13,6 +13,7 @@ import {
 import { toast } from "sonner";
 
 import api, { endpoints } from "../api";
+import ExecutionGroupForm from "../components/ExecutionGroupForm";
 import ProcessGraph from "../components/ProcessGraph";
 import TaskConfigurationForm from "../components/TaskConfigurationForm";
 
@@ -40,6 +41,7 @@ export default function ProcessesPage({ onAskNora }) {
   const [view, setView] = useState("library");
   const [selectedName, setSelectedName] = useState("");
   const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [selectedGroupId, setSelectedGroupId] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [scheduleDraft, setScheduleDraft] = useState(EMPTY_SCHEDULE);
@@ -66,6 +68,12 @@ export default function ProcessesPage({ onAskNora }) {
     [processes, selectedName],
   );
   const selectedTask = selected?.tasks?.[selectedTaskId] || null;
+  const selectedGroup = (selected?.groups || []).find(group => group.id === selectedGroupId) || null;
+
+  const clearSelection = () => {
+    setSelectedTaskId("");
+    setSelectedGroupId("");
+  };
 
   const deleteSelectedProcess = async () => {
     if (!selected) return;
@@ -79,7 +87,7 @@ export default function ProcessesPage({ onAskNora }) {
     try {
       await api.delete(endpoints.process(selected.name));
       setSelectedName("");
-      setSelectedTaskId("");
+      clearSelection();
       toast.success("Process deleted.");
       await load();
     } catch (error) {
@@ -179,7 +187,7 @@ export default function ProcessesPage({ onAskNora }) {
               className="icon-button"
               onClick={() => {
                 setSelectedName("");
-                setSelectedTaskId("");
+                clearSelection();
               }}
               aria-label="Back to Process library"
             >
@@ -194,6 +202,7 @@ export default function ProcessesPage({ onAskNora }) {
           <div className="process-editor-header__stats" aria-label="Process summary">
             <span>{taskEntries.length} nodes</span>
             <span>{(selected.edges || []).length} connections</span>
+            <span>{(selected.groups || []).length} groups</span>
             <span>{(selected.inputs || []).length} inputs</span>
           </div>
 
@@ -229,39 +238,54 @@ export default function ProcessesPage({ onAskNora }) {
               tasks={selected.tasks}
               edges={selected.edges}
               start={selected.start}
+              groups={selected.groups || []}
               savedPositions={selected.layout}
               selectedId={selectedTaskId}
-              onSelect={node => setSelectedTaskId(node.id)}
+              selectedGroupId={selectedGroupId}
+              onSelect={node => {
+                setSelectedTaskId(node?.id || "");
+                setSelectedGroupId("");
+              }}
+              onGroupSelect={group => {
+                setSelectedGroupId(group?.id || "");
+                setSelectedTaskId("");
+              }}
               onRevise={reviseTask}
               onMove={saveLayout}
-              onCanvasClick={() => setSelectedTaskId("")}
+              onCanvasClick={clearSelection}
             />
 
-            {selectedTask && (
+            {(selectedTask || selectedGroup) && (
               <aside className="inspector-panel inspector-panel--floating">
                 <header className="inspector-panel__header">
                   <div>
-                    <span className="eyebrow">{selectedTask.type || "Task"}</span>
-                    <h2>{selectedTask.objective || selectedTaskId}</h2>
-                    <code>{selectedTaskId}</code>
+                    <span className="eyebrow">{selectedGroup ? `${selectedGroup.type} group` : selectedTask.type || "Task"}</span>
+                    <h2>{selectedGroup ? selectedGroup.name || selectedGroup.id : selectedTask.objective || selectedTaskId}</h2>
+                    <code>{selectedGroup?.id || selectedTaskId}</code>
                   </div>
                   <button
                     type="button"
                     className="icon-button"
-                    onClick={() => setSelectedTaskId("")}
-                    aria-label="Close Task inspector"
+                    onClick={clearSelection}
+                    aria-label="Close inspector"
                   >
                     <IconX size={17} />
                   </button>
                 </header>
-                <TaskConfigurationForm
-                  key={`${selected.name}:${selectedTaskId}`}
-                  processName={selected.name}
-                  taskId={selectedTaskId}
-                  task={selectedTask}
-                  onSaved={replaceSelectedProcess}
-                  onRevise={() => reviseTask({ id: selectedTaskId, ...selectedTask })}
-                />
+                {selectedGroup ? (
+                  <ExecutionGroupForm group={selectedGroup} disabled />
+                ) : selectedTask.type === "task" ? (
+                  <TaskConfigurationForm
+                    key={`${selected.name}:${selectedTaskId}`}
+                    processName={selected.name}
+                    taskId={selectedTaskId}
+                    task={selectedTask}
+                    onSaved={replaceSelectedProcess}
+                    onRevise={() => reviseTask({ id: selectedTaskId, ...selectedTask })}
+                  />
+                ) : (
+                  <div className="definition-list"><div><span>Node</span><strong>{selectedTask.type}</strong></div></div>
+                )}
               </aside>
             )}
           </section>
@@ -276,7 +300,7 @@ export default function ProcessesPage({ onAskNora }) {
         <div className="page-header__copy">
           <span className="eyebrow">Design how work happens</span>
           <h1>Processes</h1>
-          <p>Reusable graph definitions: Start → Tasks → Edges → End. Schedules live with the Process they execute.</p>
+          <p>Reusable graph definitions: Start → Tasks → Edges → End. Maps and Loops define execution scopes without changing graph topology.</p>
         </div>
         <button
           type="button"
@@ -327,7 +351,7 @@ export default function ProcessesPage({ onAskNora }) {
                     <span>{process.purpose || "Reusable Process"}</span>
                   </span>
                   <span className="process-card__meta">
-                    {Object.keys(process.tasks || {}).length} nodes · {(process.edges || []).length} edges
+                    {Object.keys(process.tasks || {}).length} nodes · {(process.edges || []).length} edges · {(process.groups || []).length} groups
                   </span>
                 </button>
               ))}
