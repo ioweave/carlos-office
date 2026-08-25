@@ -1,12 +1,9 @@
 import { randomUUID } from "node:crypto";
 
-import config from "../config.mjs";
-import { createOllamaProvider } from "../providers/OllamaProvider.mjs";
+import { createConfiguredProviders } from "../providers/ProviderFactory.mjs";
 import { Agent } from "./Agent.mjs";
 
-const providers = new Map();
-const ollama = createOllamaProvider(config.ollama);
-providers.set(ollama.name, ollama);
+const { providers } = await createConfiguredProviders();
 const pendingTools = new Map();
 let running = false;
 
