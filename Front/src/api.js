@@ -62,6 +62,8 @@ export const endpoints = {
   knowledge: () => "/knowledge",
 
   providers: (refresh = false) => `/providers${refresh ? "?refresh=1" : ""}`,
+  provider: provider => `/providers/${encodeURIComponent(provider)}`,
+  providerModels: provider => `/providers/${encodeURIComponent(provider)}/models`,
   providerModel: (provider, model) => `/providers/${encodeURIComponent(provider)}/models/${encodeURIComponent(model)}`,
 
   schedules: () => "/schedules",
