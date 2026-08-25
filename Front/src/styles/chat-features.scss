@@ -3,6 +3,27 @@
   position: relative;
 }
 
+.conversation-row__title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.conversation-row__title strong {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.conversation-row__unread {
+  width: 7px;
+  min-width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
 .message__attachments,
 .message__artifacts {
   display: flex;
