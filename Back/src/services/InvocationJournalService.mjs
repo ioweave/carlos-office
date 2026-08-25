@@ -25,9 +25,10 @@ const enqueue = (key, operation) => {
 
 export const appendInvocationJournal = async ({ workflowId, taskId, attemptId, invocation }) => {
   const path = attemptPath(workflowId, taskId, attemptId);
+  const record = { workflowId, taskId, attemptId, ...structuredClone(invocation) };
   await enqueue(path, async () => {
     await mkdir(dirname(path), { recursive: true });
-    await appendFile(path, `${JSON.stringify(invocation)}\n`, "utf8");
+    await appendFile(path, `${JSON.stringify(record)}\n`, "utf8");
   });
 };
 
@@ -47,11 +48,7 @@ const readJournalFile = async path => {
   return result;
 };
 
-/**
- * Fold any invocation records that were durably journaled before a backend interruption into the
- * normal Workflow Attempt objects. Recovery can then preserve Map checkpoints while removing the
- * runtime journal files.
- */
+/** Fold runtime invocation journals into persisted Attempts during backend recovery. */
 export const hydrateWorkflowInvocationJournals = async workflow => {
   const workflowDir = resolve(root, encode(workflow.id));
   let taskDirs;
