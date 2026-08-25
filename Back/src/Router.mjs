@@ -460,6 +460,10 @@ export const createRouter = ({
         return sendJson(200, await processes.setWorkflowConfig(parts[1], await readJson(req)));
       }
 
+      if (method === "PATCH" && parts[0] === "workflows" && parts[2] === "design" && parts.length === 3) {
+        return sendJson(200, await processes.setWorkflowDesign(parts[1], await readJson(req)));
+      }
+
       if (method === "PUT" && parts[0] === "workflows" && parts[2] === "edges" && parts.length === 3) {
         const body = await readJson(req);
         return sendJson(200, await processes.setWorkflowEdges(parts[1], body.edges));
