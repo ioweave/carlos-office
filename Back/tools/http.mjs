@@ -1,6 +1,6 @@
 import { applyCredential } from "../src/services/CredentialService.mjs";
 
-const MAX_RESPONSE_BYTES = 500 * 1024 * 1024;
+const MAX_RESPONSE_BYTES = 500_000_000;
 
 const httpError = (message, code, { retryable = false, hint = null } = {}) => {
   const error = new Error(`http: ${message}`);
