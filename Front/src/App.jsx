@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   IconActivity,
   IconBuildingSkyscraper,
+  IconCpu,
   IconDeviceDesktop,
   IconGitBranch,
   IconKey,
@@ -20,6 +21,7 @@ import ChatPage from "./pages/ChatPage";
 import OfficeMapPage from "./pages/OfficeMapPage";
 import OperationsPage from "./pages/OperationsPage";
 import ProcessesPage from "./pages/ProcessesPage";
+import ProvidersPage from "./pages/ProvidersPage";
 import StorePage from "./pages/StorePage";
 
 const ACTIVE_CONVERSATION_KEY = "office-active-conversation-v2";
@@ -31,6 +33,7 @@ const NAV_ITEMS = [
   { id: "operations", label: "Operations", icon: IconActivity },
   { id: "capabilities", label: "Capabilities", icon: IconTool },
   { id: "store", label: "Store", icon: IconKey },
+  { id: "providers", label: "Providers", icon: IconCpu },
 ];
 
 export default function App() {
@@ -162,6 +165,8 @@ export default function App() {
     page = <CapabilitiesPage onAskNora={askNora} />;
   } else if (active === "store") {
     page = <StorePage />;
+  } else if (active === "providers") {
+    page = <ProvidersPage />;
   }
 
   return (
