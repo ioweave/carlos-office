@@ -27,6 +27,19 @@ const ORPHANED_ATTEMPT_REASON = "Previous Agent process is no longer active";
 const errorMessage = error => error instanceof Error ? error.message : String(error);
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 
+const failureDiagnostics = (error, phase = "process", code = "execution_failure") => {
+  if (isObject(error?.diagnostics)) return structuredClone(error.diagnostics);
+  if (isObject(error)) {
+    return {
+      phase: typeof error.phase === "string" && error.phase ? error.phase : phase,
+      code: typeof error.code === "string" && error.code ? error.code : code,
+      message: typeof error.message === "string" && error.message ? error.message : errorMessage(error),
+      ...(Array.isArray(error.toolFailures) ? { toolFailures: structuredClone(error.toolFailures) } : {}),
+    };
+  }
+  return { phase, code, message: errorMessage(error) };
+};
+
 const withWorkflowTransition = async (workflowId, operation) => {
   const previous = workflowTransitions.get(workflowId) ?? Promise.resolve();
   const next = previous.catch(() => {}).then(operation);
@@ -117,9 +130,15 @@ const closeOrphanedRunningAttempts = async (workflowId, taskId, task) => {
   }
 
   for (const attempt of runningAttempts) {
+    const diagnostics = {
+      phase: "process",
+      code: "orphaned_agent_process",
+      message: ORPHANED_ATTEMPT_REASON,
+    };
     await finishAttempt(workflowId, taskId, attempt.id, {
       status: "failed",
       error: ORPHANED_ATTEMPT_REASON,
+      diagnostics,
       blockedReason: null,
     });
     await recordEvent("attempt.orphaned", {
@@ -129,6 +148,7 @@ const closeOrphanedRunningAttempts = async (workflowId, taskId, task) => {
       agentId: attempt.agentId ?? null,
       pid: attempt.pid ?? null,
       error: ORPHANED_ATTEMPT_REASON,
+      diagnostics,
     });
   }
 
@@ -137,6 +157,7 @@ const closeOrphanedRunningAttempts = async (workflowId, taskId, task) => {
 
 const failSetup = async (workflowId, taskId, error) => {
   const message = errorMessage(error);
+  const diagnostics = failureDiagnostics(error, "setup", "task_setup_failure");
 
   await withWorkflowTransition(workflowId, async () => {
     const workflow = getWorkflow(workflowId);
@@ -164,12 +185,13 @@ const failSetup = async (workflowId, taskId, error) => {
       output: null,
       artifacts: [],
       error: message,
+      diagnostics,
       blockedReason: null,
     });
     await setTaskStatus(workflowId, taskId, "failed");
   });
 
-  await recordEvent("task.execution_failed", { workflowId, taskId, error: message });
+  await recordEvent("task.execution_failed", { workflowId, taskId, error: message, diagnostics });
 };
 
 export const selectTaskExecution = async ({
@@ -326,6 +348,7 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
       output: null,
       artifacts: [],
       error: null,
+      diagnostics: null,
       blockedReason: null,
     };
 
@@ -333,9 +356,15 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
     try {
       await setTaskStatus(workflowId, taskId, "running");
     } catch (error) {
+      const message = `Could not reserve Task execution: ${errorMessage(error)}`;
       await finishAttempt(workflowId, taskId, attempt.id, {
         status: "failed",
-        error: `Could not reserve Task execution: ${errorMessage(error)}`,
+        error: message,
+        diagnostics: {
+          phase: "setup",
+          code: "task_reservation_failure",
+          message,
+        },
       });
       throw error;
     }
@@ -358,6 +387,7 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
     return withWorkflowTransition(workflowId, () => finishAttempt(workflowId, taskId, attempt.id, {
       status: "cancelled",
       error: "Workflow stopped before Agent launch",
+      diagnostics: null,
     }));
   }
 
@@ -373,7 +403,13 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
       skills,
     });
   } catch (error) {
-    result = { status: "failed", error: errorMessage(error), agentId: null, pid: null };
+    result = {
+      status: "failed",
+      error: errorMessage(error),
+      diagnostics: failureDiagnostics(error, "process", "agent_launch_failure"),
+      agentId: null,
+      pid: null,
+    };
   }
 
   const runtime = { agentId: result.agentId ?? null, pid: result.pid ?? null };
@@ -382,10 +418,16 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
     try {
       completion = await importDeclaredArtifacts(getWorkflow(workflowId), result, runtime.agentId);
     } catch (error) {
+      const message = `Could not register Task Artifact: ${errorMessage(error)}`;
       result = {
         ...result,
         status: "failed",
-        error: `Could not register Task Artifact: ${errorMessage(error)}`,
+        error: message,
+        diagnostics: {
+          phase: "artifact",
+          code: "artifact_registration_failure",
+          message,
+        },
       };
     }
   }
@@ -410,6 +452,7 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
           ...runtime,
           status: "cancelled",
           error: result.error ?? (taskWasCancelled ? "Task cancelled by Carlos" : "Workflow stopped"),
+          diagnostics: null,
         }),
       };
     }
@@ -421,6 +464,7 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
         output: completion.output,
         artifacts: completion.artifacts,
         error: null,
+        diagnostics: null,
         blockedReason: null,
       });
       if (currentTask.status === "running" && current.status === "running") {
@@ -435,6 +479,7 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
         ...runtime,
         status: "blocked",
         error: null,
+        diagnostics: null,
         blockedReason: reason,
         approvalId: result.approvalId ?? null,
       });
@@ -445,15 +490,21 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
     }
 
     const message = result.error || "Agent process failed";
+    const diagnostics = failureDiagnostics(
+      { ...result, message, diagnostics: result.diagnostics },
+      "process",
+      "agent_process_failure",
+    );
     const failed = await finishAttempt(workflowId, taskId, attempt.id, {
       ...runtime,
       status: "failed",
       error: message,
+      diagnostics,
     });
     if (currentTask.status === "running" && current.status === "running") {
       await setTaskStatus(workflowId, taskId, "failed");
     }
-    return { event: "attempt.failed", attempt: failed, error: message };
+    return { event: "attempt.failed", attempt: failed, error: message, diagnostics };
   });
 
   await recordEvent(outcome.event, {
@@ -464,6 +515,7 @@ const runTask = async ({ workflowId, taskId, execution, runState }) => {
     artifacts: outcome.attempt?.artifacts ?? [],
     ...(outcome.approvalId ? { approvalId: outcome.approvalId } : {}),
     ...(outcome.error ? { error: outcome.error } : {}),
+    ...(outcome.diagnostics ? { diagnostics: outcome.diagnostics } : {}),
   });
   return outcome.attempt;
 };

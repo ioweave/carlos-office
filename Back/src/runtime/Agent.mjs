@@ -16,17 +16,31 @@ const describeTools = tools => tools.map(tool => ({
   output: tool.output ?? null,
 }));
 
+const failure = (message, phase, code) => {
+  const error = new Error(message);
+  error.phase = phase;
+  error.code = code;
+  return error;
+};
+
+const classifyFailure = (error, phase, code) => {
+  if (!(error instanceof Error)) return failure(String(error), phase, code);
+  if (!error.phase) error.phase = phase;
+  if (!error.code) error.code = code;
+  return error;
+};
+
 const normalizeArtifacts = value => {
   if (!Array.isArray(value)) return [];
   return value.map((artifact, index) => {
     if (!isObject(artifact) || typeof artifact.path !== "string" || !artifact.path.trim()) {
-      throw new Error(`Agent completion artifact ${index + 1} must include a path`);
+      throw failure(`Agent completion artifact ${index + 1} must include a path`, "completion", "invalid_artifact_declaration");
     }
     if (artifact.name != null && (typeof artifact.name !== "string" || !artifact.name.trim())) {
-      throw new Error(`Agent completion artifact ${index + 1} has an invalid name`);
+      throw failure(`Agent completion artifact ${index + 1} has an invalid name`, "completion", "invalid_artifact_declaration");
     }
     if (artifact.type != null && (typeof artifact.type !== "string" || !artifact.type.trim())) {
-      throw new Error(`Agent completion artifact ${index + 1} has an invalid type`);
+      throw failure(`Agent completion artifact ${index + 1} has an invalid type`, "completion", "invalid_artifact_declaration");
     }
     return {
       path: artifact.path.trim(),
@@ -45,7 +59,7 @@ const normalizeCompletion = content => {
   }
 
   if (!isObject(value) || typeof value.output !== "string" || !value.output.trim()) {
-    throw new Error("Agent completion must include output");
+    throw failure("Agent completion must include output", "completion", "invalid_completion");
   }
   return { output: value.output.trim(), artifacts: normalizeArtifacts(value.artifacts) };
 };
@@ -123,37 +137,55 @@ export class Agent {
   }
 
   async run(task) {
-    if (!isObject(task) || !task.id || !task.workflowId) throw new Error("Agent received an invalid Task");
+    if (!isObject(task) || !task.id || !task.workflowId) {
+      throw failure("Agent received an invalid Task", "setup", "invalid_task");
+    }
 
     const messages = this.buildMessages(task);
     const modelTools = describeTools(this.tools);
     let toolFailures = 0;
 
     while (true) {
-      const response = await this.provider.generate({
-        model: this.model,
-        messages,
-        tools: modelTools,
-      });
-      if (!isObject(response)) throw new Error("Model provider returned an invalid response");
+      let response;
+      try {
+        response = await this.provider.generate({
+          model: this.model,
+          messages,
+          tools: modelTools,
+        });
+      } catch (error) {
+        throw classifyFailure(error, "model", "provider_error");
+      }
+
+      if (!isObject(response)) {
+        throw failure("Model provider returned an invalid response", "model", "invalid_provider_response");
+      }
 
       const content = typeof response.content === "string" ? response.content : "";
       const toolCalls = Array.isArray(response.toolCalls) ? response.toolCalls : [];
 
       if (!toolCalls.length) {
-        if (!content.trim()) throw new Error("Agent model returned no usable Task output");
-        return normalizeCompletion(content);
+        if (!content.trim()) {
+          throw failure("Agent model returned no usable Task output", "model", "empty_model_output");
+        }
+        try {
+          return normalizeCompletion(content);
+        } catch (error) {
+          throw classifyFailure(error, "completion", "invalid_completion");
+        }
       }
 
       messages.push({ role: "assistant", content, toolCalls: structuredClone(toolCalls) });
 
       for (const call of toolCalls) {
-        if (!call || typeof call.name !== "string") throw new Error("Model returned an invalid Tool call");
+        if (!call || typeof call.name !== "string") {
+          throw failure("Model returned an invalid Tool call", "tool", "invalid_tool_call");
+        }
         if (call.input != null && !isObject(call.input)) {
-          throw new Error(`Model returned invalid input for Tool: ${call.name}`);
+          throw failure(`Model returned invalid input for Tool: ${call.name}`, "tool", "invalid_tool_input");
         }
         if (!this.tools.some(tool => tool.name === call.name)) {
-          throw new Error(`Agent requested unavailable Tool: ${call.name}`);
+          throw failure(`Agent requested unavailable Tool: ${call.name}`, "tool", "unavailable_tool");
         }
 
         try {
@@ -173,7 +205,11 @@ export class Agent {
 
           toolFailures += 1;
           if (toolFailures >= this.maxToolFailures) {
-            throw new Error(`Task exceeded the ${this.maxToolFailures} Tool failure limit`);
+            throw failure(
+              `Task exceeded the ${this.maxToolFailures} Tool failure limit`,
+              "tool",
+              "tool_failure_limit",
+            );
           }
 
           messages.push({

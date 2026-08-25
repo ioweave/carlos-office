@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   IconActivity,
+  IconAlertTriangle,
   IconArrowLeft,
   IconDeviceFloppy,
   IconEdit,
@@ -53,6 +54,19 @@ const cloneLayout = layout => Object.fromEntries(Object.entries(layout || {}).ma
   { x: Number(position.x), y: Number(position.y) },
 ]));
 const layoutKey = layout => JSON.stringify(layout || {});
+const errorText = value => {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+};
+const errorHeadline = value => errorText(value).split(/\r?\n/).find(line => line.trim())?.trim() || "Task failed";
+const latestFailedAttempt = task => [...(task?.attempts || [])]
+  .reverse()
+  .find(attempt => attempt.status === "failed") || null;
 
 export default function OperationsPage({ onAskNora, openRequest }) {
   const { officeState, refresh } = useAppContext();
@@ -378,6 +392,11 @@ export default function OperationsPage({ onAskNora, openRequest }) {
     const taskIds = Object.keys(workflow.tasks || {});
     const canResumeWorkflow = ["paused", "blocked", "failed"].includes(workflow.status);
     const canRestartWorkflow = !["running", "pending"].includes(workflow.status);
+    const failedTasks = Object.entries(workflow.tasks || {})
+      .filter(([, task]) => task?.type === "task" && task.status === "failed");
+    const primaryFailure = failedTasks[0] || null;
+    const primaryFailureAttempt = primaryFailure ? latestFailedAttempt(primaryFailure[1]) : null;
+    const selectedFailureAttempt = selectedTask?.status === "failed" ? latestFailedAttempt(selectedTask) : null;
 
     return (
       <div className="workspace-page operations-studio">
@@ -408,6 +427,25 @@ export default function OperationsPage({ onAskNora, openRequest }) {
           <div><span>Agent processes</span><strong>{workflowAgents.length}</strong></div>
           <div><span>Approvals</span><strong>{approvals.filter(item => item.status === "pending").length} pending</strong></div>
         </div>
+
+        {workflow.status === "failed" && primaryFailure && (
+          <button
+            type="button"
+            className="workflow-failure-banner"
+            onClick={() => {
+              setSelectedTaskId(primaryFailure[0]);
+              setEditingTask(false);
+              setDetailTab("tasks");
+            }}
+          >
+            <IconAlertTriangle size={17} />
+            <span className="workflow-failure-banner__copy">
+              <strong>Failed at {taskTitle(primaryFailure[0], primaryFailure[1])}</strong>
+              <small>{errorHeadline(primaryFailureAttempt?.error || primaryFailure[1]?.error)}</small>
+            </span>
+            <span className="workflow-failure-banner__action">Inspect Task</span>
+          </button>
+        )}
 
         <div className="segmented-control page-tabs" role="tablist" aria-label="Workflow detail">
           {["tasks", "activity", "data"].map(tab => <button key={tab} type="button" className={detailTab === tab ? "segmented-control__item segmented-control__item--active" : "segmented-control__item"} onClick={() => setDetailTab(tab)}>{tab[0].toUpperCase() + tab.slice(1)}</button>)}
@@ -474,6 +512,20 @@ export default function OperationsPage({ onAskNora, openRequest }) {
                     </div>
                     <h2>{taskTitle(selectedTaskId, selectedTask)}</h2>
                   </header>
+
+                  {selectedFailureAttempt && (
+                    <section className="task-failure-insight">
+                      <div className="task-failure-insight__heading">
+                        <IconAlertTriangle size={15} />
+                        <div>
+                          <span>Latest failure</span>
+                          <strong>{errorHeadline(selectedFailureAttempt.error)}</strong>
+                        </div>
+                      </div>
+                      <pre>{errorText(selectedFailureAttempt.error)}</pre>
+                    </section>
+                  )}
+
                   <div className="definition-list">
                     {selectedTask.type === "task" && <div><span>Objective</span><strong>{selectedTask.objective || "—"}</strong></div>}
                     <div><span>Model constraint</span><strong>{selectedTask.provider && selectedTask.model ? `${selectedTask.provider} · ${selectedTask.model}` : selectedTask.type === "task" ? "Nora selects" : "—"}</strong></div>
@@ -481,7 +533,7 @@ export default function OperationsPage({ onAskNora, openRequest }) {
                     {selectedTask.type === "task" && <div><span>Skills</span><strong>{Array.isArray(selectedTask.skills) ? selectedTask.skills.join(", ") || "None" : "Nora selects"}</strong></div>}
                     {selectedTask.type === "task" && <div><span>Attempts</span><strong>{attempts.length}</strong></div>}
                     {selectedTask.blockedReason && <div><span>Blocked</span><strong>{selectedTask.blockedReason}</strong></div>}
-                    {selectedTask.error && <div><span>Error</span><strong>{selectedTask.error}</strong></div>}
+                    {selectedTask.error && <div><span>Error</span><strong>{errorHeadline(selectedTask.error)}</strong></div>}
                   </div>
 
                   {workflowEditable && (
@@ -518,7 +570,7 @@ export default function OperationsPage({ onAskNora, openRequest }) {
                     <div className="attempt-list">
                       <h3>Attempts</h3>
                       {[...attempts].reverse().map(attempt => (
-                        <details key={attempt.id} className="attempt-card">
+                        <details key={attempt.id} className="attempt-card" open={attempt.status === "failed"}>
                           <summary>
                             <span>#{attempt.attempt}</span>
                             <strong>{attempt.agentId || "Temporary Agent"}</strong>
@@ -531,7 +583,7 @@ export default function OperationsPage({ onAskNora, openRequest }) {
                             <span>Skills: {(attempt.skills || []).join(", ") || "none"}</span>
                             <span>{formatTime(attempt.startedAt)} → {formatTime(attempt.endedAt)}</span>
                             {attempt.output != null && <pre>{typeof attempt.output === "string" ? attempt.output : JSON.stringify(attempt.output, null, 2)}</pre>}
-                            {attempt.error && <pre>{attempt.error}</pre>}
+                            {attempt.error && <pre className="attempt-card__error">{errorText(attempt.error)}</pre>}
                           </div>
                         </details>
                       ))}
@@ -555,7 +607,23 @@ export default function OperationsPage({ onAskNora, openRequest }) {
         {detailTab === "activity" && (
           <section className="operations-activity panel">
             <div className="panel__header"><div><span className="eyebrow">Runtime timeline</span><h2>Activity</h2></div><button type="button" className="icon-button" onClick={() => loadEvents(workflow.id)} aria-label="Refresh activity"><IconRefresh size={17} /></button></div>
-            {!events.length ? <div className="empty-state empty-state--compact"><IconActivity size={24} /><strong>No recorded events</strong></div> : <div className="event-list">{events.map((event, index) => <div key={`${event.id || event.at || "event"}-${index}`} className="event-row"><span className="event-row__dot" /><div><strong>{event.type}</strong><span>{event.taskId || event.tool || event.agentId || event.action || event.reason || "Workflow event"}</span></div><small>{formatTime(event.at || event.createdAt)}</small></div>)}</div>}
+            {!events.length ? (
+              <div className="empty-state empty-state--compact"><IconActivity size={24} /><strong>No recorded events</strong></div>
+            ) : (
+              <div className="event-list">
+                {events.map((event, index) => (
+                  <div key={`${event.id || event.at || "event"}-${index}`} className={`event-row ${event.error ? "event-row--error" : ""}`}>
+                    <span className="event-row__dot" />
+                    <div>
+                      <strong>{event.type}</strong>
+                      <span>{event.taskId || event.tool || event.agentId || event.action || event.reason || "Workflow event"}</span>
+                      {event.error && <code>{errorHeadline(event.error)}</code>}
+                    </div>
+                    <small>{formatTime(event.at || event.createdAt)}</small>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
         )}
 

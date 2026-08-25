@@ -8,7 +8,6 @@ import {
   IconPaperclip,
   IconPencil,
   IconPlus,
-  IconRoute,
   IconTrash,
   IconX,
 } from "@tabler/icons-react";
@@ -18,6 +17,7 @@ import api, { endpoints } from "../api";
 import "../styles/chat-features.scss";
 import ArtifactPanel from "../components/ArtifactPanel";
 import MarkdownContent from "../components/MarkdownContent";
+import WorkflowLink from "../components/WorkflowLink";
 
 const ACTIVE_CONVERSATION_KEY = "office-active-conversation-v2";
 
@@ -148,21 +148,6 @@ export default function ChatPage({
     setArtifacts(artifactResponse.data || []);
   }, []);
 
-  const refreshConversation = useCallback(async id => {
-    if (!id) return;
-    try {
-      const [record] = await Promise.all([
-        api.get(endpoints.conversation(id)).then(response => response.data),
-        loadResources(id),
-      ]);
-      setConversation(record);
-      upsertConversation(record);
-      setWorkflowId(record.workflows?.at(-1) || "");
-    } catch {
-      // Background refresh is best-effort. Direct user actions surface their own errors.
-    }
-  }, [loadResources, upsertConversation]);
-
   const openConversation = useCallback(async id => {
     if (!id) return;
     setLoadingConversation(true);
@@ -225,17 +210,6 @@ export default function ChatPage({
     });
     return () => cancelAnimationFrame(frame);
   }, [conversation?.id, conversation?.messages?.length, loadingConversation]);
-
-  const activeWorkflowKey = Array.isArray(nora?.activeWorkflows) ? nora.activeWorkflows.join("|") : "";
-  useEffect(() => {
-    if (!conversation?.id) return undefined;
-    void refreshConversation(conversation.id);
-
-    const tracked = (conversation.workflows || []).some(id => nora?.activeWorkflows?.includes(id));
-    if (!tracked) return undefined;
-    const timer = window.setInterval(() => void refreshConversation(conversation.id), 2000);
-    return () => window.clearInterval(timer);
-  }, [conversation?.id, activeWorkflowKey]);
 
   const stopListening = useCallback(() => {
     const recognition = speechRecognitionRef.current;
@@ -890,15 +864,7 @@ export default function ChatPage({
                       </div>
                     )}
                     {message.workflowId && (
-                      <button
-                        type="button"
-                        className="workflow-link workflow-link--inline"
-                        onClick={() => onOpenOperations?.(message.workflowId)}
-                      >
-                        <IconRoute size={16} />
-                        <span>Workflow {message.workflowId}</span>
-                        <strong>Open Operations</strong>
-                      </button>
+                      <WorkflowLink workflowId={message.workflowId} onOpen={onOpenOperations} />
                     )}
                     {!!message.attachments?.length && (
                       <div className="message__attachments" aria-label="Message attachments">

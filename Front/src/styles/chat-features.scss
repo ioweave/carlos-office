@@ -24,6 +24,107 @@
   box-shadow: 0 0 0 3px var(--color-accent-soft);
 }
 
+.workflow-link--inline {
+  align-items: center;
+}
+
+.workflow-link--inline .workflow-link__status-dot {
+  width: 7px;
+  min-width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: var(--color-text-faint);
+}
+
+.workflow-link--inline .workflow-link__copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+
+.workflow-link--inline .workflow-link__copy strong {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-link--inline .workflow-link__copy small {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--color-text-faint);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-link--inline .workflow-link__action {
+  min-width: max-content;
+  flex: 0 0 auto;
+  color: currentColor;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.workflow-link--running {
+  border-color: color-mix(in srgb, var(--color-info) 42%, var(--color-border));
+  color: var(--color-info);
+}
+
+.workflow-link--running .workflow-link__status-dot {
+  background: var(--color-info);
+  animation: workflow-link-pulse 1.4s ease-in-out infinite;
+}
+
+.workflow-link--completed {
+  border-color: color-mix(in srgb, var(--color-success) 42%, var(--color-border));
+  color: var(--color-success);
+}
+
+.workflow-link--completed .workflow-link__status-dot {
+  background: var(--color-success);
+}
+
+.workflow-link--failed {
+  border-color: color-mix(in srgb, var(--color-danger) 45%, var(--color-border));
+  background: color-mix(in srgb, var(--color-danger) 7%, var(--color-surface));
+  color: var(--color-danger);
+}
+
+.workflow-link--failed .workflow-link__status-dot {
+  background: var(--color-danger);
+}
+
+.workflow-link--blocked,
+.workflow-link--paused {
+  border-color: color-mix(in srgb, var(--color-warning) 45%, var(--color-border));
+  color: var(--color-warning);
+}
+
+.workflow-link--blocked .workflow-link__status-dot,
+.workflow-link--paused .workflow-link__status-dot {
+  background: var(--color-warning);
+}
+
+.workflow-link--pending .workflow-link__status-dot {
+  background: var(--color-accent);
+}
+
+.workflow-link--cancelled .workflow-link__status-dot {
+  background: var(--color-text-faint);
+}
+
+@keyframes workflow-link-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-info) 35%, transparent); }
+  50% { box-shadow: 0 0 0 5px transparent; }
+}
+
 .message__attachments,
 .message__artifacts {
   display: flex;
