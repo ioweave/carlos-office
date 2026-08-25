@@ -1,11 +1,8 @@
-import config from "../config.mjs";
 import { parseProviderJSON } from "../lib.mjs";
 import { normalizeNoraDecision } from "../NoraActions.mjs";
-import { createOllamaProvider } from "../providers/OllamaProvider.mjs";
+import { createConfiguredProviders } from "../providers/ProviderFactory.mjs";
 
-const providers = new Map();
-const ollama = createOllamaProvider(config.ollama);
-providers.set(ollama.name, ollama);
+const { providers } = await createConfiguredProviders();
 const JSON_OBJECT_SCHEMA = Object.freeze({ type: "object" });
 let queue = Promise.resolve();
 const cancelled = new Set();
@@ -94,10 +91,12 @@ const decide = async (message, signal) => {
   }
 };
 
-try {
-  await ollama.refreshModels();
-} catch (error) {
-  console.warn(`[nora] Ollama model discovery failed: ${error.message}`);
+for (const [providerName, provider] of providers) {
+  try {
+    await provider.refreshModels();
+  } catch (error) {
+    console.warn(`[nora] ${providerName} model discovery failed: ${error.message}`);
+  }
 }
 
 send({
