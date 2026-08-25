@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -11,10 +11,13 @@ import {
   listArtifacts,
   readArtifact,
 } from "./ArtifactController.mjs";
+import { atomicWriteFile } from "../lib/AtomicFile.mjs";
+import { notifyOfficeStateChanged } from "../services/OfficeStateBus.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const conversationsDir = resolve(here, "../../ObsidianVault/Conversations");
 const conversations = new Map();
+const MAX_JSON_BODY_BYTES = 64_000_000;
 
 const validateConversationId = id => {
   if (
@@ -150,13 +153,13 @@ const parseConversation = (content, fallbackId) => {
 
 const persistConversation = async conversation => {
   const path = conversationPath(conversation.id);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, renderConversation(conversation), "utf8");
+  await atomicWriteFile(path, renderConversation(conversation), "utf8");
 };
 
 const commitConversation = async conversation => {
   await persistConversation(conversation);
   conversations.set(conversation.id, conversation);
+  notifyOfficeStateChanged("conversations");
   return structuredClone(conversation);
 };
 
@@ -285,6 +288,7 @@ export const deleteConversation = async conversationId => {
 
   await rm(dirname(conversationPath(conversationId)), { recursive: true, force: true });
   conversations.delete(conversationId);
+  notifyOfficeStateChanged(["conversations", "attachments", "artifacts"]);
   return true;
 };
 
@@ -432,24 +436,23 @@ const requestError = (message, statusCode = 400) => {
 const partsFrom = pathname => pathname.split("/").filter(Boolean).map(decodeURIComponent);
 const safeFilename = value => String(value || "file").replaceAll('"', "");
 
-/**
- * HTTP transport for conversation requests and binary resources. Kept here so Conversation
- * ownership is centralized in one controller module instead of a parallel resource controller.
- */
-export const createConversationResourceController = ({
-  allowedOrigin,
-  nora,
-}) => {
+/** HTTP transport for conversation requests and binary resources. */
+export const createConversationResourceController = ({ allowedOrigin, nora }) => {
   if (!allowedOrigin || typeof allowedOrigin !== "string") {
     throw new Error("Conversation resource controller requires one allowed frontend origin");
   }
 
   const readJson = async req => {
     const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
+    let size = 0;
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > MAX_JSON_BODY_BYTES) throw requestError(`Request body exceeds ${MAX_JSON_BODY_BYTES} bytes`, 413);
+      chunks.push(chunk);
+    }
     if (!chunks.length) return {};
     try {
-      return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      return JSON.parse(Buffer.concat(chunks, size).toString("utf8"));
     } catch {
       throw requestError("Invalid JSON request body");
     }
@@ -459,7 +462,7 @@ export const createConversationResourceController = ({
     const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
     const parts = partsFrom(url.pathname);
     if (parts[0] !== "conversations" || !parts[1]) return false;
-    if (parts[2] === "requests" && parts.length === 3) return true;
+    if (parts[2] === "requests" && [3, 4].includes(parts.length)) return true;
     if (["attachments", "artifacts"].includes(parts[2]) && [3, 4].includes(parts.length)) return true;
     return false;
   };
@@ -478,11 +481,11 @@ export const createConversationResourceController = ({
 
     const cors = {
       "Access-Control-Allow-Headers": "Content-Type",
-      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+      "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
       ...(origin ? { "Access-Control-Allow-Origin": origin, Vary: "Origin" } : {}),
     };
     const sendJson = (status, data) => {
-      res.writeHead(status, { ...cors, "Content-Type": "application/json; charset=utf-8" });
+      res.writeHead(status, { ...cors, "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
       res.end(JSON.stringify(data));
     };
     const sendError = (status, message) => sendJson(status, { error: message });
@@ -500,11 +503,11 @@ export const createConversationResourceController = ({
 
       if (method === "POST" && resource === "requests" && parts.length === 3) {
         const body = await readJson(req);
-        const messageId = body.messageId == null ? null : normalizeMessageId(body.messageId);
+        let messageId = body.messageId == null ? null : normalizeMessageId(body.messageId);
+        const current = await getConversation(conversationId);
+        if (!current) throw requestError("Conversation not found", 404);
 
         if (messageId) {
-          const current = await getConversation(conversationId);
-          if (!current) throw requestError("Conversation not found", 404);
           const existingIndex = current.messages.findIndex(message => message.id === messageId);
           if (existingIndex >= 0) {
             const existing = current.messages[existingIndex];
@@ -528,18 +531,32 @@ export const createConversationResourceController = ({
               attachments: body.attachments ?? [],
             });
           }
-
-          const result = await nora.handleCarlosRequest({ conversationId, messageId });
-          sendJson(200, result);
-          return;
+        } else {
+          const message = await addMessage(conversationId, {
+            actor: "Carlos",
+            content: body.content,
+            attachments: body.attachments ?? [],
+          });
+          messageId = message.id;
         }
 
-        const result = await nora.handleCarlosRequest({
-          conversationId,
-          content: body.content,
-          attachments: body.attachments ?? [],
-        });
-        sendJson(200, result);
+        const running = nora.listCarlosRequests?.().find(job => (
+          job.status === "running"
+          && job.conversationId === conversationId
+          && job.messageId === messageId
+        ));
+        const job = running ?? nora.startCarlosRequest({ conversationId, messageId });
+        sendJson(202, { action: "accepted", job, deduplicated: Boolean(running) });
+        return;
+      }
+
+      if (method === "DELETE" && resource === "requests" && parts.length === 4) {
+        const cancelled = await nora.cancelCarlosRequest(resourceId, conversationId);
+        if (!cancelled) {
+          sendError(404, "Active Nora request not found");
+          return;
+        }
+        sendJson(200, { id: resourceId, cancelled: true });
         return;
       }
 
