@@ -14,32 +14,22 @@ const DEFAULT_TASK_TIMEOUT_MS = 300_000;
 const MAX_DIAGNOSTIC_STRING_LENGTH = 1_000;
 const MAX_DIAGNOSTIC_ARRAY_LENGTH = 20;
 const MAX_DIAGNOSTIC_DEPTH = 5;
+const MAX_RETAINED_TOOL_FAILURES = 100;
 const SENSITIVE_KEY_PATTERN = /(?:pass(?:word)?|token|secret|api[_-]?key|authorization|cookie|private[_-]?key|credential)/i;
 
 const invocationKey = (workflowId, taskId, invocationId) => `${workflowId}\u0000${taskId}\u0000${invocationId ?? "single"}`;
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
-
 const sameInput = (left, right) => {
-  try {
-    return JSON.stringify(left) === JSON.stringify(right);
-  } catch {
-    return false;
-  }
+  try { return JSON.stringify(left) === JSON.stringify(right); } catch { return false; }
 };
 
 const sanitizeDiagnosticValue = (value, depth = 0) => {
   if (depth >= MAX_DIAGNOSTIC_DEPTH) return "[truncated]";
   if (value == null || typeof value === "number" || typeof value === "boolean") return value;
-  if (typeof value === "string") {
-    return value.length > MAX_DIAGNOSTIC_STRING_LENGTH
-      ? `${value.slice(0, MAX_DIAGNOSTIC_STRING_LENGTH)}…`
-      : value;
-  }
+  if (typeof value === "string") return value.length > MAX_DIAGNOSTIC_STRING_LENGTH ? `${value.slice(0, MAX_DIAGNOSTIC_STRING_LENGTH)}…` : value;
   if (Buffer.isBuffer(value)) return `[Buffer ${value.length} bytes]`;
   if (Array.isArray(value)) {
-    const items = value
-      .slice(0, MAX_DIAGNOSTIC_ARRAY_LENGTH)
-      .map(item => sanitizeDiagnosticValue(item, depth + 1));
+    const items = value.slice(0, MAX_DIAGNOSTIC_ARRAY_LENGTH).map(item => sanitizeDiagnosticValue(item, depth + 1));
     if (value.length > MAX_DIAGNOSTIC_ARRAY_LENGTH) items.push(`[${value.length - MAX_DIAGNOSTIC_ARRAY_LENGTH} more items]`);
     return items;
   }
@@ -56,7 +46,6 @@ const hasCarlosAuthority = workflowId => {
   const config = getWorkflow(workflowId)?.config;
   return Boolean(config?.conversationId && config?.sourceMessageId);
 };
-
 const approvedToolAction = ({ workflowId, taskId, invocationId, toolName, input }) => listApprovals("approved").find(
   approval => (
     approval.action === `tool:${toolName}`
@@ -66,18 +55,10 @@ const approvedToolAction = ({ workflowId, taskId, invocationId, toolName, input 
     && sameInput(approval.context?.input, input)
   ),
 ) ?? null;
-
-const toolMetadata = tool => ({
-  name: tool.name,
-  description: tool.description ?? "",
-  input: tool.input ?? {},
-  output: tool.output ?? null,
-});
-
+const toolMetadata = tool => ({ name: tool.name, description: tool.description ?? "", input: tool.input ?? {}, output: tool.output ?? null });
 const sendToolResult = (child, requestId, payload) => {
   if (child.connected) child.send({ type: "tool-result", requestId, ...payload });
 };
-
 const recordAgentEvent = (type, context) => {
   void recordEvent(type, context).catch(error => {
     console.error(`[agents] Could not record ${type}.`, {
@@ -87,13 +68,8 @@ const recordAgentEvent = (type, context) => {
     });
   });
 };
-
 const diagnosticInputText = input => {
-  try {
-    return JSON.stringify(input, null, 2);
-  } catch {
-    return String(input);
-  }
+  try { return JSON.stringify(input, null, 2); } catch { return String(input); }
 };
 
 const enrichFailedResult = (entry, result) => {
@@ -109,15 +85,17 @@ const enrichFailedResult = (entry, result) => {
     message: typeof baseDiagnostics.message === "string" && baseDiagnostics.message
       ? baseDiagnostics.message
       : result.error || "Agent process failed",
-    ...(toolFailures.length ? { toolFailures } : {}),
+    ...(entry.toolFailureCount ? {
+      toolFailureCount: entry.toolFailureCount,
+      retainedToolFailureCount: toolFailures.length,
+      toolFailures,
+    } : {}),
   };
 
-  const lines = [result.error || diagnostics.message];
-  lines.push(`Phase: ${diagnostics.phase}`);
-  lines.push(`Code: ${diagnostics.code}`);
-
+  const lines = [result.error || diagnostics.message, `Phase: ${diagnostics.phase}`, `Code: ${diagnostics.code}`];
   if (toolFailures.length) {
-    lines.push("", `Tool failures (${toolFailures.length}):`);
+    const omitted = Math.max(0, entry.toolFailureCount - toolFailures.length);
+    lines.push("", `Tool failures (${entry.toolFailureCount} total${omitted ? `; showing latest ${toolFailures.length}` : ""}):`);
     for (const failure of toolFailures) {
       lines.push(`#${failure.sequence} ${failure.tool}`);
       if (failure.code) lines.push(`Code: ${failure.code}`);
@@ -127,39 +105,25 @@ const enrichFailedResult = (entry, result) => {
     }
   }
 
-  return {
-    ...result,
-    error: lines.join("\n"),
-    diagnostics,
-  };
+  return { ...result, error: lines.join("\n"), diagnostics };
 };
 
 const runTool = async (entry, message) => {
   const { child, controller, workflowId, taskId, invocationId } = entry;
   const { requestId, call } = message;
-
   try {
     if (!entry.toolNames.has(call?.name)) throw new Error(`Agent requested unavailable Tool: ${call?.name}`);
     const tool = getTool(call.name);
     if (!tool) throw new Error(`Unknown Tool: ${call.name}`);
-
     const input = call.input ?? {};
     if (tool.requiresApproval && !hasCarlosAuthority(workflowId)) {
       const approved = approvedToolAction({ workflowId, taskId, invocationId, toolName: tool.name, input });
-
       if (!approved) {
         const authorization = await authorize({
           action: `tool:${tool.name}`,
           actor: entry.id,
           requiresApproval: true,
-          context: {
-            workflowId,
-            taskId,
-            invocationId,
-            agentId: entry.id,
-            tool: tool.name,
-            input: structuredClone(input),
-          },
+          context: { workflowId, taskId, invocationId, agentId: entry.id, tool: tool.name, input: structuredClone(input) },
         });
         entry.status = "blocked";
         sendToolResult(child, requestId, {
@@ -173,7 +137,6 @@ const runTool = async (entry, message) => {
         });
         return;
       }
-
       await consumeApproval(approved.id);
     }
 
@@ -187,21 +150,17 @@ const runTool = async (entry, message) => {
       signal: controller.signal,
     });
     await recordEvent("tool.executed", {
-      workflowId,
-      taskId,
-      invocationId,
-      agentId: entry.id,
-      tool: tool.name,
-      provider: tool.provider ?? null,
-      model: tool.model ?? null,
+      workflowId, taskId, invocationId, agentId: entry.id, tool: tool.name,
+      provider: tool.provider ?? null, model: tool.model ?? null,
     });
     sendToolResult(child, requestId, { ok: true, result });
   } catch (error) {
     const code = typeof error?.code === "string" && error.code ? error.code : "tool_execution_failed";
     const retryable = typeof error?.retryable === "boolean" ? error.retryable : true;
     const hint = typeof error?.hint === "string" && error.hint.trim() ? error.hint.trim() : null;
+    entry.toolFailureCount += 1;
     const failure = {
-      sequence: entry.toolFailures.length + 1,
+      sequence: entry.toolFailureCount,
       tool: typeof call?.name === "string" ? call.name : "unknown-tool",
       input: sanitizeDiagnosticValue(call?.input ?? {}),
       error: error instanceof Error ? error.message : String(error),
@@ -211,26 +170,17 @@ const runTool = async (entry, message) => {
       at: new Date().toISOString(),
     };
     entry.toolFailures.push(failure);
+    if (entry.toolFailures.length > MAX_RETAINED_TOOL_FAILURES) {
+      entry.toolFailures.splice(0, entry.toolFailures.length - MAX_RETAINED_TOOL_FAILURES);
+    }
 
     recordAgentEvent("tool.failed", {
-      workflowId,
-      taskId,
-      invocationId,
-      agentId: entry.id,
-      tool: failure.tool,
-      sequence: failure.sequence,
-      input: structuredClone(failure.input),
-      error: failure.error,
-      code: failure.code,
-      retryable: failure.retryable,
+      workflowId, taskId, invocationId, agentId: entry.id, tool: failure.tool, sequence: failure.sequence,
+      input: structuredClone(failure.input), error: failure.error, code: failure.code, retryable: failure.retryable,
       ...(failure.hint ? { hint: failure.hint } : {}),
     });
-
     sendToolResult(child, requestId, {
-      ok: false,
-      error: failure.error,
-      code: failure.code,
-      retryable: failure.retryable,
+      ok: false, error: failure.error, code: failure.code, retryable: failure.retryable,
       ...(failure.hint ? { hint: failure.hint } : {}),
     });
   }
@@ -244,16 +194,12 @@ export const runAgentProcess = ({ workflowId, taskId, invocationId = null, task,
       `Invocation ${invocationId ?? taskId} in Workflow ${workflowId} already has an active Agent process (${existingAgentId})`,
     ));
   }
-
   activeInvocationKeys.set(key, "starting");
 
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = fork(agentProgram, [], {
-        stdio: ["ignore", "inherit", "inherit", "ipc"],
-        serialization: "advanced",
-      });
+      child = fork(agentProgram, [], { stdio: ["ignore", "inherit", "inherit", "ipc"], serialization: "advanced" });
     } catch (error) {
       activeInvocationKeys.delete(key);
       reject(error);
@@ -277,6 +223,7 @@ export const runAgentProcess = ({ workflowId, taskId, invocationId = null, task,
       status: "working",
       toolNames: new Set(tools.map(tool => tool.name)),
       toolFailures: [],
+      toolFailureCount: 0,
       settled: false,
       timeoutMs,
       timeoutTimer: null,
@@ -285,14 +232,7 @@ export const runAgentProcess = ({ workflowId, taskId, invocationId = null, task,
     activeInvocationKeys.set(key, id);
 
     recordAgentEvent("agent.started", {
-      workflowId,
-      taskId,
-      invocationId,
-      agentId: id,
-      pid: child.pid,
-      provider,
-      model,
-      timeoutMs,
+      workflowId, taskId, invocationId, agentId: id, pid: child.pid, provider, model, timeoutMs,
     });
 
     const settle = rawResult => {
@@ -301,18 +241,9 @@ export const runAgentProcess = ({ workflowId, taskId, invocationId = null, task,
       if (entry.timeoutTimer !== null) clearTimeout(entry.timeoutTimer);
       active.delete(id);
       if (activeInvocationKeys.get(key) === id) activeInvocationKeys.delete(key);
-
-      const result = rawResult.status === "failed"
-        ? enrichFailedResult(entry, rawResult)
-        : rawResult;
-
+      const result = rawResult.status === "failed" ? enrichFailedResult(entry, rawResult) : rawResult;
       recordAgentEvent("agent.stopped", {
-        workflowId,
-        taskId,
-        invocationId,
-        agentId: id,
-        pid: child.pid,
-        status: result.status,
+        workflowId, taskId, invocationId, agentId: id, pid: child.pid, status: result.status,
         ...(result.status === "failed" ? { error: result.error, diagnostics: result.diagnostics } : {}),
       });
       resolve({ ...result, agentId: id, pid: child.pid, invocationId });
@@ -325,11 +256,7 @@ export const runAgentProcess = ({ workflowId, taskId, invocationId = null, task,
         const error = `Task exceeded its ${seconds} second timeout`;
         controller.abort(new Error(error));
         child.kill("SIGTERM");
-        settle({
-          status: "failed",
-          error,
-          diagnostics: { phase: "timeout", code: "task_timeout", message: error },
-        });
+        settle({ status: "failed", error, diagnostics: { phase: "timeout", code: "task_timeout", message: error } });
       }, timeoutMs);
     }
 
@@ -339,41 +266,20 @@ export const runAgentProcess = ({ workflowId, taskId, invocationId = null, task,
         return;
       }
       if (message?.type === "completed") settle({ status: "completed", output: message.output });
-      if (message?.type === "blocked") {
-        settle({ status: "blocked", error: message.error, approvalId: message.approvalId ?? null });
-      }
-      if (message?.type === "failed") {
-        settle({
-          status: "failed",
-          error: message.error,
-          diagnostics: isObject(message.diagnostics) ? message.diagnostics : null,
-        });
-      }
+      if (message?.type === "blocked") settle({ status: "blocked", error: message.error, approvalId: message.approvalId ?? null });
+      if (message?.type === "failed") settle({ status: "failed", error: message.error, diagnostics: isObject(message.diagnostics) ? message.diagnostics : null });
     });
-
     child.on("error", error => {
       const message = error instanceof Error ? error.message : String(error);
-      settle({
-        status: "failed",
-        error: message,
-        diagnostics: { phase: "process", code: "agent_process_error", message },
-      });
+      settle({ status: "failed", error: message, diagnostics: { phase: "process", code: "agent_process_error", message } });
     });
-
     child.on("exit", (code, signal) => {
       if (entry.settled) return;
       const cancelled = controller.signal.aborted;
-      const error = cancelled
-        ? String(controller.signal.reason ?? "Workflow cancelled")
-        : `Agent process exited unexpectedly (${signal ?? code ?? "unknown"})`;
-      settle(cancelled ? {
-        status: "cancelled",
-        error,
-      } : {
-        status: "failed",
-        error,
-        diagnostics: { phase: "process", code: "agent_process_exit", message: error },
-      });
+      const error = cancelled ? String(controller.signal.reason ?? "Workflow cancelled") : `Agent process exited unexpectedly (${signal ?? code ?? "unknown"})`;
+      settle(cancelled
+        ? { status: "cancelled", error }
+        : { status: "failed", error, diagnostics: { phase: "process", code: "agent_process_exit", message: error } });
     });
 
     child.send({
@@ -406,6 +312,7 @@ export const listActiveAgents = () => [...active.values()].map(entry => ({
   tools: [...entry.tools],
   skills: [...entry.skills],
   timeoutMs: entry.timeoutMs,
+  toolFailureCount: entry.toolFailureCount,
   context: { workflowId: entry.workflowId },
 }));
 
@@ -419,15 +326,12 @@ const cancelAgents = (predicate, reason) => {
   }
   return count;
 };
-
 export const cancelTaskAgents = (workflowId, taskId, reason = "Task cancelled") => (
   cancelAgents(entry => entry.workflowId === workflowId && entry.taskId === taskId, reason)
 );
-
 export const cancelWorkflowAgents = (workflowId, reason = "Workflow cancelled") => (
   cancelAgents(entry => entry.workflowId === workflowId, reason)
 );
-
 export const stopAllAgents = reason => {
   for (const entry of active.values()) {
     if (!entry.controller.signal.aborted) entry.controller.abort(new Error(reason));
