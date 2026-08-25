@@ -47,8 +47,6 @@ export default function App() {
     refresh,
     chatRequest,
     operationsRequest,
-    unreadConversationIds,
-    markConversationRead,
     openConversation,
     askNora,
     openOperations,
@@ -75,7 +73,8 @@ export default function App() {
     try {
       let catalog = noraModelCatalog;
       if (!catalog.length) {
-        catalog = (await api.get(endpoints.models())).data || [];
+        catalog = officeState.models || [];
+        if (!catalog.length) catalog = (await api.get(endpoints.models())).data || [];
         setNoraModelCatalog(catalog);
       }
 
@@ -131,15 +130,7 @@ export default function App() {
       />
     );
   } else if (active === "chat") {
-    page = (
-      <ChatPage
-        nora={nora}
-        openRequest={chatRequest}
-        unreadConversationIds={unreadConversationIds}
-        onConversationRead={markConversationRead}
-        onOpenOperations={openOperations}
-      />
-    );
+    page = <ChatPage openRequest={chatRequest} onOpenOperations={openOperations} />;
   } else if (active === "processes") {
     page = <ProcessesPage onAskNora={askNora} />;
   } else if (active === "operations") {
@@ -158,17 +149,9 @@ export default function App() {
         <div className="office-nav__brand-row">
           <button type="button" className="office-nav__brand" onClick={() => setActive("office")}>
             <span className="office-nav__brand-mark">CO</span>
-            <span className="office-nav__brand-copy">
-              <strong>Carlos Office</strong>
-            </span>
+            <span className="office-nav__brand-copy"><strong>Carlos Office</strong></span>
           </button>
-          <button
-            type="button"
-            className="office-nav__theme"
-            onClick={cycleTheme}
-            title={`Theme: ${theme}`}
-            aria-label={`Cycle theme. Current theme: ${theme}`}
-          >
+          <button type="button" className="office-nav__theme" onClick={cycleTheme} title={`Theme: ${theme}`} aria-label={`Cycle theme. Current theme: ${theme}`}>
             <ThemeIcon size={18} stroke={1.7} />
           </button>
         </div>
@@ -177,12 +160,7 @@ export default function App() {
           {NAV_ITEMS.map(item => {
             const Icon = item.icon;
             return (
-              <button
-                key={item.id}
-                type="button"
-                className={`office-nav__item ${active === item.id ? "office-nav__item--active" : ""}`}
-                onClick={() => setActive(item.id)}
-              >
+              <button key={item.id} type="button" className={`office-nav__item ${active === item.id ? "office-nav__item--active" : ""}`} onClick={() => setActive(item.id)}>
                 <Icon size={18} stroke={1.7} />
                 <span>{item.label}</span>
               </button>
@@ -191,21 +169,12 @@ export default function App() {
         </nav>
 
         <div className="office-nav__utility">
-          <button
-            type="button"
-            className={`office-nav__item ${pendingApprovals.length ? "office-nav__item--attention" : ""}`}
-            onClick={() => setApprovalOpen(true)}
-          >
+          <button type="button" className={`office-nav__item ${pendingApprovals.length ? "office-nav__item--attention" : ""}`} onClick={() => setApprovalOpen(true)}>
             <IconKey size={18} stroke={1.7} />
             <span>Approvals</span>
             {pendingApprovals.length > 0 && <span className="office-nav__count">{pendingApprovals.length}</span>}
           </button>
-
-          <button
-            type="button"
-            className={`office-nav__item ${active === "store" ? "office-nav__item--active" : ""}`}
-            onClick={() => setActive("store")}
-          >
+          <button type="button" className={`office-nav__item ${active === "store" ? "office-nav__item--active" : ""}`} onClick={() => setActive("store")}>
             <IconKey size={18} stroke={1.7} />
             <span>Store</span>
           </button>
@@ -244,9 +213,7 @@ export default function App() {
                   }}
                   style={{ width: "100%", minWidth: 0, fontSize: "10px" }}
                 >
-                  {!noraProviders.includes(noraModelDraft.provider) && noraModelDraft.provider && (
-                    <option value={noraModelDraft.provider}>{noraModelDraft.provider}</option>
-                  )}
+                  {!noraProviders.includes(noraModelDraft.provider) && noraModelDraft.provider && <option value={noraModelDraft.provider}>{noraModelDraft.provider}</option>}
                   {noraProviders.map(provider => <option key={provider} value={provider}>{provider}</option>)}
                 </select>
                 <select
@@ -257,13 +224,8 @@ export default function App() {
                   style={{ width: "100%", minWidth: 0, fontSize: "10px" }}
                 >
                   <option value="">Select model</option>
-                  {modelsForNoraProvider(noraModelDraft.provider).map(model => (
-                    <option key={model} value={model}>{model}</option>
-                  ))}
-                  {!modelsForNoraProvider(noraModelDraft.provider).includes(noraModelDraft.model)
-                    && noraModelDraft.model && (
-                      <option value={noraModelDraft.model}>{noraModelDraft.model}</option>
-                    )}
+                  {modelsForNoraProvider(noraModelDraft.provider).map(model => <option key={model} value={model}>{model}</option>)}
+                  {!modelsForNoraProvider(noraModelDraft.provider).includes(noraModelDraft.model) && noraModelDraft.model && <option value={noraModelDraft.model}>{noraModelDraft.model}</option>}
                 </select>
               </div>
             ) : (
@@ -272,13 +234,7 @@ export default function App() {
                 onClick={() => void beginNoraModelEdit()}
                 disabled={!connected}
                 title="Edit Nora default model"
-                style={{
-                  maxWidth: "100%",
-                  padding: 0,
-                  background: "transparent",
-                  color: "inherit",
-                  textAlign: "left",
-                }}
+                style={{ maxWidth: "100%", padding: 0, background: "transparent", color: "inherit", textAlign: "left" }}
               >
                 <small>{nora.model ? `Nora · ${nora.model}` : "Nora unavailable"}</small>
               </button>
@@ -289,20 +245,11 @@ export default function App() {
 
       <main className="office-app__main">
         {loading ? (
-          <div className="page-state page-state--loading">
-            <span className="spinner" />
-            <strong>Starting Carlos Office</strong>
-          </div>
+          <div className="page-state page-state--loading"><span className="spinner" /><strong>Starting Carlos Office</strong></div>
         ) : page}
       </main>
 
-      <ApprovalDrawer
-        open={approvalOpen}
-        approvals={approvals}
-        onClose={() => setApprovalOpen(false)}
-        onChanged={refresh}
-      />
-
+      <ApprovalDrawer open={approvalOpen} approvals={approvals} onClose={() => setApprovalOpen(false)} onChanged={refresh} />
       <Toaster richColors theme={effectiveTheme === "light" ? "light" : "dark"} position="bottom-right" />
     </div>
   );
