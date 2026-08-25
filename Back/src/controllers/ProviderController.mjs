@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import config from "../config.mjs";
 import { createOllamaProvider } from "../providers/OllamaProvider.mjs";
+import { getNora } from "../registry/Nora.mjs";
 
 export const MODEL_CAPABILITIES = Object.freeze(["thinking", "vision", "audio", "embeddings"]);
 const CATALOG_TTL_MS = 5 * 60 * 1000;
@@ -227,6 +228,12 @@ export const updateModelPreferences = async (provider, modelName, changes) => {
 
   if (changes.enabled != null) {
     if (typeof changes.enabled !== "boolean") throw new Error("Model enabled must be boolean");
+    if (changes.enabled === false) {
+      const nora = getNora();
+      if (nora?.provider === provider && nora?.model === modelName) {
+        throw new Error("Change Nora's default model before disabling the model she currently uses");
+      }
+    }
     next.enabled = changes.enabled;
     updated.enabled = changes.enabled;
   }
