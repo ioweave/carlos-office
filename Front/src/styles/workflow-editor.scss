@@ -25,25 +25,25 @@
   z-index: 1;
 }
 
-.process-edge {
+.process-graph__edges .process-edge {
   fill: none;
   stroke: color-mix(in srgb, var(--color-text-faint) 72%, transparent);
   stroke-width: 1.5;
   pointer-events: none;
 }
 
-.process-edge--selected {
+.process-graph__edges .process-edge--selected {
   stroke: var(--color-accent);
   stroke-width: 2.5;
 }
 
-.process-edge--preview {
+.process-graph__edges .process-edge--preview {
   stroke: var(--color-accent);
   stroke-dasharray: 5 4;
   stroke-width: 2;
 }
 
-.process-edge-hit {
+.process-graph__edges .process-edge-hit {
   fill: none;
   stroke: transparent;
   stroke-width: 14;
