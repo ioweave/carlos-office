@@ -37,13 +37,8 @@ const addUniqueName = (names, name, label) => {
 
 const normalizeProcess = process => {
   if (!isObject(process)) throw new Error("Nora Process definition must be an object");
-
-  if (process.purpose != null && typeof process.purpose !== "string") {
-    throw new Error("Process purpose must be a string");
-  }
-  if (process.inputs != null && !Array.isArray(process.inputs)) {
-    throw new Error("Process inputs must be an array");
-  }
+  if (process.purpose != null && typeof process.purpose !== "string") throw new Error("Process purpose must be a string");
+  if (process.inputs != null && !Array.isArray(process.inputs)) throw new Error("Process inputs must be an array");
 
   return {
     name: requireText(process.name, "Process name"),
@@ -53,6 +48,8 @@ const normalizeProcess = process => {
     end: process.end,
     tasks: process.tasks,
     edges: process.edges,
+    groups: Array.isArray(process.groups) ? structuredClone(process.groups) : [],
+    ...(isObject(process.layout) ? { layout: structuredClone(process.layout) } : {}),
   };
 };
 
@@ -110,7 +107,27 @@ const validateProcessDependencies = (
   }
 };
 
-const workflowShape = '{"start":"start","end":"end","tasks":{"start":{"type":"start"},"inspect":{"type":"task","name":"Inspect files","objective":"Inspect the relevant files and report findings","tools":["read-file"]},"end":{"type":"end"}},"edges":[["start","inspect"],["inspect","end"]]}';
+const workflowShape = '{"start":"start","end":"end","tasks":{"start":{"type":"start"},"inspect":{"type":"task","name":"Inspect files","objective":"Inspect the relevant files and report findings","tools":["read-file"]},"end":{"type":"end"}},"edges":[["start","inspect"],["inspect","end"]],"groups":[]}';
+const mapExample = '{"id":"map-items","type":"map","name":"Map items","members":["inspect"],"source":"items","itemAs":"item","indexAs":"index","concurrency":4,"throttle":{"requests":20,"windowMs":60000}}';
+const loopExample = '{"id":"loop-qc","type":"loop","name":"Quality control","members":["inspect"],"maxIterations":3,"minimumScore":0.85,"criteria":"The result must be complete, accurate, and satisfy the Task completion criteria."}';
+
+const graphRules = [
+  'Graph nodes are only type "start", "task", or "end". Map and Loop are execution Groups, not graph nodes.',
+  "Edges are [fromTaskId,toTaskId], remain acyclic, and define dependencies independently of execution Group boundaries.",
+  "The tasks object must contain exactly one named start node and one named end node.",
+  "Every executable Task uses type task, a concise 2-5 word name (maximum 50 characters), and a non-empty objective.",
+  "Task objective contains detailed execution instructions; completion contains acceptance criteria.",
+  "Use Task data output when downstream execution needs machine-readable arrays or objects.",
+  "groups is optional and contains Map or Loop execution scopes. A Task or nested Group may directly belong to at most one Group.",
+  "Start and end cannot be Group members. Group nesting must not contain cycles.",
+  `Map Group shape: ${mapExample}`,
+  "A Map iterates its source collection. concurrency is the shared maximum number of active child Task executions across the entire Map, including parallel branches and nested Groups.",
+  "Map throttle optionally limits new Task executions to requests per windowMs. For Each is simply Map with concurrency 1.",
+  "Tasks in one Map preserve their normal graph dependencies for each item. Nested Maps must obey both outer and inner concurrency/rate limits.",
+  `Loop Group V1 shape: ${loopExample}`,
+  "Loop V1 directly contains exactly one executable Task. Nora independently reviews and scores each candidate result. Rejected or mediocre work is rerun with Nora's feedback until accepted or maxIterations is reached.",
+  "Never represent Loop with a graph back-edge. Do not create Store nodes in v1.1.",
+];
 
 export const getNoraRequestDecisionInstruction = () => [
   "Decide how Carlos's latest request should be handled.",
@@ -131,13 +148,10 @@ export const getNoraRequestDecisionInstruction = () => [
   "When scheduled behavior needs a missing capability, create the Tool or Skill, then Process, then Schedule.",
   "Do not choose a Schedule ID. Carlos Office assigns Schedule IDs automatically.",
   "Never claim a notification or alarm capability exists unless it is available or created in the plan.",
-  "Generated graph nodes may only be start, task, or end. Edges are [fromTaskId,toTaskId].",
-  "The tasks object MUST contain the named start and end nodes with types start and end.",
-  "Every executable task MUST use type task, a concise name, and a non-empty objective. Do not use description instead of objective.",
-  "Task name is the atomic UI label: use 2-5 words, at most 50 characters, one clear action, and no paths, URLs, explanations, or completion criteria.",
-  "Task objective contains the detailed execution instruction and may be much longer than the name.",
+  ...graphRules,
   `Valid minimal Workflow graph: ${workflowShape}`,
   "Tasks do not name persistent specialist Agents. A Task may constrain provider/model, Tools, and Skills; otherwise Nora selects them at runtime.",
+  "Use Maps when one collection needs repeated processing with controlled concurrency. Use Loop only when independent Nora QC/retry materially improves a Task.",
   "For a Tool, return complete valid ESM source with no Markdown fences.",
   "A Tool must export its Tool object as default or as `tool` and use only available Node APIs or dependencies.",
   "Tool approval is an autonomous authority boundary, not a second confirmation for work Carlos directly requested.",
@@ -151,12 +165,10 @@ export const getNoraRequestDecisionInstruction = () => [
   '{"action":"process","process":"Process Name","inputs":{},"config":{},"response":"optional"}',
   `{"action":"adhoc","workflow":${workflowShape},"inputs":{},"config":{},"response":"optional"}`,
   `{"action":"create_process","process":{"name":"...","purpose":"...","inputs":[],${workflowShape.slice(1)},"response":"optional"}`,
-  '{"action":"create_schedule","schedule":{"process":"...","enabled":true,'
-    + '"timing":{"type":"cron","value":"0 5 * * *"},"inputs":{},"config":{}},"response":"optional"}',
+  '{"action":"create_schedule","schedule":{"process":"...","enabled":true,"timing":{"type":"cron","value":"0 5 * * *"},"inputs":{},"config":{}},"response":"optional"}',
   '{"action":"tool","name":"tool-name","source":"complete ESM source","response":"optional"}',
   '{"action":"skill","name":"skill-name","content":"complete Markdown","response":"optional"}',
-  '{"action":"plan","steps":[{"type":"tool"},{"type":"create_process"},'
-    + '{"type":"create_schedule"}],"response":"optional"}',
+  '{"action":"plan","steps":[{"type":"tool"},{"type":"create_process"},{"type":"create_schedule"}],"response":"optional"}',
 ].join("\n");
 
 export const ensureValidGeneratedGraph = async ({
@@ -176,18 +188,11 @@ export const ensureValidGeneratedGraph = async ({
       [
         `Repair this generated ${label} graph.`,
         "",
-        "The graph is invalid and must satisfy all Carlos Office graph invariants:",
-        '- nodes are only type "start", "task", or "end";',
-        "- exactly one start node and exactly one end node;",
-        "- tasks[start] has type start and tasks[end] has type end;",
-        "- every executable task has type task, a concise 2-5 word name, and a non-empty objective; never use description instead of objective;",
-        "- Task names are at most 50 characters and contain no paths, URLs, explanations, or completion criteria;",
-        "- every edge is [fromTaskId, toTaskId] and references existing nodes;",
+        "The graph is invalid. Satisfy every Carlos Office graph invariant:",
+        ...graphRules.map(rule => `- ${rule}`),
+        "- every node is reachable from start and can reach end;",
         "- no self-edges or duplicate edges;",
         "- start has no incoming edges and end has no outgoing edges;",
-        "- the graph is acyclic;",
-        "- every node is reachable from start;",
-        "- every node can reach end;",
         "- Task inputs, tools, and skills are arrays of names when present;",
         "- Task provider and model are configured together when present;",
         "- Task definitions do not contain persistent Agent identities.",
@@ -247,15 +252,10 @@ export const createProcess = async ({
 
 export const createProcessSchedule = async schedule => {
   const normalized = normalizeSchedule(schedule);
-  if (!getProcess(normalized.process)) {
-    throw new Error(`Schedule references unknown Process: ${normalized.process}`);
-  }
+  if (!getProcess(normalized.process)) throw new Error(`Schedule references unknown Process: ${normalized.process}`);
 
   const stored = await createSchedule(normalized);
-  await recordEvent("nora.schedule_created", {
-    scheduleId: stored.id,
-    process: stored.process,
-  });
+  await recordEvent("nora.schedule_created", { scheduleId: stored.id, process: stored.process });
   return stored;
 };
 
@@ -264,7 +264,6 @@ const validatePlanShape = steps => {
   if (steps.length < MIN_PLAN_STEPS || steps.length > MAX_PLAN_STEPS) {
     throw new Error(`Nora plan must contain ${MIN_PLAN_STEPS}-${MAX_PLAN_STEPS} steps`);
   }
-
   for (const [index, step] of steps.entries()) {
     if (!isObject(step)) throw new Error(`Nora plan step ${index + 1} must be an object`);
     if (!PLAN_TYPES.has(step.type)) throw new Error(`Unsupported Nora plan step: ${step.type}`);
@@ -286,9 +285,7 @@ const prepareCreationPlan = async ({
   for (const step of steps) {
     if (step.type === "tool") addUniqueName(plannedTools, requireRegistryName(step.name, "Tool name"), "Tool");
     if (step.type === "skill") addUniqueName(plannedSkills, requireRegistryName(step.name, "Skill name"), "Skill");
-    if (step.type === "create_process") {
-      addUniqueName(plannedProcesses, requireText(step.process?.name, "Process name"), "Process");
-    }
+    if (step.type === "create_process") addUniqueName(plannedProcesses, requireText(step.process?.name, "Process name"), "Process");
   }
 
   const prepared = [];
