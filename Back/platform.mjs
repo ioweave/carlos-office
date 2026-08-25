@@ -49,16 +49,9 @@ const runScheduledWorkflow = async workflow => {
     if (execution.workflow.status === "completed") await nora.summarizeWorkflow(workflow.id);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error("[schedules] Scheduled Workflow execution failed.", {
-      workflowId: workflow.id,
-      message,
-    });
-
+    console.error("[schedules] Scheduled Workflow execution failed.", { workflowId: workflow.id, message });
     try {
-      await events.recordEvent("schedule.workflow_failed", {
-        workflowId: workflow.id,
-        error: message,
-      });
+      await events.recordEvent("schedule.workflow_failed", { workflowId: workflow.id, error: message });
     } catch (eventError) {
       console.error("[schedules] Could not record scheduled Workflow failure.", {
         workflowId: workflow.id,
@@ -74,7 +67,6 @@ const router = createRouter({
   processes,
   conversations,
   artifacts,
-  attachments,
   authorization,
   schedules,
   events,
@@ -86,9 +78,7 @@ const conversationResources = conversations.createConversationResourceController
   allowedOrigin: config.frontendOrigin,
   nora,
 });
-const providerResources = providers.createProviderResourceController({
-  allowedOrigin: config.frontendOrigin,
-});
+const providerResources = providers.createProviderResourceController({ allowedOrigin: config.frontendOrigin });
 const credentials = createCredentialController({ allowedOrigin: config.frontendOrigin });
 const knowledge = createKnowledgeController({ allowedOrigin: config.frontendOrigin });
 const variables = createVariableController({ allowedOrigin: config.frontendOrigin });
@@ -112,42 +102,7 @@ const officeState = createOfficeStateController({
   service: officeStateService,
 });
 
-const mutationDomains = req => {
-  const method = String(req.method || "GET").toUpperCase();
-  if (["GET", "HEAD", "OPTIONS"].includes(method)) return [];
-
-  let pathname = "";
-  try {
-    pathname = new URL(req.url, `http://${req.headers.host ?? "localhost"}`).pathname;
-  } catch {
-    return [];
-  }
-
-  if (pathname.startsWith("/conversations")) {
-    return ["conversations", "attachments", "artifacts", "workflows", "nora"];
-  }
-  if (pathname.startsWith("/workflows")) return ["workflows", "agents", "nora"];
-  if (pathname.startsWith("/approvals")) return ["approvals", "workflows", "agents", "nora"];
-  if (pathname.startsWith("/providers")) return ["models", "nora"];
-  if (pathname.startsWith("/skills")) return ["skillsRevision"];
-  if (pathname === "/nora") return ["nora", "models"];
-  return [];
-};
-
 const server = createServer((req, res) => {
-  const domains = mutationDomains(req);
-  if (domains.length) {
-    res.once("finish", () => {
-      void officeStateService.invalidate(domains).catch(error => {
-        console.error("[office-state] Could not refresh state after HTTP mutation.", {
-          method: req.method,
-          url: req.url,
-          message: error instanceof Error ? error.message : String(error),
-        });
-      });
-    });
-  }
-
   if (conversationResources.matches(req)) {
     void conversationResources.handle(req, res);
     return;
