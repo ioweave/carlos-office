@@ -1,7 +1,10 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+
+import { atomicWriteFile } from "../lib/AtomicFile.mjs";
+import { notifyOfficeStateChanged } from "../services/OfficeStateBus.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const conversationsDir = resolve(here, "../../ObsidianVault/Conversations");
@@ -14,9 +17,7 @@ const validatePathPart = (value, label) => {
     || basename(value) !== value
     || value === "."
     || value === ".."
-  ) {
-    throw new Error(`Invalid ${label}: ${value}`);
-  }
+  ) throw new Error(`Invalid ${label}: ${value}`);
 };
 
 const pathsFor = conversationId => {
@@ -30,10 +31,10 @@ const pathsFor = conversationId => {
 };
 
 const persistAttachments = async conversationId => {
-  const { conversationDir, metadataFile } = pathsFor(conversationId);
-  await mkdir(conversationDir, { recursive: true });
+  const { metadataFile } = pathsFor(conversationId);
   const attachments = attachmentsByConversation.get(conversationId) ?? new Map();
-  await writeFile(metadataFile, JSON.stringify(Object.fromEntries(attachments), null, 2), "utf8");
+  await atomicWriteFile(metadataFile, JSON.stringify(Object.fromEntries(attachments), null, 2), "utf8");
+  notifyOfficeStateChanged("attachments");
 };
 
 export const loadAttachments = async conversationId => {
@@ -71,9 +72,7 @@ export const createAttachment = async ({
   validatePathPart(name, "attachment filename");
   if (!type || typeof type !== "string") throw new Error("Attachment type must be a non-empty string");
   if (!createdBy || typeof createdBy !== "string") throw new Error("Attachment creator must be a non-empty string");
-  if (typeof content !== "string" && !Buffer.isBuffer(content)) {
-    throw new Error("Attachment content must be a string or Buffer");
-  }
+  if (typeof content !== "string" && !Buffer.isBuffer(content)) throw new Error("Attachment content must be a string or Buffer");
 
   const attachments = await ensureLoaded(conversationId);
   const { attachmentsDir } = pathsFor(conversationId);
@@ -81,7 +80,7 @@ export const createAttachment = async ({
 
   const id = `attachment-${randomUUID()}`;
   const storedName = storageName(id, name);
-  await writeFile(resolve(attachmentsDir, storedName), content);
+  await atomicWriteFile(resolve(attachmentsDir, storedName), content);
 
   const attachment = {
     id,
