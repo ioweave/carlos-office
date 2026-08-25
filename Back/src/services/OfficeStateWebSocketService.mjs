@@ -5,6 +5,8 @@ const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const OPEN = 1;
 const CLOSING = 2;
 const CLOSED = 3;
+const MAX_CLIENT_FRAME_BYTES = 64 * 1024;
+const MAX_CLIENT_BUFFER_BYTES = 128 * 1024;
 
 const nonNegativeInteger = value => {
   if (value == null || value === "") return 0;
@@ -16,7 +18,6 @@ const nonNegativeInteger = value => {
 const frame = (opcode, payload = Buffer.alloc(0)) => {
   const body = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload), "utf8");
   let header;
-
   if (body.length < 126) {
     header = Buffer.from([0x80 | opcode, body.length]);
   } else if (body.length <= 0xffff) {
@@ -30,21 +31,27 @@ const frame = (opcode, payload = Buffer.alloc(0)) => {
     header[1] = 127;
     header.writeBigUInt64BE(BigInt(body.length), 2);
   }
-
   return Buffer.concat([header, body]);
 };
 
+const protocolError = message => Object.assign(new Error(message), { websocketCode: 1002 });
+
 const parseClientFrames = (buffer, onFrame) => {
   let offset = 0;
-
   while (buffer.length - offset >= 2) {
     const first = buffer[offset];
     const second = buffer[offset + 1];
+    const fin = (first & 0x80) !== 0;
+    const rsv = first & 0x70;
     const opcode = first & 0x0f;
     const masked = (second & 0x80) !== 0;
+    if (!fin) throw protocolError("Fragmented WebSocket client frames are not supported");
+    if (rsv) throw protocolError("Unexpected WebSocket RSV bits");
+    if (!masked) throw protocolError("Client WebSocket frames must be masked");
+    if (![0x1, 0x2, 0x8, 0x9, 0xA].includes(opcode)) throw protocolError(`Unsupported WebSocket opcode: ${opcode}`);
+
     let length = second & 0x7f;
     let headerLength = 2;
-
     if (length === 126) {
       if (buffer.length - offset < 4) break;
       length = buffer.readUInt16BE(offset + 2);
@@ -52,30 +59,38 @@ const parseClientFrames = (buffer, onFrame) => {
     } else if (length === 127) {
       if (buffer.length - offset < 10) break;
       const largeLength = buffer.readBigUInt64BE(offset + 2);
-      if (largeLength > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("WebSocket frame is too large");
+      if (largeLength > BigInt(MAX_CLIENT_FRAME_BYTES)) throw protocolError("WebSocket client frame is too large");
       length = Number(largeLength);
       headerLength = 10;
     }
+    if (length > MAX_CLIENT_FRAME_BYTES) throw protocolError("WebSocket client frame is too large");
+    if ([0x8, 0x9, 0xA].includes(opcode) && length > 125) throw protocolError("WebSocket control frame is too large");
 
-    const maskLength = masked ? 4 : 0;
-    const totalLength = headerLength + maskLength + length;
+    const totalLength = headerLength + 4 + length;
     if (buffer.length - offset < totalLength) break;
-
     const maskOffset = offset + headerLength;
-    const payloadOffset = maskOffset + maskLength;
+    const payloadOffset = maskOffset + 4;
+    const mask = buffer.subarray(maskOffset, maskOffset + 4);
     const payload = Buffer.from(buffer.subarray(payloadOffset, payloadOffset + length));
-
-    if (masked) {
-      const mask = buffer.subarray(maskOffset, maskOffset + 4);
-      for (let index = 0; index < payload.length; index += 1) payload[index] ^= mask[index % 4];
-    }
-
+    for (let index = 0; index < payload.length; index += 1) payload[index] ^= mask[index % 4];
     onFrame({ opcode, payload });
     offset += totalLength;
   }
-
   return buffer.subarray(offset);
 };
+
+const waitForDrain = socket => new Promise((resolve, reject) => {
+  const done = () => {
+    socket.off("error", failed);
+    resolve();
+  };
+  const failed = error => {
+    socket.off("drain", done);
+    reject(error);
+  };
+  socket.once("drain", done);
+  socket.once("error", failed);
+});
 
 const createClient = socket => {
   const client = {
@@ -83,9 +98,10 @@ const createClient = socket => {
     readyState: OPEN,
     isAlive: true,
     input: Buffer.alloc(0),
-    sendText(value) {
+    async sendText(value) {
       if (client.readyState !== OPEN || socket.destroyed) return false;
-      socket.write(frame(0x1, JSON.stringify(value)));
+      const writable = socket.write(frame(0x1, JSON.stringify(value)));
+      if (!writable) await waitForDrain(socket);
       return true;
     },
     ping() {
@@ -110,22 +126,16 @@ const createClient = socket => {
 
 export const attachOfficeStateWebSocket = ({ server, allowedOrigin, service }) => {
   if (!server) throw new Error("Office state WebSocket requires the HTTP server");
-  if (!allowedOrigin || typeof allowedOrigin !== "string") {
-    throw new Error("Office state WebSocket requires one allowed frontend origin");
-  }
+  if (!allowedOrigin || typeof allowedOrigin !== "string") throw new Error("Office state WebSocket requires one allowed frontend origin");
   if (!service) throw new Error("Office state WebSocket requires the Office state service");
 
   const clients = new Set();
-
   const handleUpgrade = (req, socket) => {
     let url;
-    try {
-      url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
-    } catch {
+    try { url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`); } catch {
       socket.destroy();
       return;
     }
-
     if (url.pathname !== "/ws") {
       socket.destroy();
       return;
@@ -136,9 +146,11 @@ export const attachOfficeStateWebSocket = ({ server, allowedOrigin, service }) =
       return;
     }
 
+    const requestedSince = nonNegativeInteger(url.searchParams.get("since"));
     const key = req.headers["sec-websocket-key"];
     if (
-      req.headers.upgrade?.toLowerCase() !== "websocket"
+      requestedSince === null
+      || req.headers.upgrade?.toLowerCase() !== "websocket"
       || req.headers["sec-websocket-version"] !== "13"
       || typeof key !== "string"
       || !key.trim()
@@ -157,19 +169,16 @@ export const attachOfficeStateWebSocket = ({ server, allowedOrigin, service }) =
       "\r\n",
     ].join("\r\n"));
 
-    const requestedSince = nonNegativeInteger(url.searchParams.get("since"));
-    if (requestedSince === null) {
-      socket.end(frame(0x8, Buffer.from([0x03, 0xf0])));
-      return;
-    }
-
     const client = createClient(socket);
     clients.add(client);
+    let cleaned = false;
     let lastRevision = requestedSince;
     let clientInstance = url.searchParams.get("instance");
     let sendQueue = Promise.resolve();
 
     const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
       client.readyState = CLOSED;
       clients.delete(client);
       unsubscribe();
@@ -178,14 +187,11 @@ export const attachOfficeStateWebSocket = ({ server, allowedOrigin, service }) =
     const sendLatest = () => {
       const next = sendQueue.catch(() => {}).then(async () => {
         if (client.readyState !== OPEN || socket.destroyed) return;
-        const payload = await service.responseSince({
-          since: lastRevision,
-          clientInstance,
-        });
+        const payload = await service.responseSince({ since: lastRevision, clientInstance });
         if (!payload.reset && !payload.changed.length) return;
         lastRevision = payload.revision;
         clientInstance = payload.instance;
-        client.sendText({ type: "state", ...payload });
+        await client.sendText({ type: "state", ...payload });
       });
       sendQueue = next;
       return next;
@@ -193,14 +199,14 @@ export const attachOfficeStateWebSocket = ({ server, allowedOrigin, service }) =
 
     const unsubscribe = service.subscribe(() => {
       void sendLatest().catch(error => {
-        console.error("[office-state] WebSocket state send failed.", {
-          message: error instanceof Error ? error.message : String(error),
-        });
+        console.error("[office-state] WebSocket state send failed.", { message: error instanceof Error ? error.message : String(error) });
+        client.close(1011, "State synchronization failed");
       });
     });
 
     socket.on("data", chunk => {
       try {
+        if (client.input.length + chunk.length > MAX_CLIENT_BUFFER_BYTES) throw protocolError("WebSocket client input buffer is too large");
         client.input = Buffer.concat([client.input, chunk]);
         client.input = parseClientFrames(client.input, ({ opcode, payload }) => {
           if (opcode === 0x8) {
@@ -211,33 +217,31 @@ export const attachOfficeStateWebSocket = ({ server, allowedOrigin, service }) =
             socket.write(frame(0xA, payload));
             return;
           }
-          if (opcode === 0xA) client.isAlive = true;
+          if (opcode === 0xA) {
+            client.isAlive = true;
+            return;
+          }
+          // State synchronization is server-push only. Ignore application data from clients.
         });
       } catch (error) {
-        console.error("[office-state] Invalid WebSocket client frame.", {
-          message: error instanceof Error ? error.message : String(error),
-        });
-        client.terminate();
+        console.error("[office-state] Invalid WebSocket client frame.", { message: error instanceof Error ? error.message : String(error) });
+        if (client.readyState === OPEN) client.close(error.websocketCode || 1002, "Protocol error");
+        else client.terminate();
       }
     });
     socket.on("error", error => {
-      console.error("[office-state] WebSocket client error.", {
-        message: error instanceof Error ? error.message : String(error),
-      });
+      console.error("[office-state] WebSocket client error.", { message: error instanceof Error ? error.message : String(error) });
     });
     socket.on("close", cleanup);
     socket.on("end", cleanup);
 
     void sendLatest().catch(error => {
-      console.error("[office-state] Initial WebSocket state send failed.", {
-        message: error instanceof Error ? error.message : String(error),
-      });
+      console.error("[office-state] Initial WebSocket state send failed.", { message: error instanceof Error ? error.message : String(error) });
       client.close(1011, "State synchronization failed");
     });
   };
 
   server.on("upgrade", handleUpgrade);
-
   const heartbeat = setInterval(() => {
     for (const client of clients) {
       if (client.isAlive === false) {
@@ -256,6 +260,5 @@ export const attachOfficeStateWebSocket = ({ server, allowedOrigin, service }) =
     for (const client of clients) client.close(1001, "Carlos Office shutting down");
     clients.clear();
   };
-
   return { close };
 };
