@@ -120,8 +120,10 @@ const enrichFailedResult = (entry, result) => {
     lines.push("", `Tool failures (${toolFailures.length}):`);
     for (const failure of toolFailures) {
       lines.push(`#${failure.sequence} ${failure.tool}`);
+      if (failure.code) lines.push(`Code: ${failure.code}`);
       lines.push(`Input: ${diagnosticInputText(failure.input)}`);
       lines.push(`Error: ${failure.error}`);
+      if (failure.hint) lines.push(`Hint: ${failure.hint}`);
     }
   }
 
@@ -165,6 +167,9 @@ const runTool = async (entry, message) => {
           blocked: true,
           approvalId: authorization.approval.id,
           error: `Carlos approval required for Tool: ${tool.name}`,
+          code: "tool_approval_required",
+          retryable: true,
+          hint: "Wait for Carlos approval before retrying this Tool call.",
         });
         return;
       }
@@ -192,11 +197,17 @@ const runTool = async (entry, message) => {
     });
     sendToolResult(child, requestId, { ok: true, result });
   } catch (error) {
+    const code = typeof error?.code === "string" && error.code ? error.code : "tool_execution_failed";
+    const retryable = typeof error?.retryable === "boolean" ? error.retryable : true;
+    const hint = typeof error?.hint === "string" && error.hint.trim() ? error.hint.trim() : null;
     const failure = {
       sequence: entry.toolFailures.length + 1,
       tool: typeof call?.name === "string" ? call.name : "unknown-tool",
       input: sanitizeDiagnosticValue(call?.input ?? {}),
       error: error instanceof Error ? error.message : String(error),
+      code,
+      retryable,
+      ...(hint ? { hint } : {}),
       at: new Date().toISOString(),
     };
     entry.toolFailures.push(failure);
@@ -210,11 +221,17 @@ const runTool = async (entry, message) => {
       sequence: failure.sequence,
       input: structuredClone(failure.input),
       error: failure.error,
+      code: failure.code,
+      retryable: failure.retryable,
+      ...(failure.hint ? { hint: failure.hint } : {}),
     });
 
     sendToolResult(child, requestId, {
       ok: false,
       error: failure.error,
+      code: failure.code,
+      retryable: failure.retryable,
+      ...(failure.hint ? { hint: failure.hint } : {}),
     });
   }
 };
