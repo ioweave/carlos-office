@@ -225,7 +225,15 @@ export const AppProvider = ({ children }) => {
 
     const previous = conversationRevisionRef.current;
     const activeConversationId = activePage === "chat" ? storedActiveConversation() : "";
-    let liveMessageId = "";
+    const changedNoraConversations = [];
+
+    for (const [id, snapshot] of next) {
+      const prior = previous.get(id);
+      if (!prior || snapshot.lastMessageId === prior.lastMessageId || snapshot.lastActor !== "Nora") continue;
+      changedNoraConversations.push([id, snapshot]);
+    }
+
+    const liveSnapshot = changedNoraConversations.find(([id]) => id === activeConversationId)?.[1] ?? null;
 
     setUnreadConversationIds(current => {
       const unread = new Set(current);
@@ -234,31 +242,23 @@ export const AppProvider = ({ children }) => {
         if (!next.has(id)) unread.delete(id);
       }
 
-      for (const [id, snapshot] of next) {
-        const prior = previous.get(id);
-        if (!prior || snapshot.lastMessageId === prior.lastMessageId) continue;
-        if (snapshot.lastActor !== "Nora") continue;
-
-        if (id === activeConversationId) {
-          unread.delete(id);
-          liveMessageId = snapshot.lastMessageId;
-        } else {
-          unread.add(id);
-        }
+      for (const [id] of changedNoraConversations) {
+        if (id === activeConversationId) unread.delete(id);
+        else unread.add(id);
       }
 
       return unread;
     });
 
-    if (liveMessageId && activeConversationId) {
+    if (liveSnapshot && activeConversationId) {
       setChatRequest(current => {
         if (
           current?.conversationId === activeConversationId
-          && current?.liveMessageId === liveMessageId
+          && current?.liveMessageId === liveSnapshot.lastMessageId
         ) return current;
         return {
           conversationId: activeConversationId,
-          liveMessageId,
+          liveMessageId: liveSnapshot.lastMessageId,
           token: Date.now(),
         };
       });
