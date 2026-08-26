@@ -23,9 +23,8 @@ const GROUP_MIN_WIDTH = 190;
 const GROUP_MIN_HEIGHT = 120;
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2.2;
-const EDGE_OFFSET = 30;
-const EDGE_BACKTRACK_OFFSET = 90;
-const EDGE_RADIUS = 9;
+const EDGE_OFFSET = 20;
+const EDGE_RADIUS = 5;
 const FIT_PADDING = 56;
 
 const humanizeId = id => String(id || "")
@@ -199,47 +198,74 @@ const roundedPath = points => {
   return `${path} L ${last.x} ${last.y}`;
 };
 
-const edgeRoute = (sourceRect, targetRect, override = null) => {
-  const start = port(sourceRect, "right");
-  const end = port(targetRect, "left");
+// Matches XYFlow's smoothstep geometry for Position.Right -> Position.Left.
+// Forward edges split vertically between the nodes. Backtracking edges split
+// horizontally between the rows instead of taking a large detour to the right.
+const smoothStepRoute = (start, end, override = null) => {
   const sourceOut = outwardPoint(start, "right");
   const targetOut = outwardPoint(end, "left");
-  const forward = targetOut.x >= sourceOut.x + EDGE_OFFSET;
-  const baseControl = {
-    x: forward
-      ? (sourceOut.x + targetOut.x) / 2
-      : Math.max(sourceOut.x, targetOut.x) + EDGE_BACKTRACK_OFFSET,
+  const forward = sourceOut.x < targetOut.x;
+  const midpoint = {
+    x: (sourceOut.x + targetOut.x) / 2,
     y: (sourceOut.y + targetOut.y) / 2,
   };
   const dx = Number(override?.dx ?? 0);
   const dy = Number(override?.dy ?? 0);
-  const control = {
-    x: baseControl.x + (Number.isFinite(dx) ? dx : 0),
-    y: baseControl.y + (Number.isFinite(dy) ? dy : 0),
+
+  if (forward) {
+    const centerX = midpoint.x + (Number.isFinite(dx) ? dx : 0);
+    const control = { x: centerX, y: midpoint.y };
+    const points = cleanPoints([
+      start,
+      sourceOut,
+      { x: centerX, y: sourceOut.y },
+      { x: centerX, y: targetOut.y },
+      targetOut,
+      end,
+    ]);
+    return {
+      start,
+      end,
+      sourceOut,
+      targetOut,
+      forward,
+      axis: "x",
+      baseControl: midpoint,
+      control,
+      points,
+      path: roundedPath(points),
+    };
+  }
+
+  const centerY = midpoint.y + (Number.isFinite(dy) ? dy : 0);
+  const control = { x: midpoint.x, y: centerY };
+  const points = cleanPoints([
+    start,
+    sourceOut,
+    { x: sourceOut.x, y: centerY },
+    { x: targetOut.x, y: centerY },
+    targetOut,
+    end,
+  ]);
+  return {
+    start,
+    end,
+    sourceOut,
+    targetOut,
+    forward,
+    axis: "y",
+    baseControl: midpoint,
+    control,
+    points,
+    path: roundedPath(points),
   };
-
-  const points = Math.abs(control.y - baseControl.y) < 0.5
-    ? [
-        start,
-        sourceOut,
-        { x: control.x, y: sourceOut.y },
-        { x: control.x, y: targetOut.y },
-        targetOut,
-        end,
-      ]
-    : [
-        start,
-        sourceOut,
-        { x: control.x, y: sourceOut.y },
-        control,
-        { x: targetOut.x, y: control.y },
-        targetOut,
-        end,
-      ];
-
-  const cleaned = cleanPoints(points);
-  return { start, end, sourceOut, targetOut, baseControl, control, points: cleaned, path: roundedPath(cleaned) };
 };
+
+const edgeRoute = (sourceRect, targetRect, override = null) => smoothStepRoute(
+  port(sourceRect, "right"),
+  port(targetRect, "left"),
+  override,
+);
 
 const groupDepths = groups => {
   const byId = new Map((groups || []).map(group => [group.id, group]));
@@ -608,10 +634,14 @@ export default function ProcessGraph({
     onEdgeSelect?.([edge.from, edge.to]);
     onSelect?.(null);
     onGroupSelect?.(null);
-    const origin = edgeRoutesRef.current[edge.key] || { dx: 0, dy: 0 };
+    const stored = edgeRoutesRef.current[edge.key] || { dx: 0, dy: 0 };
+    const origin = edge.axis === "x"
+      ? { dx: Number(stored.dx || 0), dy: 0 }
+      : { dx: 0, dy: Number(stored.dy || 0) };
     edgeDragRef.current = {
       pointerId: event.pointerId,
       key: edge.key,
+      axis: edge.axis,
       startX: event.clientX,
       startY: event.clientY,
       origin,
@@ -624,14 +654,12 @@ export default function ProcessGraph({
     if (!drag || drag.pointerId !== event.pointerId) return;
     const dx = (event.clientX - drag.startX) / zoom;
     const dy = (event.clientY - drag.startY) / zoom;
-    const next = {
-      ...edgeRoutesRef.current,
-      [drag.key]: {
-        dx: Math.round((drag.origin.dx || 0) + dx),
-        dy: Math.round((drag.origin.dy || 0) + dy),
-      },
-    };
-    drag.moved ||= Math.abs(dx) > 2 || Math.abs(dy) > 2;
+    const delta = drag.axis === "x" ? dx : dy;
+    const route = drag.axis === "x"
+      ? { dx: Math.round((drag.origin.dx || 0) + dx), dy: 0 }
+      : { dx: 0, dy: Math.round((drag.origin.dy || 0) + dy) };
+    const next = { ...edgeRoutesRef.current, [drag.key]: route };
+    drag.moved ||= Math.abs(delta) > 2;
     setEdgeRoutesLive(next);
   };
 
@@ -775,14 +803,7 @@ export default function ProcessGraph({
   if (!nodes.length) return <div className="process-graph process-graph--empty">No graph data.</div>;
 
   const sortedGroups = [...resolvedGroups].sort((left, right) => (depths[left.id] || 0) - (depths[right.id] || 0));
-  const previewPath = connecting
-    ? roundedPath(cleanPoints([
-        connecting.start,
-        { x: (connecting.start.x + connecting.pointer.x) / 2, y: connecting.start.y },
-        { x: (connecting.start.x + connecting.pointer.x) / 2, y: connecting.pointer.y },
-        connecting.pointer,
-      ]))
-    : "";
+  const previewPath = connecting ? smoothStepRoute(connecting.start, connecting.pointer).path : "";
 
   return (
     <div
@@ -886,7 +907,7 @@ export default function ProcessGraph({
             <button
               key={`route-${edge.key}`}
               type="button"
-              className="process-edge-handle"
+              className={`process-edge-handle process-edge-handle--${edge.axis}`}
               style={{ left: edge.control.x, top: edge.control.y }}
               onPointerDown={event => beginEdgeDrag(event, edge)}
               onPointerMove={moveEdgeDrag}
@@ -894,7 +915,7 @@ export default function ProcessGraph({
               onPointerCancel={endEdgeDrag}
               onDoubleClick={event => resetEdgeRoute(event, edge)}
               onClick={event => event.stopPropagation()}
-              title="Drag to reroute this edge · double-click to reset"
+              title={`Drag ${edge.axis === "x" ? "horizontally" : "vertically"} to reroute · double-click to reset`}
               aria-label={`Reroute ${edge.from} to ${edge.to}`}
             />
           ))}
