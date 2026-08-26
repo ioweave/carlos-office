@@ -216,6 +216,15 @@
   letter-spacing: 0.06em;
 }
 
+.process-graph--infinite .workflow-group--map .workflow-group__title strong {
+  font-size: 0;
+}
+
+.process-graph--infinite .workflow-group--map .workflow-group__title strong::after {
+  content: "For each";
+  font-size: 9px;
+}
+
 .process-graph--infinite .workflow-group__title span,
 .process-graph--infinite .workflow-group__title small {
   overflow: hidden;
