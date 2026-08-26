@@ -142,11 +142,18 @@
   border-radius: 4px;
   background: var(--color-surface);
   box-shadow: 0 2px 7px color-mix(in srgb, var(--color-text) 18%, transparent);
-  cursor: move;
   touch-action: none;
   transform: translate(-50%, -50%);
   transition: background var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast);
   z-index: 50;
+}
+
+.process-graph--infinite .process-edge-handle--x {
+  cursor: ew-resize;
+}
+
+.process-graph--infinite .process-edge-handle--y {
+  cursor: ns-resize;
 }
 
 .process-graph--infinite .process-edge-handle::after {
