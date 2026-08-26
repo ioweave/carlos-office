@@ -61,9 +61,14 @@ const runScheduledWorkflow = async workflow => {
   }
 };
 
+const routerNora = {
+  ...nora,
+  listModels: listNoraModels,
+};
+
 const router = createRouter({
   allowedOrigin: config.frontendOrigin,
-  nora,
+  nora: routerNora,
   processes,
   conversations,
   artifacts,
