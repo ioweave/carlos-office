@@ -108,7 +108,7 @@ const validateProcessDependencies = (
 };
 
 const workflowShape = '{"start":"start","end":"end","tasks":{"start":{"type":"start"},"inspect":{"type":"task","name":"Inspect files","objective":"Inspect the relevant files and report findings","tools":["read-file"]},"end":{"type":"end"}},"edges":[["start","inspect"],["inspect","end"]],"groups":[]}';
-const mapExample = '{"id":"map-items","type":"map","name":"Map items","members":["inspect"],"source":"items","itemAs":"item","indexAs":"index","concurrency":4,"throttle":{"requests":20,"windowMs":60000}}';
+const mapExample = '{"id":"map-items","type":"map","name":"For each item","members":["inspect"],"source":"upstream.list_items","itemAs":"item","indexAs":"index","concurrency":4,"throttle":{"requests":20,"windowMs":60000}}';
 const loopExample = '{"id":"loop-qc","type":"loop","name":"Quality control","members":["inspect"],"maxIterations":3,"minimumScore":0.85,"criteria":"The result must be complete, accurate, and satisfy the Task completion criteria."}';
 
 const graphRules = [
@@ -121,6 +121,11 @@ const graphRules = [
   "groups is optional and contains Map or Loop execution scopes. A Task or nested Group may directly belong to at most one Group.",
   "Start and end cannot be Group members. Group nesting must not contain cycles.",
   `Map Group shape: ${mapExample}`,
+  "A Map is an execution operator, never a visual or organizational grouping box. Never create a Map merely to label, group, or sequence Tasks.",
+  "Create a Map only when its source is genuinely expected to resolve to an array and the enclosed executable Task or Tasks must run once per item.",
+  "For generated Workflows, prefer explicit Map source paths: workflow.<inputName> for Workflow inputs, or upstream.<producerTaskId/outputName> for arrays produced by an upstream Task. Never invent an unbound bare source name.",
+  "If a mapped Task declares an explicit inputs list, include the Map source path so the Map can resolve it at runtime.",
+  "A Map containing exactly one executable Task is valid only for genuine fan-out/fan-in: an upstream collection is produced, that Task runs once per item, and downstream work outside the Map consumes the aggregate result. Otherwise omit the Map.",
   "A Map iterates its source collection. concurrency is the shared maximum number of active child Task executions across the entire Map, including parallel branches and nested Groups.",
   "Map throttle optionally limits new Task executions to requests per windowMs. For Each is simply Map with concurrency 1.",
   "Tasks in one Map preserve their normal graph dependencies for each item. Nested Maps must obey both outer and inner concurrency/rate limits.",
@@ -151,7 +156,7 @@ export const getNoraRequestDecisionInstruction = () => [
   ...graphRules,
   `Valid minimal Workflow graph: ${workflowShape}`,
   "Tasks do not name persistent specialist Agents. A Task may constrain provider/model, Tools, and Skills; otherwise Nora selects them at runtime.",
-  "Use Maps when one collection needs repeated processing with controlled concurrency. Use Loop only when independent Nora QC/retry materially improves a Task.",
+  "Use Maps only for real collection fan-out with a resolvable array source. Do not use Maps as generic containers. Use Loop only when independent Nora QC/retry materially improves a Task.",
   "For a Tool, return complete valid ESM source with no Markdown fences.",
   "A Tool must export its Tool object as default or as `tool` and use only available Node APIs or dependencies.",
   "Tool approval is an autonomous authority boundary, not a second confirmation for work Carlos directly requested.",
