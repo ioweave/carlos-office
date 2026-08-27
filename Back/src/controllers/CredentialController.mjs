@@ -13,7 +13,7 @@ const requestError = (message, statusCode = 400) => {
 
 const partsFrom = pathname => pathname.split("/").filter(Boolean).map(decodeURIComponent);
 
-export const createCredentialController = ({ allowedOrigin }) => {
+export const createCredentialController = ({ allowedOrigin, onConfigurationChanged = async () => {} }) => {
   if (!allowedOrigin || typeof allowedOrigin !== "string") {
     throw new Error("CredentialController requires one allowed frontend origin");
   }
@@ -91,11 +91,13 @@ export const createCredentialController = ({ allowedOrigin }) => {
             subject: body.subject ?? null,
             scopes: body.scopes ?? null,
           });
+          await onConfigurationChanged();
           return sendJson(current ? 200 : 201, credential);
         }
 
         if (method === "DELETE" && parts.length === 2) {
           const result = deleteCredential(parts[1]);
+          if (result.deleted) await onConfigurationChanged();
           return result.deleted
             ? sendJson(200, result)
             : sendJson(404, { error: "Credential not found" });
