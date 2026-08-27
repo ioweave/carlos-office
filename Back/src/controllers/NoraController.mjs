@@ -28,6 +28,7 @@ import {
 import { getNora } from "../registry/Nora.mjs";
 import { listSkills } from "../registry/Skills.mjs";
 import { listTools, readToolSource } from "../registry/Tools.mjs";
+import { cleanupWorkflowRuntime } from "../services/ExecutionWorkspaceService.mjs";
 import {
   createOrUpdateSkill as saveNoraSkill,
   createOrUpdateTool as saveNoraTool,
@@ -297,12 +298,30 @@ const addWorkflowNoraMessage = async (
   return upsertNoraWorkflowMessage(conversationId, workflowId, content, artifacts);
 };
 
-const workflowArtifactIds = workflow => [...new Set(
-  Object.values(workflow.tasks ?? {})
-    .flatMap(task => task?.type === "task" ? (task.attempts ?? []) : [])
-    .filter(attempt => attempt.status === "completed")
-    .flatMap(attempt => attempt.artifacts ?? []),
-)];
+const currentWorkflowRunStartedAt = workflow => {
+  const restarted = listEvents({ type: "workflow.restarted", workflowId: workflow.id }).at(-1)?.at;
+  const started = listEvents({ type: "workflow.started", workflowId: workflow.id }).at(-1)?.at;
+  const candidates = [restarted, started]
+    .map(value => Date.parse(value ?? ""))
+    .filter(Number.isFinite);
+  return candidates.length ? Math.max(...candidates) : null;
+};
+
+const workflowArtifactIds = workflow => {
+  const runStartedAt = currentWorkflowRunStartedAt(workflow);
+  return [...new Set(
+    Object.values(workflow.tasks ?? {})
+      .flatMap(task => task?.type === "task" ? (task.attempts ?? []) : [])
+      .filter(attempt => (
+        attempt.status === "completed"
+        && (
+          runStartedAt === null
+          || (Number.isFinite(Date.parse(attempt.endedAt ?? "")) && Date.parse(attempt.endedAt) >= runStartedAt)
+        )
+      ))
+      .flatMap(attempt => attempt.artifacts ?? []),
+  )];
+};
 
 const workflowCompletionAt = workflow => {
   const completedEvent = listEvents({ type: "workflow.completed", workflowId: workflow.id }).at(-1);
@@ -795,7 +814,10 @@ export const runWorkflow = async workflowId => {
       validateModelSelection: validateSelection,
     });
 
-    if (execution.workflow?.status === "completed") await reportCompletedWorkflow(workflowId);
+    if (execution.workflow?.status === "completed") {
+      await reportCompletedWorkflow(workflowId);
+      await cleanupWorkflowRuntime(workflowId);
+    }
     return { ...execution, workflow: getWorkflow(workflowId) };
   } finally {
     refreshNoraStatus();
