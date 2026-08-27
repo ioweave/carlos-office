@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { atomicWriteFile } from "../lib/AtomicFile.mjs";
+import { consumeManagedDeliverable } from "../services/ExecutionWorkspaceService.mjs";
 import { notifyOfficeStateChanged } from "../services/OfficeStateBus.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -130,6 +131,7 @@ export const importArtifact = async ({ conversationId, sourcePath, name = null, 
   const temporary = resolve(artifactsDir, `.${storageName}.${randomUUID()}.tmp`);
   await copyFile(absoluteSource, temporary);
   await rename(temporary, resolve(artifactsDir, storageName));
+  const managedSource = await consumeManagedDeliverable(absoluteSource);
   const artifact = {
     id,
     name: artifactName,
@@ -137,7 +139,7 @@ export const importArtifact = async ({ conversationId, sourcePath, name = null, 
     type: artifactType,
     createdAt: new Date().toISOString(),
     createdBy,
-    sourcePath: absoluteSource,
+    ...(!managedSource ? { sourcePath: absoluteSource } : {}),
   };
   artifacts.set(id, artifact);
   await persistArtifacts(conversationId);
