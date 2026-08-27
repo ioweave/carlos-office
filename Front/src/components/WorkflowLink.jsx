@@ -134,6 +134,8 @@ const executionDetail = task => {
     return `Quality review · iteration ${current}/${loop.maxIterations ?? 3}`;
   }
 
+  const objective = String(task?.objective || "").replace(/\s+/g, " ").trim();
+  if (objective) return objective.length > 110 ? `${objective.slice(0, 107).trimEnd()}…` : objective;
   if (task?.tools?.length) return task.tools.join(", ");
   if (task?.skills?.length) return task.skills.join(", ");
   if (attempt.provider && attempt.model) return `${attempt.provider} · ${attempt.model}`;
@@ -223,6 +225,15 @@ export default function WorkflowLink({ workflowId, onOpen }) {
     }
   };
 
+  const approveAndResume = () => perform(
+    "approve",
+    async () => {
+      await api.post(endpoints.approvalApprove(pendingApproval.id));
+      await api.post(endpoints.workflowResume(workflowId));
+    },
+    "Approved. Workflow resumed.",
+  );
+
   const openArtifact = artifact => {
     if (!conversationId || !artifact?.id) return;
     const url = `${api.defaults.baseURL}${endpoints.conversationArtifact(conversationId, artifact.id)}`;
@@ -284,18 +295,14 @@ export default function WorkflowLink({ workflowId, onOpen }) {
                     <div className="workflow-chat-card__issue workflow-chat-card__issue--blocked">
                       <IconShieldLock size={15} stroke={2} />
                       <div>
-                        <strong>Authorization required</strong>
-                        <span>{pendingApproval?.action || issue.message || "This Task is waiting for Carlos approval."}</span>
+                        <strong>{pendingApproval ? "Authorization required" : "Authorization approved"}</strong>
+                        <span>{pendingApproval?.action || issue.message || "This Task can now be resumed."}</span>
                         {pendingApproval && (
                           <button
                             type="button"
                             className="button button--primary workflow-chat-card__inline-action"
                             disabled={Boolean(busy)}
-                            onClick={() => perform(
-                              "approve",
-                              () => api.post(endpoints.approvalApprove(pendingApproval.id)),
-                              "Approved.",
-                            )}
+                            onClick={approveAndResume}
                           >
                             <IconShieldLock size={13} /> Approve access
                           </button>
@@ -363,6 +370,16 @@ export default function WorkflowLink({ workflowId, onOpen }) {
             </button>
           )}
           {["failed", "paused", "stalled"].includes(status) && (
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={Boolean(busy)}
+              onClick={() => perform("resume", () => api.post(endpoints.workflowResume(workflowId)))}
+            >
+              <IconPlayerPlay size={14} /> Resume
+            </button>
+          )}
+          {status === "blocked" && !pendingApproval && (
             <button
               type="button"
               className="button button--primary"
