@@ -72,14 +72,17 @@ const routedDecision = async (instruction, context) => {
 export const startNora = async () => {
   if (child && readyPromise) return readyPromise;
 
-  readyPromise = new Promise((resolve, reject) => {
+  let spawned;
+  const starting = new Promise((resolve, reject) => {
     let started = false;
-    child = fork(noraProgram, [], {
+    spawned = fork(noraProgram, [], {
       stdio: ["ignore", "inherit", "inherit", "ipc"],
       serialization: "advanced",
     });
+    child = spawned;
 
-    child.on("message", message => {
+    spawned.on("message", message => {
+      if (child !== spawned) return;
       if (message?.type === "ready") {
         started = true;
         models = includeConfiguredNoraModel(message.models);
@@ -98,12 +101,13 @@ export const startNora = async () => {
       else request.resolve(message.result);
     });
 
-    child.once("error", error => {
-      rejectPending(error);
+    spawned.once("error", error => {
+      if (child === spawned) rejectPending(error);
       if (!started) reject(error);
     });
 
-    child.on("exit", (code, signal) => {
+    spawned.on("exit", (code, signal) => {
+      if (child !== spawned) return;
       const error = new Error(`Nora process exited (${signal ?? code ?? "unknown"})`);
       rejectPending(error);
       if (!started) reject(error);
@@ -113,13 +117,15 @@ export const startNora = async () => {
     });
   });
 
-  return readyPromise;
+  readyPromise = starting;
+  return starting;
 };
 
 export const decide = async ({ definition, selection, instruction, context, format = null, signal = null }) => {
   if (signal?.aborted) throw abortError();
   await startNora();
-  if (!child?.connected) throw new Error("Nora process is not available");
+  const target = child;
+  if (!target?.connected) throw new Error("Nora process is not available");
 
   const id = randomUUID();
   const responseFormat = format ?? defaultFormat(context);
@@ -130,7 +136,7 @@ export const decide = async ({ definition, selection, instruction, context, form
       if (!request) return;
       pending.delete(id);
       request.cleanup?.();
-      if (child?.connected) child.send({ type: "cancel", id });
+      if (target.connected) target.send({ type: "cancel", id });
       reject(abortError());
     };
     const cleanup = () => signal?.removeEventListener("abort", handleAbort);
@@ -142,7 +148,7 @@ export const decide = async ({ definition, selection, instruction, context, form
       return;
     }
 
-    child.send({
+    target.send({
       type: "decide",
       id,
       definition: structuredClone(definition),
@@ -164,10 +170,11 @@ export const getNoraProcessState = () => ({
 });
 
 export const stopNora = () => {
-  if (!child) return;
+  const target = child;
+  if (!target) return;
   rejectPending(new Error("Nora process stopped"));
-  child.kill("SIGTERM");
   child = null;
   readyPromise = null;
   models = [];
+  target.kill("SIGTERM");
 };
