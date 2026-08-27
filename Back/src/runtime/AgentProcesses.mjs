@@ -6,6 +6,12 @@ import { recordEvent } from "../controllers/EventController.mjs";
 import { getWorkflow } from "../controllers/ProcessController.mjs";
 import { getTool } from "../registry/Tools.mjs";
 import { getKnowledge } from "../services/KnowledgeService.mjs";
+import {
+  cleanupInvocationWorkspace,
+  prepareInvocationWorkspace,
+  resolveWorkspacePath,
+  stageInvocationCompletion,
+} from "../services/ExecutionWorkspaceService.mjs";
 
 const agentProgram = fileURLToPath(new URL("./AgentProcess.mjs", import.meta.url));
 const active = new Map();
@@ -72,6 +78,27 @@ const diagnosticInputText = input => {
   try { return JSON.stringify(input, null, 2); } catch { return String(input); }
 };
 
+const prepareToolInput = (toolName, input, workspaceDir) => {
+  const prepared = structuredClone(input ?? {});
+  if (["write-file", "read-file"].includes(toolName) && typeof prepared.path === "string" && prepared.path.trim()) {
+    prepared.path = resolveWorkspacePath(workspaceDir, prepared.path);
+  }
+  if (toolName === "run-powershell") {
+    prepared.workingDirectory = typeof prepared.workingDirectory === "string" && prepared.workingDirectory.trim()
+      ? resolveWorkspacePath(workspaceDir, prepared.workingDirectory)
+      : workspaceDir;
+  }
+  if (
+    toolName === "play-audio"
+    && typeof prepared.source === "string"
+    && prepared.source.trim()
+    && !/^(?:https?:|file:)/i.test(prepared.source.trim())
+  ) {
+    prepared.source = resolveWorkspacePath(workspaceDir, prepared.source);
+  }
+  return prepared;
+};
+
 const enrichFailedResult = (entry, result) => {
   const baseDiagnostics = isObject(result.diagnostics) ? structuredClone(result.diagnostics) : {};
   const toolFailures = entry.toolFailures.map(failure => structuredClone(failure));
@@ -109,7 +136,7 @@ const enrichFailedResult = (entry, result) => {
 };
 
 const runTool = async (entry, message) => {
-  const { child, controller, workflowId, taskId, invocationId } = entry;
+  const { child, controller, workflowId, taskId, invocationId, workspaceDir } = entry;
   const { requestId, call } = message;
   try {
     if (!entry.toolNames.has(call?.name)) throw new Error(`Agent requested unavailable Tool: ${call?.name}`);
@@ -140,11 +167,13 @@ const runTool = async (entry, message) => {
       await consumeApproval(approved.id);
     }
 
-    const result = await tool.execute(structuredClone(input), {
+    const executionInput = prepareToolInput(tool.name, input, workspaceDir);
+    const result = await tool.execute(executionInput, {
       workflowId,
       taskId,
       invocationId,
       agentId: entry.id,
+      workspaceDir,
       provider: tool.provider ?? null,
       model: tool.model ?? null,
       signal: controller.signal,
@@ -186,15 +215,21 @@ const runTool = async (entry, message) => {
   }
 };
 
-export const runAgentProcess = ({ workflowId, taskId, invocationId = null, task, provider, model, tools, skills }) => {
+export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, invocationId = null, task, provider, model, tools, skills }) => {
   const key = invocationKey(workflowId, taskId, invocationId);
   const existingAgentId = activeInvocationKeys.get(key);
   if (existingAgentId) {
-    return Promise.reject(new Error(
-      `Invocation ${invocationId ?? taskId} in Workflow ${workflowId} already has an active Agent process (${existingAgentId})`,
-    ));
+    throw new Error(`Invocation ${invocationId ?? taskId} in Workflow ${workflowId} already has an active Agent process (${existingAgentId})`);
   }
   activeInvocationKeys.set(key, "starting");
+
+  let workspaceDir;
+  try {
+    workspaceDir = await prepareInvocationWorkspace({ workflowId, taskId, attemptId, invocationId });
+  } catch (error) {
+    activeInvocationKeys.delete(key);
+    throw error;
+  }
 
   return new Promise((resolve, reject) => {
     let child;
@@ -202,6 +237,7 @@ export const runAgentProcess = ({ workflowId, taskId, invocationId = null, task,
       child = fork(agentProgram, [], { stdio: ["ignore", "inherit", "inherit", "ipc"], serialization: "advanced" });
     } catch (error) {
       activeInvocationKeys.delete(key);
+      void cleanupInvocationWorkspace(workspaceDir).catch(() => {});
       reject(error);
       return;
     }
@@ -215,7 +251,9 @@ export const runAgentProcess = ({ workflowId, taskId, invocationId = null, task,
       controller,
       workflowId,
       taskId,
+      attemptId,
       invocationId,
+      workspaceDir,
       provider,
       model,
       tools: tools.map(tool => tool.name),
@@ -235,13 +273,46 @@ export const runAgentProcess = ({ workflowId, taskId, invocationId = null, task,
       workflowId, taskId, invocationId, agentId: id, pid: child.pid, provider, model, timeoutMs,
     });
 
-    const settle = rawResult => {
+    const settle = async rawResult => {
       if (entry.settled) return;
       entry.settled = true;
       if (entry.timeoutTimer !== null) clearTimeout(entry.timeoutTimer);
       active.delete(id);
       if (activeInvocationKeys.get(key) === id) activeInvocationKeys.delete(key);
-      const result = rawResult.status === "failed" ? enrichFailedResult(entry, rawResult) : rawResult;
+
+      let result = rawResult.status === "failed" ? enrichFailedResult(entry, rawResult) : rawResult;
+      if (result.status === "completed") {
+        try {
+          result = {
+            ...result,
+            output: await stageInvocationCompletion({
+              workflowId,
+              taskId,
+              attemptId,
+              invocationId,
+              workspaceDir,
+              completion: result.output,
+            }),
+          };
+        } catch (error) {
+          const message = `Could not stage Agent artifacts: ${error instanceof Error ? error.message : String(error)}`;
+          result = {
+            status: "failed",
+            error: message,
+            diagnostics: { phase: "artifact", code: "artifact_staging_failure", message },
+          };
+        }
+      } else {
+        await cleanupInvocationWorkspace(workspaceDir).catch(error => {
+          console.warn("[agents] Could not clean failed invocation workspace.", {
+            workflowId,
+            taskId,
+            invocationId,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+
       recordAgentEvent("agent.stopped", {
         workflowId, taskId, invocationId, agentId: id, pid: child.pid, status: result.status,
         ...(result.status === "failed" ? { error: result.error, diagnostics: result.diagnostics } : {}),
@@ -256,7 +327,7 @@ export const runAgentProcess = ({ workflowId, taskId, invocationId = null, task,
         const error = `Task exceeded its ${seconds} second timeout`;
         controller.abort(new Error(error));
         child.kill("SIGTERM");
-        settle({ status: "failed", error, diagnostics: { phase: "timeout", code: "task_timeout", message: error } });
+        void settle({ status: "failed", error, diagnostics: { phase: "timeout", code: "task_timeout", message: error } });
       }, timeoutMs);
     }
 
@@ -265,19 +336,19 @@ export const runAgentProcess = ({ workflowId, taskId, invocationId = null, task,
         void runTool(entry, message);
         return;
       }
-      if (message?.type === "completed") settle({ status: "completed", output: message.output });
-      if (message?.type === "blocked") settle({ status: "blocked", error: message.error, approvalId: message.approvalId ?? null });
-      if (message?.type === "failed") settle({ status: "failed", error: message.error, diagnostics: isObject(message.diagnostics) ? message.diagnostics : null });
+      if (message?.type === "completed") void settle({ status: "completed", output: message.output });
+      if (message?.type === "blocked") void settle({ status: "blocked", error: message.error, approvalId: message.approvalId ?? null });
+      if (message?.type === "failed") void settle({ status: "failed", error: message.error, diagnostics: isObject(message.diagnostics) ? message.diagnostics : null });
     });
     child.on("error", error => {
       const message = error instanceof Error ? error.message : String(error);
-      settle({ status: "failed", error: message, diagnostics: { phase: "process", code: "agent_process_error", message } });
+      void settle({ status: "failed", error: message, diagnostics: { phase: "process", code: "agent_process_error", message } });
     });
     child.on("exit", (code, signal) => {
       if (entry.settled) return;
       const cancelled = controller.signal.aborted;
       const error = cancelled ? String(controller.signal.reason ?? "Workflow cancelled") : `Agent process exited unexpectedly (${signal ?? code ?? "unknown"})`;
-      settle(cancelled
+      void settle(cancelled
         ? { status: "cancelled", error }
         : { status: "failed", error, diagnostics: { phase: "process", code: "agent_process_exit", message: error } });
     });
@@ -295,6 +366,7 @@ export const runAgentProcess = ({ workflowId, taskId, invocationId = null, task,
         completion: task.completion ?? "",
         input: structuredClone(task.input ?? {}),
         knowledge: getKnowledge(),
+        workspaceDir,
       },
     });
   });
