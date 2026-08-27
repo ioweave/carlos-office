@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { IconCpu, IconPlus, IconRefresh, IconServer, IconTrash, IconX } from "@tabler/icons-react";
+import {
+  IconCpu,
+  IconPencil,
+  IconPlugConnected,
+  IconPlus,
+  IconRefresh,
+  IconServer,
+  IconTrash,
+  IconX,
+} from "@tabler/icons-react";
 import { toast } from "sonner";
 
 import api, { endpoints } from "../api";
@@ -7,7 +16,13 @@ import FilterableSortableTable from "../components/FilterableSortableTable";
 import "../styles/providers.scss";
 
 const CAPABILITIES = ["thinking", "vision", "audio", "embeddings"];
-const emptyProvider = { name: "", type: "ollama", baseUrl: "http://localhost:11434/api", apiKeyEnv: "OLLAMA_API_KEY" };
+const emptyProvider = {
+  name: "",
+  type: "ollama",
+  baseUrl: "http://localhost:11434/api",
+  credentialService: "",
+  enabled: true,
+};
 const emptyModel = { provider: "", name: "", location: "local", parameters: "", supportedCapabilities: [] };
 
 const formatParameters = value => {
@@ -42,9 +57,12 @@ const capabilityFilterOptions = [
 
 export default function ProvidersPage() {
   const [providers, setProviders] = useState([]);
+  const [credentials, setCredentials] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(new Set());
   const [providerFormOpen, setProviderFormOpen] = useState(false);
+  const [editingProvider, setEditingProvider] = useState(null);
+  const [testingProvider, setTestingProvider] = useState(false);
   const [modelFormOpen, setModelFormOpen] = useState(false);
   const [providerDraft, setProviderDraft] = useState(emptyProvider);
   const [modelDraft, setModelDraft] = useState(emptyModel);
@@ -52,9 +70,14 @@ export default function ProvidersPage() {
   const load = useCallback(async (refresh = false) => {
     setLoading(true);
     try {
-      setProviders((await api.get(endpoints.providers(refresh))).data || []);
+      const [providerResponse, credentialResponse] = await Promise.all([
+        api.get(endpoints.providers(refresh)),
+        api.get(endpoints.credentials()),
+      ]);
+      setProviders(providerResponse.data || []);
+      setCredentials(credentialResponse.data || []);
     } catch (error) {
-      toast.error(error.response?.data?.error || "Could not load provider models.");
+      toast.error(error.response?.data?.error || "Could not load provider configuration.");
     } finally {
       setLoading(false);
     }
@@ -95,16 +118,53 @@ export default function ProvidersPage() {
     }
   }, [replaceModel]);
 
-  const registerProvider = async event => {
+  const openNewProvider = () => {
+    setEditingProvider(null);
+    setProviderDraft(emptyProvider);
+    setProviderFormOpen(true);
+  };
+
+  const openProviderEditor = provider => {
+    setEditingProvider(provider.provider);
+    setProviderDraft({
+      name: provider.provider,
+      type: provider.type || "ollama",
+      baseUrl: provider.baseUrl || "",
+      credentialService: provider.credentialService || "",
+      enabled: provider.enabled !== false,
+    });
+    setProviderFormOpen(true);
+  };
+
+  const closeProviderEditor = () => {
+    setProviderFormOpen(false);
+    setEditingProvider(null);
+    setProviderDraft(emptyProvider);
+  };
+
+  const saveProvider = async event => {
     event.preventDefault();
     try {
-      const response = await api.post(endpoints.providers(), providerDraft);
+      const response = editingProvider
+        ? await api.patch(endpoints.provider(editingProvider), providerDraft)
+        : await api.post(endpoints.providers(), providerDraft);
       setProviders(response.data || []);
-      setProviderDraft(emptyProvider);
-      setProviderFormOpen(false);
-      toast.success("Provider registered. Restart the backend before assigning it to Nora.");
+      closeProviderEditor();
+      toast.success(editingProvider ? "Provider updated. Nora reloaded the endpoint." : "Provider registered. Nora reloaded the registry.");
     } catch (error) {
-      toast.error(error.response?.data?.error || "Could not register provider.");
+      toast.error(error.response?.data?.error || "Could not save provider.");
+    }
+  };
+
+  const testConnection = async () => {
+    setTestingProvider(true);
+    try {
+      const result = (await api.post(endpoints.providerTest(), providerDraft)).data;
+      toast.success(`Connected · ${result.modelCount} model${result.modelCount === 1 ? "" : "s"} · ${result.latencyMs} ms`);
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Provider connection failed.");
+    } finally {
+      setTestingProvider(false);
     }
   };
 
@@ -115,7 +175,7 @@ export default function ProvidersPage() {
       setProviders(response.data || []);
       setModelDraft(current => ({ ...emptyModel, provider: current.provider }));
       setModelFormOpen(false);
-      toast.success("Model registered. Restart the backend before assigning it to Nora.");
+      toast.success("Model registered and available to routing.");
     } catch (error) {
       toast.error(error.response?.data?.error || "Could not register model.");
     }
@@ -125,6 +185,7 @@ export default function ProvidersPage() {
     if (provider.builtIn || !window.confirm(`Remove provider ${provider.provider}?`)) return;
     try {
       setProviders((await api.delete(endpoints.provider(provider.provider))).data || []);
+      toast.success("Provider removed and Nora reloaded the registry.");
     } catch (error) {
       toast.error(error.response?.data?.error || `Could not remove ${provider.provider}.`);
     }
@@ -231,12 +292,12 @@ export default function ProvidersPage() {
     <div className="workspace-page providers-page">
       <header className="page-header">
         <div className="page-header__copy">
-          <span className="eyebrow">Model routing policy</span>
+          <span className="eyebrow">Local provider registry</span>
           <h1>Providers</h1>
-          <p>Register model endpoints, add models, and control which capabilities Nora may route to them.</p>
+          <p>Endpoints and model preferences are stored locally in Carlos Office. Provider credentials remain in the local credential store and are never returned to the browser.</p>
         </div>
         <div className="page-header__actions">
-          <button type="button" className="button button--quiet" onClick={() => setProviderFormOpen(true)}><IconPlus size={15} /> Provider</button>
+          <button type="button" className="button button--quiet" onClick={openNewProvider}><IconPlus size={15} /> Provider</button>
           <button type="button" className="button button--primary" onClick={() => { setModelDraft(current => ({ ...current, provider: current.provider || providers[0]?.provider || "" })); setModelFormOpen(true); }} disabled={!providers.length}><IconPlus size={15} /> Model</button>
           <button type="button" className="icon-button" onClick={() => void load(true)} disabled={loading} aria-label="Refresh provider models"><IconRefresh size={18} /></button>
         </div>
@@ -249,25 +310,59 @@ export default function ProvidersPage() {
             <div className="provider-card__copy">
               <strong>{provider.provider}</strong>
               <span>{provider.type} · {provider.baseUrl}</span>
-              {provider.apiKeyEnv && <small>API key env: {provider.apiKeyEnv}</small>}
+              <small>{provider.credentialService ? `Credential: ${provider.credentialService}` : "No authentication credential"}</small>
               {provider.error && <small className="provider-card__error">{provider.error}</small>}
             </div>
             <span className={`status-pill ${provider.available ? "status-pill--completed" : "status-pill--failed"}`}>{provider.available ? "Available" : provider.enabled ? "Offline" : "Disabled"}</span>
+            <button type="button" className="icon-button" onClick={() => openProviderEditor(provider)} title="Edit provider" aria-label={`Edit ${provider.provider}`}><IconPencil size={15} /></button>
             {!provider.builtIn && <button type="button" className="icon-button" onClick={() => void removeProvider(provider)} aria-label={`Remove ${provider.provider}`}><IconTrash size={15} /></button>}
           </article>
         ))}
       </section>
 
       {providerFormOpen && (
-        <form className="provider-editor panel" onSubmit={registerProvider}>
-          <div className="panel__header"><div><span className="eyebrow">Registry</span><h2>Register provider</h2></div><button type="button" className="icon-button" onClick={() => setProviderFormOpen(false)}><IconX size={17} /></button></div>
-          <div className="provider-editor__grid">
-            <label className="field"><span>Name</span><input value={providerDraft.name} onChange={event => setProviderDraft(current => ({ ...current, name: event.target.value }))} placeholder="ollama-cloud" required /></label>
-            <label className="field"><span>Adapter</span><select value={providerDraft.type} onChange={event => setProviderDraft(current => ({ ...current, type: event.target.value }))}><option value="ollama">Ollama / Ollama-compatible</option></select></label>
-            <label className="field provider-editor__wide"><span>Base URL</span><input value={providerDraft.baseUrl} onChange={event => setProviderDraft(current => ({ ...current, baseUrl: event.target.value }))} placeholder="http://localhost:11434/api" required /></label>
-            <label className="field provider-editor__wide"><span>API key environment variable · optional</span><input value={providerDraft.apiKeyEnv} onChange={event => setProviderDraft(current => ({ ...current, apiKeyEnv: event.target.value }))} placeholder="OLLAMA_API_KEY" /></label>
+        <form className="provider-editor panel" onSubmit={saveProvider}>
+          <div className="panel__header">
+            <div><span className="eyebrow">Local registry</span><h2>{editingProvider ? `Edit ${editingProvider}` : "Register provider"}</h2></div>
+            <button type="button" className="icon-button" onClick={closeProviderEditor}><IconX size={17} /></button>
           </div>
-          <footer className="form-actions"><button type="button" className="button button--quiet" onClick={() => setProviderFormOpen(false)}>Cancel</button><button type="submit" className="button button--primary">Register provider</button></footer>
+          <div className="provider-editor__grid">
+            <label className="field">
+              <span>Name</span>
+              <input value={providerDraft.name} onChange={event => setProviderDraft(current => ({ ...current, name: event.target.value }))} placeholder="ollama-lan" required disabled={Boolean(editingProvider)} />
+              {editingProvider && <small>Provider identity is stable; edit the endpoint instead of renaming it.</small>}
+            </label>
+            <label className="field">
+              <span>Adapter</span>
+              <select value={providerDraft.type} onChange={event => setProviderDraft(current => ({ ...current, type: event.target.value }))}>
+                <option value="ollama">Ollama / Ollama-compatible</option>
+              </select>
+            </label>
+            <label className="field provider-editor__wide">
+              <span>Base URL</span>
+              <input value={providerDraft.baseUrl} onChange={event => setProviderDraft(current => ({ ...current, baseUrl: event.target.value }))} placeholder="http://192.168.1.50:11434/api" required />
+              <small>Use the provider endpoint reachable from the backend machine. LAN and custom HTTP/HTTPS URLs are supported.</small>
+            </label>
+            <label className="field provider-editor__wide">
+              <span>Authentication credential · optional</span>
+              <select value={providerDraft.credentialService} onChange={event => setProviderDraft(current => ({ ...current, credentialService: event.target.value }))}>
+                <option value="">None</option>
+                {credentials.map(credential => <option key={credential.service} value={credential.service}>{credential.service} · {credential.type}</option>)}
+              </select>
+              <small>Only the credential reference is stored with the provider. Secrets stay in the local credential table.</small>
+            </label>
+            <label className="provider-editor__enabled">
+              <input type="checkbox" checked={providerDraft.enabled} onChange={event => setProviderDraft(current => ({ ...current, enabled: event.target.checked }))} />
+              Enabled
+            </label>
+          </div>
+          <footer className="form-actions">
+            <button type="button" className="button button--quiet" onClick={closeProviderEditor}>Cancel</button>
+            <button type="button" className="button button--quiet" onClick={() => void testConnection()} disabled={testingProvider || !providerDraft.name || !providerDraft.baseUrl}>
+              <IconPlugConnected size={15} /> {testingProvider ? "Testing…" : "Test connection"}
+            </button>
+            <button type="submit" className="button button--primary">{editingProvider ? "Save provider" : "Register provider"}</button>
+          </footer>
         </form>
       )}
 
@@ -288,7 +383,7 @@ export default function ProvidersPage() {
       {loading && !providers.length ? (
         <div className="page-state"><span className="spinner" /> Loading provider registry</div>
       ) : !rows.length ? (
-        <div className="empty-state"><IconCpu size={28} stroke={1.4} /><strong>No models registered or discovered</strong><span>The provider remains visible above even when its endpoint is offline. Add a model manually or fix the endpoint and refresh.</span></div>
+        <div className="empty-state"><IconCpu size={28} stroke={1.4} /><strong>No models registered or discovered</strong><span>The provider remains visible above even when its endpoint is offline. Add a model manually or edit the endpoint and refresh.</span></div>
       ) : (
         <FilterableSortableTable rows={rows} columns={columns} filters={filters} filtering sorting defaultSort={{ key: "provider", direction: "asc" }} rowKey={row => `${row.provider}:${row.name}`} emptyMessage="No models match the current filters." />
       )}
