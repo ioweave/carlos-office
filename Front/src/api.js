@@ -63,6 +63,7 @@ export const endpoints = {
 
   providers: (refresh = false) => `/providers${refresh ? "?refresh=1" : ""}`,
   provider: provider => `/providers/${encodeURIComponent(provider)}`,
+  providerTest: () => "/providers/test-connection",
   providerModels: provider => `/providers/${encodeURIComponent(provider)}/models`,
   providerModel: (provider, model) => `/providers/${encodeURIComponent(provider)}/models/${encodeURIComponent(model)}`,
 
