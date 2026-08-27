@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   IconAlertTriangle,
   IconCheck,
@@ -16,8 +16,6 @@ import { toast } from "sonner";
 import api, { endpoints } from "../api";
 import { useAppContext } from "../AppContext";
 import "../styles/workflow-chat-card.scss";
-
-const TERMINAL_TASK_STATUSES = new Set(["completed", "skipped", "failed", "cancelled"]);
 
 const humanizeId = id => String(id || "")
   .replace(/[_-]+/g, " ")
@@ -161,6 +159,15 @@ const compactResult = result => {
   }
 };
 
+const reconcileWorkflowMessages = (thread, workflowId) => {
+  if (!thread) return;
+  const messages = [...thread.querySelectorAll(".message[data-workflow-message-id]")]
+    .filter(message => message.dataset.workflowMessageId === workflowId);
+  messages.forEach((message, index) => {
+    message.hidden = index > 0;
+  });
+};
+
 const Marker = ({ status }) => {
   if (status === "completed") return <IconCheck size={13} stroke={2.5} />;
   if (status === "failed") return <IconX size={13} stroke={2.5} />;
@@ -173,6 +180,7 @@ const Marker = ({ status }) => {
 export default function WorkflowLink({ workflowId, onOpen }) {
   const { officeState } = useAppContext();
   const [busy, setBusy] = useState("");
+  const rootRef = useRef(null);
   const workflow = (officeState.workflows || []).find(item => item.id === workflowId) || null;
   const tasks = useMemo(() => orderedTasks(workflow), [workflow]);
   const status = workflow?.status || "unknown";
@@ -188,6 +196,19 @@ export default function WorkflowLink({ workflowId, onOpen }) {
     .filter(Boolean);
   const result = compactResult(workflow?.result);
   const title = workflow?.process || workflow?.name || workflow?.purpose || "Workflow execution";
+
+  useEffect(() => {
+    const article = rootRef.current?.closest?.(".message");
+    const thread = article?.closest?.(".chat-thread__messages");
+    if (!article || !thread) return undefined;
+    article.dataset.workflowMessageId = workflowId;
+    reconcileWorkflowMessages(thread, workflowId);
+    return () => {
+      article.hidden = false;
+      delete article.dataset.workflowMessageId;
+      reconcileWorkflowMessages(thread, workflowId);
+    };
+  }, [workflowId]);
 
   const perform = async (key, request, success) => {
     if (!workflowId || busy) return;
@@ -210,7 +231,7 @@ export default function WorkflowLink({ workflowId, onOpen }) {
 
   if (!workflow) {
     return (
-      <button type="button" className="workflow-chat-card workflow-chat-card--unknown" onClick={() => onOpen?.(workflowId)}>
+      <button ref={rootRef} type="button" className="workflow-chat-card workflow-chat-card--unknown" onClick={() => onOpen?.(workflowId)}>
         <IconRoute size={16} />
         <span>Workflow {workflowId}</span>
         <small>Open Operations</small>
@@ -219,7 +240,7 @@ export default function WorkflowLink({ workflowId, onOpen }) {
   }
 
   return (
-    <section className={`workflow-chat-card workflow-chat-card--${status}`} aria-label={`${statusLabel(status)} Workflow ${workflowId}`}>
+    <section ref={rootRef} className={`workflow-chat-card workflow-chat-card--${status}`} aria-label={`${statusLabel(status)} Workflow ${workflowId}`}>
       <header className="workflow-chat-card__header">
         <div className="workflow-chat-card__identity">
           <span className="workflow-chat-card__icon"><IconRoute size={15} stroke={2} /></span>
