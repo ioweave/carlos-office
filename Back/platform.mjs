@@ -2,7 +2,8 @@ import { createServer } from "node:http";
 
 import config from "./src/config.mjs";
 import { createRouter } from "./src/Router.mjs";
-import { listModels as listNoraModels, stopNora } from "./src/runtime/NoraProcess.mjs";
+import { listModels as listNoraModels, startNora, stopNora } from "./src/runtime/NoraProcess.mjs";
+import { initializeDatabase } from "./src/services/DatabaseService.mjs";
 import { loadKnowledge } from "./src/services/KnowledgeService.mjs";
 import { createOfficeStateService } from "./src/services/OfficeStateService.mjs";
 import { attachOfficeStateWebSocket } from "./src/services/OfficeStateWebSocketService.mjs";
@@ -28,6 +29,7 @@ import { createVariableController } from "./src/controllers/VariableController.m
 import * as engine from "./src/services/ProcessEngine.mjs";
 
 await prepareVaultStructure();
+initializeDatabase();
 await loadKnowledge();
 await events.loadEvents();
 await authorization.loadAuthorizations();
@@ -100,9 +102,6 @@ const normalizeAcceptedFrontendOrigin = (req, res = null) => {
     || !isLocalNetworkOrigin(actualOrigin)
   ) return false;
 
-  // Existing transport controllers intentionally work with one canonical origin.
-  // Normalize trusted LAN origins at the ingress boundary, then reflect the real
-  // browser origin in CORS responses. WebSocket upgrades only need normalization.
   req.headers.origin = config.frontendOrigin;
   if (!res) return true;
 
@@ -165,8 +164,21 @@ const conversationResources = conversations.createConversationResourceController
   allowedOrigin: config.frontendOrigin,
   nora,
 });
-const providerResources = providers.createProviderResourceController({ allowedOrigin: config.frontendOrigin });
-const credentials = createCredentialController({ allowedOrigin: config.frontendOrigin });
+
+const reloadProviderRuntime = async () => {
+  await providers.loadProviderPreferences();
+  stopNora();
+  await startNora();
+};
+
+const providerResources = providers.createProviderResourceController({
+  allowedOrigin: config.frontendOrigin,
+  onConfigurationChanged: reloadProviderRuntime,
+});
+const credentials = createCredentialController({
+  allowedOrigin: config.frontendOrigin,
+  onConfigurationChanged: reloadProviderRuntime,
+});
 const knowledge = createKnowledgeController({ allowedOrigin: config.frontendOrigin });
 const variables = createVariableController({ allowedOrigin: config.frontendOrigin });
 const officeStateNora = {
