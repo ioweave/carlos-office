@@ -14,7 +14,6 @@ const CAPABILITIES = ["thinking", "vision", "audio", "embeddings"];
 const clean = value => typeof value === "string" ? value.trim() : "";
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const boolInt = value => value === true ? 1 : value === false ? 0 : null;
-const quoteIdentifier = value => `"${String(value).replaceAll('"', '""')}"`;
 
 const configureConnection = (db, { initialize = false } = {}) => {
   db.exec("PRAGMA foreign_keys = ON");
