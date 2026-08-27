@@ -249,6 +249,13 @@ const validateProviderDraft = (definition, { existingName = null } = {}) => {
   };
 };
 
+const validateRuntimeBinding = normalized => {
+  createProviderFromDefinition({
+    ...normalized,
+    builtIn: normalized.name === "ollama",
+  });
+};
+
 const touchProviderState = () => {
   catalogLoadedAt = 0;
   notifyOfficeStateChanged(["models", "nora"]);
@@ -258,6 +265,7 @@ export const registerProvider = async definition => {
   await ensurePreferences();
   const normalized = validateProviderDraft(definition);
   if (isObject(preferences[normalized.name])) throw new Error(`Provider already exists: ${normalized.name}`);
+  validateRuntimeBinding(normalized);
   preferences[normalized.name] = {
     type: normalized.type,
     baseUrl: normalized.baseUrl,
@@ -281,6 +289,7 @@ export const updateProvider = async (name, changes) => {
   if (!normalized.enabled && nora?.provider === providerName) {
     throw new Error("Change Nora's default provider before disabling the provider she currently uses");
   }
+  validateRuntimeBinding(normalized);
   preferences[providerName] = {
     ...current,
     type: normalized.type,
