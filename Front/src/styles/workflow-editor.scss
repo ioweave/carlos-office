@@ -428,14 +428,39 @@
   bottom: 16px;
   width: min(390px, calc(100% - 32px));
   min-width: 0;
+  overflow: hidden;
   border: 1px solid var(--color-border);
   border-radius: 12px;
   box-shadow: 0 14px 36px color-mix(in srgb, var(--color-text) 15%, transparent);
   z-index: 40;
 }
 
+.operations-studio__tasks .inspector-panel__header {
+  flex: 0 0 auto;
+}
+
+.inspector-panel__title-row {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.inspector-panel__title-row h2 {
+  min-width: 0;
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+.inspector-panel__title-row .icon-button {
+  flex: 0 0 auto;
+}
+
 .workflow-inspector-tabs {
   display: flex;
+  flex: 0 0 auto;
   gap: 4px;
   margin: -4px 0 12px;
 }
@@ -453,6 +478,17 @@
   background: var(--color-accent-soft);
   color: var(--color-accent);
   font-weight: 700;
+}
+
+.operations-studio__tasks .workflow-run-inspector,
+.operations-studio__tasks .workflow-edge-inspector,
+.operations-studio__tasks .execution-group-form {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-right: 4px;
 }
 
 .workflow-compact-meta {
