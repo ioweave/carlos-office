@@ -1,11 +1,12 @@
 import { createSign } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
-const BACK_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const DEFAULT_DB_PATH = resolve(BACK_ROOT, ".carlos-office", "credentials.db");
+import {
+  DATABASE_PATH,
+  ensureCredentialSchema,
+  withDatabase,
+} from "./DatabaseService.mjs";
+
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_WORKSPACE_TYPE = "google-workspace";
 const AUTH_TYPES = new Set(["bearer", "api-key", "basic", "custom", GOOGLE_WORKSPACE_TYPE]);
@@ -139,22 +140,6 @@ const parseGoogleServiceAccount = value => {
   return parsed;
 };
 
-const ensureSchema = db => {
-  db.exec(`CREATE TABLE IF NOT EXISTS credentials (
-    service TEXT PRIMARY KEY,
-    token TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )`);
-
-  const columns = new Set(db.prepare("PRAGMA table_info(credentials)").all().map(column => column.name));
-  if (!columns.has("type")) db.exec("ALTER TABLE credentials ADD COLUMN type TEXT NOT NULL DEFAULT 'bearer'");
-  if (!columns.has("allowed_hosts")) db.exec("ALTER TABLE credentials ADD COLUMN allowed_hosts TEXT NOT NULL DEFAULT '[]'");
-  if (!columns.has("header_name")) db.exec("ALTER TABLE credentials ADD COLUMN header_name TEXT");
-  if (!columns.has("scheme")) db.exec("ALTER TABLE credentials ADD COLUMN scheme TEXT");
-  if (!columns.has("subject")) db.exec("ALTER TABLE credentials ADD COLUMN subject TEXT");
-  if (!columns.has("scopes")) db.exec("ALTER TABLE credentials ADD COLUMN scopes TEXT NOT NULL DEFAULT '[]'");
-};
-
 const toMetadata = row => {
   if (!row) return null;
   const type = normalizeType(row.type);
@@ -232,23 +217,17 @@ const signedGoogleAssertion = ({ key, subject, scopes, nowMs }) => {
 };
 
 export const createCredentialService = ({
-  dbPath = DEFAULT_DB_PATH,
+  dbPath = DATABASE_PATH,
   fetchImpl = globalThis.fetch,
   now = () => Date.now(),
 } = {}) => {
   const path = resolve(dbPath);
   const googleTokenCache = new Map();
 
-  const withDb = callback => {
-    mkdirSync(dirname(path), { recursive: true });
-    const db = new DatabaseSync(path);
-    try {
-      ensureSchema(db);
-      return callback(db);
-    } finally {
-      db.close();
-    }
-  };
+  const withDb = callback => withDatabase(db => {
+    ensureCredentialSchema(db);
+    return callback(db);
+  }, { path });
 
   const readRow = service => withDb(db => db.prepare("SELECT * FROM credentials WHERE service = ?").get(service) ?? null);
 
@@ -400,7 +379,7 @@ export const createCredentialService = ({
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
-        grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        grant_type: "urn:ietf:params:oauth-grant-type:jwt-bearer",
         assertion,
       }).toString(),
       redirect: "error",
@@ -437,33 +416,29 @@ export const createCredentialService = ({
     return accessToken;
   };
 
-  const applyCredential = async ({ service, url, headers = {} }) => {
+  const validateCredentialTarget = (service, url) => {
     const name = clean(service);
     if (!name) throw new Error("Credential service is required");
-
     let target;
-    try {
-      target = new URL(url);
-    } catch {
-      throw new Error(`Invalid credential target URL: ${url}`);
-    }
-
+    try { target = new URL(url); } catch { throw new Error(`Invalid credential target URL: ${url}`); }
     const row = readRow(name);
     if (!row) throw new Error(`No credential stored for service "${name}"`);
-
     const metadata = toMetadata(row);
     const hostname = target.hostname.toLowerCase();
-    if (!metadata.allowedHosts.length) {
-      throw new Error(`Credential "${name}" has no allowed hosts configured`);
-    }
+    if (!metadata.allowedHosts.length) throw new Error(`Credential "${name}" has no allowed hosts configured`);
     if (!hostAllowed(hostname, metadata.allowedHosts)) {
       throw new Error(`Credential "${name}" is not allowed for host "${hostname}"`);
     }
+    return { row, metadata, target };
+  };
+
+  const applyCredential = async ({ service, url, headers = {} }) => {
+    const { row, metadata, target } = validateCredentialTarget(service, url);
 
     let value = row.token;
     if (metadata.type === GOOGLE_WORKSPACE_TYPE) {
       if (!googleWorkspaceTargetAllowed(target)) {
-        throw new Error(`Credential "${name}" may only access approved Google Workspace API routes`);
+        throw new Error(`Credential "${row.service}" may only access approved Google Workspace API routes`);
       }
       value = await getGoogleAccessToken(row, metadata);
     }
@@ -476,6 +451,15 @@ export const createCredentialService = ({
     return result;
   };
 
+  const getProviderApiKey = ({ service, url }) => {
+    if (!clean(service)) return null;
+    const { row, metadata } = validateCredentialTarget(service, url);
+    if (metadata.type !== "bearer" || metadata.headerName.toLowerCase() !== "authorization" || metadata.scheme.toLowerCase() !== "bearer") {
+      throw new Error(`Provider credential "${row.service}" must use Bearer authorization for the Ollama-compatible adapter`);
+    }
+    return row.token;
+  };
+
   return {
     dbPath: path,
     listCredentials,
@@ -483,6 +467,7 @@ export const createCredentialService = ({
     setCredential,
     deleteCredential,
     applyCredential,
+    getProviderApiKey,
   };
 };
 
@@ -493,3 +478,4 @@ export const getCredential = credentials.getCredential;
 export const setCredential = credentials.setCredential;
 export const deleteCredential = credentials.deleteCredential;
 export const applyCredential = credentials.applyCredential;
+export const getProviderApiKey = credentials.getProviderApiKey;
