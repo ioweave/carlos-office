@@ -383,6 +383,52 @@ export const addMessage = async (
   return structuredClone(message);
 };
 
+export const upsertNoraWorkflowMessage = async (
+  conversationId,
+  workflowId,
+  content,
+  artifacts = [],
+) => {
+  if (!workflowId || typeof workflowId !== "string" || !workflowId.trim()) {
+    throw new Error("Workflow ID must be a non-empty string");
+  }
+  if (typeof content !== "string" || !content.trim()) {
+    throw new Error("Workflow message content must be a non-empty string");
+  }
+  if (!Array.isArray(artifacts)) throw new Error("Workflow message artifacts must be an array");
+  for (const artifactId of artifacts) {
+    if (!(await getArtifact(conversationId, artifactId))) throw new Error(`Unknown artifact: ${artifactId}`);
+  }
+
+  const current = await ensureLoaded(conversationId);
+  if (!current.workflows.includes(workflowId)) throw new Error(`Conversation does not track Workflow: ${workflowId}`);
+  const conversation = structuredClone(current);
+  const message = [...conversation.messages].reverse().find(item => (
+    item.actor === "Nora" && item.workflowId === workflowId
+  ));
+
+  if (message) {
+    message.content = content.trim();
+    message.artifacts = [...new Set([...(message.artifacts ?? []), ...artifacts])];
+    message.at = new Date().toISOString();
+    await commitConversation(conversation);
+    return structuredClone(message);
+  }
+
+  const created = {
+    id: normalizeMessageId(null),
+    actor: "Nora",
+    at: new Date().toISOString(),
+    content: content.trim(),
+    attachments: [],
+    artifacts: [...artifacts],
+    workflowId: workflowId.trim(),
+  };
+  conversation.messages.push(created);
+  await commitConversation(conversation);
+  return structuredClone(created);
+};
+
 export const addArtifactToMessage = async (conversationId, messageId, artifactId) => {
   if (!(await getArtifact(conversationId, artifactId))) throw new Error(`Unknown artifact: ${artifactId}`);
 
