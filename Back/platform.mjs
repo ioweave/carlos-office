@@ -43,6 +43,88 @@ await conversations.migrateLegacyCarlosAttachments();
 await schedules.loadSchedules();
 await nora.initializeNora();
 
+const normalizeHostname = hostname => String(hostname || "")
+  .trim()
+  .toLowerCase()
+  .replace(/^\[/, "")
+  .replace(/\]$/, "");
+
+const isPrivateIpv4 = hostname => {
+  const parts = hostname.split(".");
+  if (parts.length !== 4 || parts.some(part => !/^\d{1,3}$/.test(part))) return false;
+  const octets = parts.map(Number);
+  if (octets.some(octet => octet < 0 || octet > 255)) return false;
+  const [first, second] = octets;
+  return first === 10
+    || first === 127
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 192 && second === 168)
+    || (first === 169 && second === 254);
+};
+
+const isPrivateIpv6 = hostname => (
+  hostname === "::1"
+  || /^(?:fc|fd)[0-9a-f:]*$/i.test(hostname)
+  || /^fe[89ab][0-9a-f:]*$/i.test(hostname)
+);
+
+const isLocalNetworkOrigin = origin => {
+  let parsed;
+  try { parsed = new URL(origin); } catch { return false; }
+  if (!["http:", "https:"].includes(parsed.protocol)) return false;
+
+  const hostname = normalizeHostname(parsed.hostname);
+  return hostname === "localhost"
+    || hostname.endsWith(".localhost")
+    || hostname.endsWith(".local")
+    || isPrivateIpv4(hostname)
+    || isPrivateIpv6(hostname);
+};
+
+const rewriteCorsOrigin = (headers, actualOrigin) => {
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) return headers;
+  const rewritten = { ...headers };
+  for (const [name, value] of Object.entries(rewritten)) {
+    if (name.toLowerCase() === "access-control-allow-origin" && value === config.frontendOrigin) {
+      rewritten[name] = actualOrigin;
+    }
+  }
+  return rewritten;
+};
+
+const normalizeAcceptedFrontendOrigin = (req, res = null) => {
+  const actualOrigin = req.headers.origin ?? null;
+  if (
+    !actualOrigin
+    || actualOrigin === config.frontendOrigin
+    || !isLocalNetworkOrigin(actualOrigin)
+  ) return false;
+
+  // Existing transport controllers intentionally work with one canonical origin.
+  // Normalize trusted LAN origins at the ingress boundary, then reflect the real
+  // browser origin in CORS responses. WebSocket upgrades only need normalization.
+  req.headers.origin = config.frontendOrigin;
+  if (!res) return true;
+
+  const writeHead = res.writeHead;
+  res.writeHead = function writeHeadWithLanOrigin(statusCode, statusMessage, headers) {
+    if (typeof statusMessage === "string") {
+      return writeHead.call(this, statusCode, statusMessage, rewriteCorsOrigin(headers, actualOrigin));
+    }
+    return writeHead.call(this, statusCode, rewriteCorsOrigin(statusMessage, actualOrigin));
+  };
+
+  const setHeader = res.setHeader;
+  res.setHeader = function setHeaderWithLanOrigin(name, value) {
+    const nextValue = String(name).toLowerCase() === "access-control-allow-origin"
+      && value === config.frontendOrigin
+      ? actualOrigin
+      : value;
+    return setHeader.call(this, name, nextValue);
+  };
+  return true;
+};
+
 const runScheduledWorkflow = async workflow => {
   try {
     const execution = await nora.runWorkflow(workflow.id);
@@ -112,6 +194,8 @@ const officeState = createOfficeStateController({
 });
 
 const server = createServer((req, res) => {
+  normalizeAcceptedFrontendOrigin(req, res);
+
   if (conversationResources.matches(req)) {
     void conversationResources.handle(req, res);
     return;
@@ -137,6 +221,10 @@ const server = createServer((req, res) => {
     return;
   }
   void router(req, res);
+});
+
+server.prependListener("upgrade", req => {
+  normalizeAcceptedFrontendOrigin(req);
 });
 
 const officeStateSocket = attachOfficeStateWebSocket({
