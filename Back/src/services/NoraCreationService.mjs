@@ -108,7 +108,7 @@ const validateProcessDependencies = (
 };
 
 const workflowShape = '{"start":"start","end":"end","tasks":{"start":{"type":"start"},"inspect":{"type":"task","name":"Inspect files","objective":"Inspect the relevant files and report findings","tools":["read-file"]},"end":{"type":"end"}},"edges":[["start","inspect"],["inspect","end"]],"groups":[]}';
-const mapExample = '{"id":"map-items","type":"map","name":"For each item","members":["inspect"],"source":"upstream.list_items","itemAs":"item","indexAs":"index","concurrency":4,"throttle":{"requests":20,"windowMs":60000}}';
+const mapExample = '{"id":"map-items","type":"map","name":"Map items","members":["inspect"],"source":"upstream.list_items","itemAs":"item","indexAs":"index","concurrency":4,"throttle":{"requests":20,"windowMs":60000}}';
 const loopExample = '{"id":"loop-qc","type":"loop","name":"Quality control","members":["inspect"],"maxIterations":3,"minimumScore":0.85,"criteria":"The result must be complete, accurate, and satisfy the Task completion criteria."}';
 
 const graphRules = [
@@ -121,13 +121,17 @@ const graphRules = [
   "groups is optional and contains Map or Loop execution scopes. A Task or nested Group may directly belong to at most one Group.",
   "Start and end cannot be Group members. Group nesting must not contain cycles.",
   `Map Group shape: ${mapExample}`,
+  "Map is the only collection-iteration runtime primitive. There is no separate For Each implementation or Group type; 'for each' is descriptive wording only. Use type map in every case.",
   "A Map is an execution operator, never a visual or organizational grouping box. Never create a Map merely to label, group, or sequence Tasks.",
   "Create a Map only when its source is genuinely expected to resolve to an array and the enclosed executable Task or Tasks must run once per item.",
-  "For generated Workflows, prefer explicit Map source paths: workflow.<inputName> for Workflow inputs, or upstream.<producerTaskId/outputName> for arrays produced by an upstream Task. Never invent an unbound bare source name.",
-  "If a mapped Task declares an explicit inputs list, include the Map source path so the Map can resolve it at runtime.",
+  "Use canonical Map source paths. For a Workflow input use workflow.<inputName>. For an upstream Task value use upstream.<producerTaskId>. A nested suffix such as upstream.<producerTaskId>.<property> is valid only when the producer's structured data is an object that actually contains that array property.",
+  "Do not combine a producer Task ID and its declared output alias. Example: if Task list-assets has output assets and its data is the array, use upstream.list-assets (preferred) or the unique alias upstream.assets; never use upstream.list-assets.assets.",
+  "When a Task is intended to feed a Map directly, its objective/completion must require the Agent completion data field to contain the JSON array itself. Do not rely on a prose output that merely describes the items.",
+  "Prefer upstream.<producerTaskId> over output aliases because Task IDs are unambiguous. Never invent an unbound bare Map source name.",
+  "If a mapped Task declares an explicit inputs list, include the Map source path. Runtime can also resolve canonical Map sources from completed ancestor Task data, but the graph definition should still state the dependency explicitly.",
   "A Map containing exactly one executable Task is valid only for genuine fan-out/fan-in: an upstream collection is produced, that Task runs once per item, and downstream work outside the Map consumes the aggregate result. Otherwise omit the Map.",
-  "A Map iterates its source collection. concurrency is the shared maximum number of active child Task executions across the entire Map, including parallel branches and nested Groups.",
-  "Map throttle optionally limits new Task executions to requests per windowMs. For Each is simply Map with concurrency 1.",
+  "A Map iterates its source collection. concurrency is the shared maximum number of active child Task executions across the entire Map, including parallel branches and nested Groups. concurrency 1 means serial iteration; it does not create a different For Each primitive.",
+  "Map throttle optionally limits new Task executions to requests per windowMs.",
   "Tasks in one Map preserve their normal graph dependencies for each item. Nested Maps must obey both outer and inner concurrency/rate limits.",
   `Loop Group V1 shape: ${loopExample}`,
   "Loop V1 directly contains exactly one executable Task. Nora independently reviews and scores each candidate result. Rejected or mediocre work is rerun with Nora's feedback until accepted or maxIterations is reached.",
