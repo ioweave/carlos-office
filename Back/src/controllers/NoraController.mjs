@@ -9,6 +9,7 @@ import {
   getConversation,
   setConversationNoraModel,
   setConversationTitle,
+  upsertNoraWorkflowMessage,
 } from "./ConversationController.mjs";
 import { listEvents, recordEvent } from "./EventController.mjs";
 import {
@@ -54,6 +55,12 @@ const state = {
 };
 const workflowReports = new Map();
 const requestJobs = new Map();
+const WORKFLOW_SUMMARY_SCHEMA = Object.freeze({
+  type: "object",
+  properties: { summary: { type: "string" } },
+  required: ["summary"],
+  additionalProperties: false,
+});
 
 const TEXT_ATTACHMENT_TYPES = new Set([
   "application/json",
@@ -279,20 +286,15 @@ const addNoraMessage = async (
   workflowId,
 });
 
-const conversationTracksWorkflow = async (conversationId, workflowId) => {
-  const conversation = await getConversation(conversationId);
-  return Boolean(conversation?.workflows?.includes(workflowId))
-    && !(conversation?.messages ?? []).some(message => message.actor === "Nora" && message.workflowId === workflowId);
-};
-
 const addWorkflowNoraMessage = async (
   conversationId,
   workflowId,
   content,
   artifacts = [],
 ) => {
-  if (!(await conversationTracksWorkflow(conversationId, workflowId))) return null;
-  return addNoraMessage(conversationId, content, workflowId, artifacts);
+  const conversation = await getConversation(conversationId);
+  if (!conversation?.workflows?.includes(workflowId)) return null;
+  return upsertNoraWorkflowMessage(conversationId, workflowId, content, artifacts);
 };
 
 const workflowArtifactIds = workflow => [...new Set(
@@ -682,7 +684,9 @@ export const handleCarlosRequest = async ({
     let message = null;
 
     try {
-      message = await addNoraMessage(conversationId, `I couldn't complete that request. ${failure}`, activeWorkflowId);
+      message = activeWorkflowId
+        ? await addWorkflowNoraMessage(conversationId, activeWorkflowId, `I couldn't complete that request. ${failure}`)
+        : await addNoraMessage(conversationId, `I couldn't complete that request. ${failure}`);
     } catch (messageError) {
       console.error("[nora] Could not persist failure message.", {
         conversationId,
@@ -872,6 +876,44 @@ const resultSummary = result => {
   return "Workflow completed successfully.";
 };
 
+const readableWorkflowSummary = async (workflow, result) => {
+  const fallback = resultSummary(result);
+  if (typeof result === "string" && result.trim()) return fallback;
+  if (result == null) return fallback;
+
+  try {
+    const response = await decideInNoraProcess({
+      definition: getNora(),
+      selection: getWorkflowNoraSelection(workflow),
+      instruction: [
+        "Write the final answer to Carlos for this completed Workflow.",
+        "Use the Workflow result as the factual source. Do not invent facts that are not in it.",
+        "Explain the useful conclusion in normal readable prose, not as raw JSON.",
+        "Be concise but complete enough that Carlos does not need to open Operations to understand the result.",
+        "Do not narrate Workflow mechanics, Task execution, or the fact that you are summarizing structured data.",
+        "Return only an object with one string property named summary.",
+      ].join("\n"),
+      context: {
+        workflow: {
+          id: workflow.id,
+          process: workflow.process ?? null,
+          purpose: workflow.purpose ?? null,
+        },
+        result,
+      },
+      format: WORKFLOW_SUMMARY_SCHEMA,
+    });
+    const summary = typeof response?.summary === "string" ? response.summary.trim() : "";
+    return summary || fallback;
+  } catch (error) {
+    console.warn("[nora] Could not synthesize readable Workflow result; using raw result.", {
+      workflowId: workflow.id,
+      message: errorMessage(error),
+    });
+    return fallback;
+  }
+};
+
 export const summarizeWorkflow = async workflowId => {
   const workflow = getWorkflow(workflowId);
   if (!workflow) throw new Error(`Unknown Workflow: ${workflowId}`);
@@ -880,7 +922,8 @@ export const summarizeWorkflow = async workflowId => {
   const result = completedWorkflowResult(workflow);
   await setWorkflowResult(workflowId, result);
   await recordEvent("workflow.result_captured", { workflowId });
-  return { summary: resultSummary(result), result };
+  const summary = await readableWorkflowSummary(workflow, result);
+  return { summary, result };
 };
 
 export const createOrUpdateTool = async (name, source) => saveNoraTool(name, source);
