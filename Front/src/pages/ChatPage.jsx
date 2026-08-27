@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   IconArrowUp,
+  IconCopy,
   IconFile,
   IconFolder,
   IconMessageCircle,
@@ -8,7 +9,9 @@ import {
   IconPaperclip,
   IconPencil,
   IconPlus,
+  IconShare,
   IconTrash,
+  IconVolume,
   IconX,
 } from "@tabler/icons-react";
 import { toast } from "sonner";
@@ -68,6 +71,13 @@ const clipboardExtension = type => ({
   "image/webp": "webp",
 }[type] || "png");
 
+const speechText = value => String(value || "")
+  .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+  .replace(/```[\s\S]*?```/g, " code block ")
+  .replace(/[`*_>#~|-]+/g, " ")
+  .replace(/\s+/g, " ")
+  .trim();
+
 const mergeOptimisticConversation = (canonical, optimistic) => {
   if (!optimistic) return canonical;
   if (!canonical) return optimistic;
@@ -95,6 +105,7 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
   const [files, setFiles] = useState([]);
   const [sending, setSending] = useState(false);
   const [listening, setListening] = useState(false);
+  const [speakingMessageId, setSpeakingMessageId] = useState("");
   const [editingConversationId, setEditingConversationId] = useState("");
   const [editingTitleSurface, setEditingTitleSurface] = useState("");
   const [titleDraft, setTitleDraft] = useState("");
@@ -161,6 +172,8 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
 
   const openConversation = useCallback(id => {
     if (!id) return;
+    window.speechSynthesis?.cancel();
+    setSpeakingMessageId("");
     setActiveConversationId(id);
     setOptimisticConversation(null);
     setLocalAttachments([]);
@@ -201,11 +214,11 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
       if (thread) thread.scrollTop = thread.scrollHeight;
     });
     return () => cancelAnimationFrame(frame);
-  }, [conversation?.id, conversation?.messages?.length]);
+  }, [conversation?.id, conversation?.messages?.length, conversation?.messages?.at(-1)?.at]);
 
   useEffect(() => {
     if (activeConversationId) markConversationRead(activeConversationId);
-  }, [activeConversationId, conversation?.messages?.length, markConversationRead]);
+  }, [activeConversationId, conversation?.messages?.length, conversation?.messages?.at(-1)?.at, markConversationRead]);
 
   const stopListening = useCallback(() => {
     const recognition = speechRecognitionRef.current;
@@ -216,11 +229,14 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
   useEffect(() => () => {
     requestRef.current?.abort();
     try { speechRecognitionRef.current?.stop(); } catch {}
+    window.speechSynthesis?.cancel();
   }, []);
 
   const startNew = () => {
     if (sending || sendInFlightRef.current) return;
     stopListening();
+    window.speechSynthesis?.cancel();
+    setSpeakingMessageId("");
     setActiveConversationId("");
     setOptimisticConversation(null);
     setLocalAttachments([]);
@@ -504,6 +520,51 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
+  const copyMessage = async message => {
+    try {
+      await navigator.clipboard.writeText(message.content || "");
+      toast.success("Message copied.");
+    } catch {
+      toast.error("Could not copy message.");
+    }
+  };
+
+  const shareMessage = async message => {
+    const text = message.content || "";
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "Nora response", text });
+        return;
+      } catch (error) {
+        if (error?.name === "AbortError") return;
+      }
+    }
+    await copyMessage(message);
+  };
+
+  const toggleReadAloud = message => {
+    const synthesis = window.speechSynthesis;
+    if (!synthesis || typeof window.SpeechSynthesisUtterance !== "function") {
+      toast.error("Read aloud is not supported by this browser.");
+      return;
+    }
+    if (speakingMessageId === message.id && synthesis.speaking) {
+      synthesis.cancel();
+      setSpeakingMessageId("");
+      return;
+    }
+
+    synthesis.cancel();
+    const text = speechText(message.content);
+    if (!text) return;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = navigator.language || "en-US";
+    utterance.onend = () => setSpeakingMessageId(current => current === message.id ? "" : current);
+    utterance.onerror = () => setSpeakingMessageId(current => current === message.id ? "" : current);
+    setSpeakingMessageId(message.id);
+    synthesis.speak(utterance);
+  };
+
   const toggleSpeech = () => {
     if (listening) {
       stopListening();
@@ -705,11 +766,6 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
                     <header className="message__header">
                       <strong>{isCarlos ? "Carlos" : "Nora"}</strong>
                       <small>{message.pending ? "Sending…" : formatTime(message.at)}</small>
-                      {isCarlos && !editing && !message.pending && (
-                        <button type="button" className="message__edit" onClick={() => beginMessageEdit(message)} disabled={working} aria-label="Edit message" title="Edit message">
-                          <IconPencil size={13} />
-                        </button>
-                      )}
                     </header>
                     {editing ? (
                       <textarea
@@ -756,6 +812,19 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
                             <IconFile size={14} /> {artifact.name}
                           </button>
                         ))}
+                      </div>
+                    )}
+                    {!editing && !message.pending && (
+                      <div className={`message__actions ${isCarlos ? "message__actions--carlos" : "message__actions--nora"}`}>
+                        <button type="button" onClick={() => void copyMessage(message)} aria-label="Copy message" title="Copy"><IconCopy size={14} /></button>
+                        {isCarlos ? (
+                          <button type="button" onClick={() => beginMessageEdit(message)} disabled={working} aria-label="Edit message" title="Edit"><IconPencil size={14} /></button>
+                        ) : (
+                          <>
+                            <button type="button" onClick={() => void shareMessage(message)} aria-label="Share Nora response" title="Share"><IconShare size={14} /></button>
+                            <button type="button" className={speakingMessageId === message.id ? "message__action--active" : ""} onClick={() => toggleReadAloud(message)} aria-label={speakingMessageId === message.id ? "Stop read aloud" : "Read aloud"} title={speakingMessageId === message.id ? "Stop read aloud" : "Read aloud"}><IconVolume size={14} /></button>
+                          </>
+                        )}
                       </div>
                     )}
                   </article>
