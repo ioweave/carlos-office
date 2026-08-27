@@ -209,7 +209,10 @@ export const AppProvider = ({ children }) => {
       for (const id of previous.keys()) if (!next.has(id)) unread.delete(id);
       for (const [id, snapshot] of next) {
         const prior = previous.get(id);
-        if (!prior || snapshot.lastMessageId === prior.lastMessageId || snapshot.lastActor !== "Nora") continue;
+        const changed = !prior
+          || snapshot.lastMessageId !== prior.lastMessageId
+          || snapshot.lastMessageAt !== prior.lastMessageAt;
+        if (!changed || snapshot.lastActor !== "Nora") continue;
         if (id === visibleConversationId) unread.delete(id);
         else unread.add(id);
       }
