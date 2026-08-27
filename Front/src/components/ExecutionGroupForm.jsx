@@ -34,9 +34,10 @@ export default function ExecutionGroupForm({ group, onChange, onRemove, disabled
               type="text"
               value={group.source || ""}
               onChange={event => update({ source: event.target.value })}
-              placeholder="items or research.results"
+              placeholder="upstream.list-assets"
               disabled={disabled}
             />
+            <small>Use workflow.&lt;input&gt; or upstream.&lt;producer-task-id&gt;. Add a property suffix only when the producer data is actually an object containing that array.</small>
           </label>
           <label className="field">
             <span>Item variable</span>
@@ -58,7 +59,7 @@ export default function ExecutionGroupForm({ group, onChange, onRemove, disabled
               onChange={event => update({ concurrency: Math.max(1, Math.min(64, Math.round(number(event.target.value, 1)))) })}
               disabled={disabled}
             />
-            <small>Shared execution budget for all Tasks inside this Map, including nested branches.</small>
+            <small>Shared execution budget for all Tasks inside this Map, including nested branches. Concurrency 1 is serial Map execution; there is no separate For Each runtime type.</small>
           </label>
 
           <div className="execution-group-form__section">
