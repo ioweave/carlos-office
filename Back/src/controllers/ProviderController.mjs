@@ -1,12 +1,14 @@
-import { atomicWriteFile } from "../lib/AtomicFile.mjs";
 import { getNora } from "../registry/Nora.mjs";
 import { notifyOfficeStateChanged } from "../services/OfficeStateBus.mjs";
 import {
   createConfiguredProviders,
-  loadProviderSettingsFile,
+  createProviderFromDefinition,
   providerDefinitionsFromSettings,
-  providerSettingsPath,
 } from "../providers/ProviderFactory.mjs";
+import {
+  loadProviderSettings,
+  replaceProviderSettings,
+} from "../services/ProviderRegistryService.mjs";
 
 export const MODEL_CAPABILITIES = Object.freeze(["thinking", "vision", "audio", "embeddings"]);
 const CATALOG_TTL_MS = 5 * 60 * 1000;
@@ -110,12 +112,13 @@ const manualRaw = (name, preference, providerAvailable) => ({
   available: providerAvailable,
 });
 
-const persistPreferences = async () => {
-  await atomicWriteFile(providerSettingsPath, JSON.stringify(preferences, null, 2), "utf8");
+const persistPreferences = () => {
+  preferences = replaceProviderSettings(preferences);
+  return clone(preferences);
 };
 
 export const loadProviderPreferences = async () => {
-  preferences = await loadProviderSettingsFile();
+  preferences = loadProviderSettings();
   preferencesLoaded = true;
   return clone(preferences);
 };
@@ -159,7 +162,7 @@ const refreshCatalog = async () => {
       provider: definition.name,
       type: definition.type,
       baseUrl: definition.baseUrl,
-      apiKeyEnv: definition.apiKeyEnv || null,
+      credentialService: definition.credentialService || null,
       enabled: definition.enabled,
       builtIn: definition.builtIn,
       available: providerAvailable,
@@ -232,39 +235,93 @@ const validateBaseUrl = value => {
   return baseUrl.replace(/\/+$/, "");
 };
 
+const validateProviderDraft = (definition, { existingName = null } = {}) => {
+  if (!isObject(definition)) throw new Error("Provider definition must be an object");
+  const name = validateProviderName(existingName ?? definition.name);
+  const type = clean(definition.type || "ollama").toLowerCase();
+  if (type !== "ollama") throw new Error("Carlos Office currently supports Ollama-compatible provider adapters only");
+  return {
+    name,
+    type,
+    baseUrl: validateBaseUrl(definition.baseUrl),
+    credentialService: clean(definition.credentialService),
+    enabled: definition.enabled !== false,
+  };
+};
+
 const touchProviderState = () => {
   catalogLoadedAt = 0;
   notifyOfficeStateChanged(["models", "nora"]);
 };
 
 export const registerProvider = async definition => {
-  if (!isObject(definition)) throw new Error("Provider definition must be an object");
   await ensurePreferences();
-  const name = validateProviderName(definition.name);
-  const type = clean(definition.type || "ollama").toLowerCase();
-  if (type !== "ollama") throw new Error("Carlos Office currently supports Ollama-compatible provider adapters only");
-  preferences[name] = {
-    ...(isObject(preferences[name]) ? preferences[name] : {}),
-    type,
-    baseUrl: validateBaseUrl(definition.baseUrl),
-    apiKeyEnv: clean(definition.apiKeyEnv),
-    enabled: definition.enabled !== false,
-    models: isObject(preferences[name]?.models) ? preferences[name].models : {},
+  const normalized = validateProviderDraft(definition);
+  if (isObject(preferences[normalized.name])) throw new Error(`Provider already exists: ${normalized.name}`);
+  preferences[normalized.name] = {
+    type: normalized.type,
+    baseUrl: normalized.baseUrl,
+    credentialService: normalized.credentialService,
+    enabled: normalized.enabled,
+    builtIn: false,
+    models: {},
   };
-  await persistPreferences();
+  persistPreferences();
   touchProviderState();
-  return clone(preferences[name]);
+  return clone(preferences[normalized.name]);
+};
+
+export const updateProvider = async (name, changes) => {
+  await ensurePreferences();
+  const providerName = validateProviderName(name);
+  const current = preferences[providerName];
+  if (!isObject(current)) throw new Error(`Unknown provider: ${providerName}`);
+  const normalized = validateProviderDraft({ ...current, ...changes, name: providerName }, { existingName: providerName });
+  const nora = getNora();
+  if (!normalized.enabled && nora?.provider === providerName) {
+    throw new Error("Change Nora's default provider before disabling the provider she currently uses");
+  }
+  preferences[providerName] = {
+    ...current,
+    type: normalized.type,
+    baseUrl: normalized.baseUrl,
+    credentialService: normalized.credentialService,
+    enabled: normalized.enabled,
+    builtIn: current.builtIn === true || providerName === "ollama",
+    models: isObject(current.models) ? current.models : {},
+  };
+  persistPreferences();
+  touchProviderState();
+  return clone(preferences[providerName]);
 };
 
 export const deleteProvider = async name => {
   await ensurePreferences();
   const providerName = validateProviderName(name);
-  if (providerName === "ollama") throw new Error("The built-in ollama provider cannot be deleted; disable or reconfigure it instead");
-  if (!isObject(preferences[providerName])) return false;
+  const current = preferences[providerName];
+  if (!isObject(current)) return false;
+  if (current.builtIn || providerName === "ollama") throw new Error("The built-in ollama provider cannot be deleted; disable or reconfigure it instead");
+  const nora = getNora();
+  if (nora?.provider === providerName) throw new Error("Change Nora's default provider before removing the provider she currently uses");
   delete preferences[providerName];
-  await persistPreferences();
+  persistPreferences();
   touchProviderState();
   return true;
+};
+
+export const testProviderConnection = async definition => {
+  const normalized = validateProviderDraft(definition);
+  const startedAt = Date.now();
+  const instance = createProviderFromDefinition({ ...normalized, builtIn: normalized.name === "ollama" });
+  const models = await instance.listModels();
+  return {
+    ok: true,
+    provider: normalized.name,
+    baseUrl: normalized.baseUrl,
+    latencyMs: Date.now() - startedAt,
+    modelCount: models.length,
+    models: models.slice(0, 20),
+  };
 };
 
 export const addProviderModel = async (provider, definition) => {
@@ -300,7 +357,7 @@ export const addProviderModel = async (provider, definition) => {
       ...Object.fromEntries(supportedCapabilities.map(capability => [capability, true])),
     },
   };
-  await persistPreferences();
+  persistPreferences();
   touchProviderState();
   return clone(preferences[providerName].models[name]);
 };
@@ -311,7 +368,7 @@ export const deleteProviderModel = async (provider, modelName) => {
   const model = preferences?.[providerName]?.models?.[modelName];
   if (!model?.manual) throw new Error("Only manually registered models can be removed from the registry");
   delete preferences[providerName].models[modelName];
-  await persistPreferences();
+  persistPreferences();
   touchProviderState();
   return true;
 };
@@ -368,7 +425,7 @@ export const updateModelPreferences = async (provider, modelName, changes) => {
   }
 
   preferences[provider].models[modelName] = next;
-  await persistPreferences();
+  persistPreferences();
   touchProviderState();
   return updated;
 };
@@ -385,7 +442,7 @@ const readJson = async req => {
   return JSON.parse(Buffer.concat(chunks, size).toString("utf8"));
 };
 
-export const createProviderResourceController = ({ allowedOrigin }) => {
+export const createProviderResourceController = ({ allowedOrigin, onConfigurationChanged = async () => {} }) => {
   if (!allowedOrigin || typeof allowedOrigin !== "string") throw new Error("Provider controller requires an allowed origin");
   const matches = req => {
     const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
@@ -410,26 +467,39 @@ export const createProviderResourceController = ({ allowedOrigin }) => {
       res.writeHead(204, cors);
       return res.end();
     }
+    const changed = async () => {
+      await onConfigurationChanged();
+      return listProviders({ refresh: true });
+    };
     try {
       if (method === "GET" && parts.length === 1) return sendJson(200, await listProviders({ refresh: url.searchParams.get("refresh") === "1" }));
+      if (method === "POST" && parts.length === 2 && parts[1] === "test-connection") {
+        return sendJson(200, await testProviderConnection(await readJson(req)));
+      }
       if (method === "POST" && parts.length === 1) {
         await registerProvider(await readJson(req));
-        return sendJson(201, await listProviders({ refresh: true }));
+        return sendJson(201, await changed());
+      }
+      if (method === "PATCH" && parts.length === 2) {
+        await updateProvider(parts[1], await readJson(req));
+        return sendJson(200, await changed());
       }
       if (method === "DELETE" && parts.length === 2) {
         const deleted = await deleteProvider(parts[1]);
-        return deleted ? sendJson(200, await listProviders({ refresh: true })) : sendJson(404, { error: "Provider not found" });
+        return deleted ? sendJson(200, await changed()) : sendJson(404, { error: "Provider not found" });
       }
       if (method === "POST" && parts.length === 3 && parts[2] === "models") {
         await addProviderModel(parts[1], await readJson(req));
-        return sendJson(201, await listProviders({ refresh: true }));
+        return sendJson(201, await changed());
       }
       if (method === "PATCH" && parts.length === 4 && parts[2] === "models") {
-        return sendJson(200, await updateModelPreferences(parts[1], parts[3], await readJson(req)));
+        const updated = await updateModelPreferences(parts[1], parts[3], await readJson(req));
+        await onConfigurationChanged();
+        return sendJson(200, updated);
       }
       if (method === "DELETE" && parts.length === 4 && parts[2] === "models") {
         await deleteProviderModel(parts[1], parts[3]);
-        return sendJson(200, await listProviders({ refresh: true }));
+        return sendJson(200, await changed());
       }
       return sendJson(404, { error: "Provider route not found" });
     } catch (error) {
