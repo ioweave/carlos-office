@@ -1,4 +1,5 @@
 const REQUEST_TIMEOUT_MS = 300_000;
+const DISCOVERY_TIMEOUT_MS = 15_000;
 
 const normalizeBaseUrl = value => {
   const url = (value || "http://localhost:11434/api").replace(/\/+$/, "");
@@ -78,9 +79,9 @@ const normalizeToolCalls = (toolCalls = []) => toolCalls.map((call, index) => ({
   input: call.function?.arguments ?? {},
 }));
 
-const request = async (url, options, apiKey) => {
+const request = async (url, options, apiKey, timeoutMs = REQUEST_TIMEOUT_MS) => {
   const { signal: providedSignal = null, ...requestOptions } = options;
-  const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = providedSignal ? AbortSignal.any([providedSignal, timeoutSignal]) : timeoutSignal;
   const response = await fetch(url, {
     ...requestOptions,
@@ -194,12 +195,12 @@ export const createOllamaProvider = ({
     },
 
     async listModels() {
-      const result = await request(`${apiUrl}/tags`, { method: "GET" }, apiKey);
+      const result = await request(`${apiUrl}/tags`, { method: "GET" }, apiKey, DISCOVERY_TIMEOUT_MS);
       return (result.models ?? []).map(model => model.name ?? model.model).filter(Boolean);
     },
 
     async listModelMetadata() {
-      const result = await request(`${apiUrl}/tags`, { method: "GET" }, apiKey);
+      const result = await request(`${apiUrl}/tags`, { method: "GET" }, apiKey, DISCOVERY_TIMEOUT_MS);
       const taggedModels = (result.models ?? []).filter(model => model?.name || model?.model);
 
       return mapWithConcurrency(taggedModels, 4, async tagged => {
@@ -210,6 +211,7 @@ export const createOllamaProvider = ({
             `${apiUrl}/show`,
             { method: "POST", body: JSON.stringify({ model: modelName }) },
             apiKey,
+            DISCOVERY_TIMEOUT_MS,
           );
         } catch {
           // Some remote/cloud catalogs expose tags but not full /show metadata.
