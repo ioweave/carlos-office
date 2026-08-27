@@ -1,3 +1,5 @@
+import { cleanupWorkflowRuntime } from "./services/ExecutionWorkspaceService.mjs";
+
 const MAX_JSON_BODY_BYTES = 2_000_000;
 
 const requestError = (message, statusCode = 400) => {
@@ -39,7 +41,28 @@ export const createRouter = ({
     const execution = await nora.runWorkflow(workflowId);
     let review = null;
     if (!wasCompleted && execution.workflow.status === "completed") review = await nora.summarizeWorkflow(workflowId);
+    if (execution.workflow.status === "completed") await cleanupWorkflowRuntime(workflowId);
     return { ...execution, workflow: processes.getWorkflow(workflowId), review };
+  };
+
+  const workflowArtifactIds = workflow => [...new Set([
+    ...Object.values(workflow?.tasks ?? {})
+      .filter(task => task?.type === "task")
+      .flatMap(task => task.attempts ?? [])
+      .flatMap(attempt => attempt.artifacts ?? []),
+    ...(workflow?.archivedTasks ?? [])
+      .flatMap(entry => entry?.task?.attempts ?? [])
+      .flatMap(attempt => attempt.artifacts ?? []),
+  ])];
+
+  const purgeWorkflowOutputs = async workflow => {
+    if (!workflow) return { artifactsDeleted: 0 };
+    const artifactIds = workflowArtifactIds(workflow);
+    const conversationId = workflow.config?.conversationId;
+    let deleted = [];
+    if (conversationId && artifactIds.length) deleted = await artifacts.deleteArtifacts(conversationId, artifactIds);
+    await cleanupWorkflowRuntime(workflow.id);
+    return { artifactsDeleted: deleted.length };
   };
 
   const listRecentEvents = url => {
@@ -94,6 +117,7 @@ export const createRouter = ({
       engine.cancelWorkflowExecution(workflowId, "Conversation history edited by Carlos");
       if (workflow && !["completed", "cancelled", "failed"].includes(workflow.status)) await processes.cancelWorkflow(workflowId);
       if (processes.getWorkflow(workflowId)) await processes.deleteWorkflow(workflowId);
+      await cleanupWorkflowRuntime(workflowId);
     }
     await authorization.deleteApprovalsForWorkflows(workflowIds);
     await artifacts.deleteArtifacts(conversationId, artifactIds);
@@ -268,6 +292,7 @@ export const createRouter = ({
         if (workflow.status === "running") throw requestError("Stop a running Workflow before deleting it", 409);
         await authorization.deleteApprovalsForWorkflows([parts[1]]);
         const conversationsUpdated = await conversations.removeWorkflowReference(parts[1]);
+        await purgeWorkflowOutputs(workflow);
         await processes.deleteWorkflow(parts[1]);
         return sendJson(200, { id: parts[1], deleted: true, conversationsUpdated });
       }
@@ -287,13 +312,20 @@ export const createRouter = ({
         return sendJson(200, (await executeWorkflow(parts[1])).workflow);
       }
       if (method === "POST" && parts[0] === "workflows" && parts[2] === "restart" && parts.length === 3) {
+        const workflow = processes.getWorkflow(parts[1]);
+        if (!workflow) return sendError(404, "Workflow not found");
         engine.cancelWorkflowExecution(parts[1], "Workflow restarted by Carlos");
+        await purgeWorkflowOutputs(workflow);
         await processes.restartWorkflow(parts[1]);
         return sendJson(200, (await executeWorkflow(parts[1])).workflow);
       }
       if (method === "POST" && parts[0] === "workflows" && parts[2] === "cancel" && parts.length === 3) {
+        const workflow = processes.getWorkflow(parts[1]);
+        if (!workflow) return sendError(404, "Workflow not found");
         engine.cancelWorkflowExecution(parts[1], "Workflow cancelled by Carlos");
-        return sendJson(200, await processes.cancelWorkflow(parts[1]));
+        const cancelled = await processes.cancelWorkflow(parts[1]);
+        await cleanupWorkflowRuntime(parts[1]);
+        return sendJson(200, cancelled);
       }
       if (method === "PATCH" && parts[0] === "workflows" && parts[2] === "inputs" && parts.length === 3) return sendJson(200, await processes.setWorkflowInputs(parts[1], await readJson(req)));
       if (method === "PATCH" && parts[0] === "workflows" && parts[2] === "config" && parts.length === 3) return sendJson(200, await processes.setWorkflowConfig(parts[1], await readJson(req)));
