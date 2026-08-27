@@ -281,7 +281,8 @@ const addNoraMessage = async (
 
 const conversationTracksWorkflow = async (conversationId, workflowId) => {
   const conversation = await getConversation(conversationId);
-  return Boolean(conversation?.workflows?.includes(workflowId));
+  return Boolean(conversation?.workflows?.includes(workflowId))
+    && !(conversation?.messages ?? []).some(message => message.actor === "Nora" && message.workflowId === workflowId);
 };
 
 const addWorkflowNoraMessage = async (
