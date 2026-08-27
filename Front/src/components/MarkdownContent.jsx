@@ -1,4 +1,15 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
+import {
+  IconCheck,
+  IconCopy,
+  IconDots,
+  IconPencil,
+  IconShare3,
+  IconThumbDown,
+  IconThumbUp,
+} from "@tabler/icons-react";
+
+import "../styles/message-actions.scss";
 
 const inlinePattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|~~[^~\n]+~~|\[[^\]\n]+\]\([^)\n]+\)|https?:\/\/[^\s<]+|\*[^*\n]+\*)/g;
 
@@ -106,12 +117,128 @@ const isBlockStart = line => (
   || /^\s*(?:---+|___+|\*\*\*+)\s*$/.test(line)
 );
 
+const copyText = async text => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
+};
+
+const MessageActions = ({ text }) => {
+  const [copied, setCopied] = useState(false);
+  const [feedback, setFeedback] = useState(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+
+  const copy = async () => {
+    try {
+      await copyText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {}
+  };
+
+  const edit = event => {
+    const message = event.currentTarget.closest(".message");
+    message?.querySelector(".message__edit")?.click();
+  };
+
+  const share = async () => {
+    try {
+      if (navigator.share) {
+        await navigator.share({ text });
+        return;
+      }
+      await copy();
+    } catch (error) {
+      if (error?.name !== "AbortError") await copy();
+    }
+  };
+
+  const readAloud = () => {
+    if (!("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+    setMoreOpen(false);
+  };
+
+  return (
+    <div className="message-actions" aria-label="Message actions">
+      <div className="message-actions__carlos">
+        <button type="button" className="message-action" onClick={copy} aria-label="Copy message" title="Copy">
+          {copied ? <IconCheck size={15} /> : <IconCopy size={15} />}
+        </button>
+        <button type="button" className="message-action" onClick={edit} aria-label="Edit message" title="Edit">
+          <IconPencil size={15} />
+        </button>
+      </div>
+
+      <div className="message-actions__nora">
+        <button type="button" className="message-action" onClick={copy} aria-label="Copy response" title="Copy">
+          {copied ? <IconCheck size={15} /> : <IconCopy size={15} />}
+        </button>
+        <button
+          type="button"
+          className={`message-action ${feedback === "up" ? "message-action--active" : ""}`}
+          onClick={() => setFeedback(current => current === "up" ? null : "up")}
+          aria-label="Good response"
+          aria-pressed={feedback === "up"}
+          title="Good response"
+        >
+          <IconThumbUp size={15} />
+        </button>
+        <button
+          type="button"
+          className={`message-action ${feedback === "down" ? "message-action--active" : ""}`}
+          onClick={() => setFeedback(current => current === "down" ? null : "down")}
+          aria-label="Bad response"
+          aria-pressed={feedback === "down"}
+          title="Bad response"
+        >
+          <IconThumbDown size={15} />
+        </button>
+        <button type="button" className="message-action" onClick={share} aria-label="Share response" title="Share">
+          <IconShare3 size={15} />
+        </button>
+        <div className="message-actions__more">
+          <button
+            type="button"
+            className={`message-action ${moreOpen ? "message-action--active" : ""}`}
+            onClick={() => setMoreOpen(current => !current)}
+            aria-label="More actions"
+            aria-expanded={moreOpen}
+            title="More actions"
+          >
+            <IconDots size={17} />
+          </button>
+          {moreOpen && (
+            <div className="message-actions__menu">
+              <button type="button" onClick={() => { void copy(); setMoreOpen(false); }}>Copy response</button>
+              <button type="button" onClick={() => { void share(); setMoreOpen(false); }}>Share response</button>
+              <button type="button" onClick={readAloud}>Read aloud</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function MarkdownContent({ children, artifacts = [], onArtifact = null }) {
+  const source = String(children ?? "");
   const artifactByName = useMemo(() => new Map(
     artifacts.filter(artifact => artifact?.name).map(artifact => [artifact.name, artifact]),
   ), [artifacts]);
   const renderInline = (value, key) => inline(value, key, artifactByName, onArtifact);
-  const lines = String(children ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const lines = source.replace(/\r\n?/g, "\n").split("\n");
   const blocks = [];
   let i = 0;
 
@@ -219,5 +346,10 @@ export default function MarkdownContent({ children, artifacts = [], onArtifact =
     blocks.push(<p key={`b-${blocks.length}`}>{paragraphNodes}</p>);
   }
 
-  return <div className="markdown-body">{blocks}</div>;
+  return (
+    <div className="markdown-body">
+      {blocks}
+      <MessageActions text={source} />
+    </div>
+  );
 }
