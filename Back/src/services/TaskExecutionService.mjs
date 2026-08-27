@@ -49,6 +49,99 @@ export const materializeMapData = (value, retainedGroupIds = new Set()) => {
   ]));
 };
 
+const latestCompletedValue = task => {
+  const attempt = [...(task?.attempts ?? [])].reverse().find(item => item.status === "completed") ?? null;
+  if (!attempt) return undefined;
+  return attempt.data != null ? clone(attempt.data) : clone(attempt.output);
+};
+
+const ancestorTaskIds = (workflow, taskId) => {
+  const reverse = new Map(Object.keys(workflow.tasks ?? {}).map(id => [id, []]));
+  for (const [from, to] of workflow.edges ?? []) {
+    if (!reverse.has(to)) reverse.set(to, []);
+    reverse.get(to).push(from);
+  }
+  const ancestors = new Set();
+  const pending = [...(reverse.get(taskId) ?? [])];
+  while (pending.length) {
+    const id = pending.pop();
+    if (ancestors.has(id)) continue;
+    ancestors.add(id);
+    for (const parent of reverse.get(id) ?? []) pending.push(parent);
+  }
+  return ancestors;
+};
+
+const valueType = value => {
+  if (value === undefined) return "unresolved";
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+};
+
+const resolveMapSource = ({ workflow, taskId, input, sourcePath }) => {
+  const attempts = [];
+  const consider = (value, resolvedPath) => {
+    if (value === undefined) return null;
+    const candidate = { value, resolvedPath };
+    attempts.push(candidate);
+    return Array.isArray(value) ? candidate : null;
+  };
+
+  let found = consider(getPath(input, sourcePath), sourcePath);
+  if (found) return { ...found, attempts };
+
+  const parts = String(sourcePath || "").split(".").map(part => part.trim()).filter(Boolean);
+  if (parts[0] === "workflow" && parts.length > 1) {
+    const relativePath = parts.slice(1).join(".");
+    found = consider(getPath(workflow.inputs ?? {}, relativePath), `workflow.${relativePath}`);
+    if (found) return { ...found, attempts };
+  } else {
+    found = consider(getPath(workflow.inputs ?? {}, sourcePath), `workflow.${sourcePath}`);
+    if (found) return { ...found, attempts };
+  }
+
+  if (parts[0] === "upstream" && parts.length >= 2) {
+    const key = parts[1];
+    const rest = parts.slice(2);
+    const ancestors = ancestorTaskIds(workflow, taskId);
+    const ancestorEntries = [...ancestors]
+      .map(id => [id, workflow.tasks?.[id]])
+      .filter(([, task]) => task?.type === "task");
+    const exact = ancestorEntries.filter(([id]) => id === key);
+    const aliases = ancestorEntries.filter(([, task]) => task.output === key);
+    const producers = exact.length ? exact : aliases.length === 1 ? aliases : [];
+
+    for (const [producerId, producer] of producers) {
+      const raw = materializeMapData(latestCompletedValue(producer));
+      if (raw === undefined) continue;
+
+      if (rest.length) {
+        found = consider(getPath(raw, rest.join(".")), `upstream.${producerId}.${rest.join(".")}`);
+        if (found) return { ...found, attempts };
+
+        // Nora historically emitted upstream.<taskId>.<outputName> even when
+        // the Task value itself is the declared output. Treat that legacy
+        // spelling as the canonical upstream.<taskId> value.
+        if (rest.length === 1 && producer.output === rest[0]) {
+          found = consider(raw, `upstream.${producerId}`);
+          if (found) return { ...found, attempts };
+        }
+      } else {
+        found = consider(raw, `upstream.${producerId}`);
+        if (found) return { ...found, attempts };
+      }
+    }
+  }
+
+  const best = attempts.find(item => item.value !== undefined) ?? null;
+  return {
+    value: best?.value,
+    resolvedPath: best?.resolvedPath ?? null,
+    attempts,
+  };
+};
+
 const projectMapData = (value, groupId, index) => {
   if (Array.isArray(value)) return value.map(item => projectMapData(item, groupId, index));
   if (!isObject(value)) return clone(value);
@@ -369,14 +462,28 @@ export const executeTaskWithGroups = async ({
   };
 
   const wrapMap = (group, inner) => async context => {
-    const resolved = getPath(context.input, group.source);
-    const source = resolved === undefined ? getPath(workflow.inputs, group.source) : resolved;
+    const resolution = resolveMapSource({
+      workflow,
+      taskId,
+      input: context.input,
+      sourcePath: group.source,
+    });
+    const source = resolution.value;
     if (!Array.isArray(source)) {
+      const resolvedType = valueType(source);
+      const message = resolution.resolvedPath
+        ? `Map Group ${group.id} source ${group.source} resolved via ${resolution.resolvedPath} to ${resolvedType}, not an array`
+        : `Map Group ${group.id} source ${group.source} could not be resolved to an upstream or Workflow array`;
       return errorResult(
-        `Map Group ${group.id} source ${group.source} did not resolve to an array`,
+        message,
         "map",
-        "map_source_not_array",
-        { groupId: group.id, source: group.source },
+        source === undefined ? "map_source_unresolved" : "map_source_not_array",
+        {
+          groupId: group.id,
+          source: group.source,
+          resolvedPath: resolution.resolvedPath,
+          resolvedType,
+        },
       );
     }
 
