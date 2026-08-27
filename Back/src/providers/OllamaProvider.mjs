@@ -112,7 +112,29 @@ const mapWithConcurrency = async (items, concurrency, mapper) => {
   return results;
 };
 
-const localHost = hostname => ["localhost", "127.0.0.1", "::1"].includes(hostname);
+const privateIpv4 = hostname => {
+  const parts = hostname.split(".");
+  if (parts.length !== 4 || parts.some(part => !/^\d{1,3}$/.test(part))) return false;
+  const octets = parts.map(Number);
+  if (octets.some(value => value < 0 || value > 255)) return false;
+  const [first, second] = octets;
+  return first === 10
+    || first === 127
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 192 && second === 168)
+    || (first === 169 && second === 254);
+};
+
+const localNetworkHost = hostname => {
+  const value = String(hostname || "").toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+  return value === "localhost"
+    || value.endsWith(".localhost")
+    || value.endsWith(".local")
+    || value === "::1"
+    || /^(?:fc|fd)[0-9a-f:]*$/i.test(value)
+    || /^fe[89ab][0-9a-f:]*$/i.test(value)
+    || privateIpv4(value);
+};
 
 export const createOllamaProvider = ({
   name = "ollama",
@@ -124,7 +146,7 @@ export const createOllamaProvider = ({
   const apiUrl = normalizeBaseUrl(baseUrl);
   const endpointIsCloud = (() => {
     try {
-      return !localHost(new URL(apiUrl).hostname);
+      return !localNetworkHost(new URL(apiUrl).hostname);
     } catch {
       return false;
     }
