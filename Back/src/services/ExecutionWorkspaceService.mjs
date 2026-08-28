@@ -141,4 +141,15 @@ export const cleanupWorkflowRuntime = async workflowId => {
   ]);
 };
 
+export const cleanupExecutionRuntime = async () => {
+  await Promise.all([
+    rm(workspacesRoot, { recursive: true, force: true }),
+    rm(deliverablesRoot, { recursive: true, force: true }),
+  ]);
+  await Promise.all([
+    mkdir(workspacesRoot, { recursive: true }),
+    mkdir(deliverablesRoot, { recursive: true }),
+  ]);
+};
+
 export const executionRuntimePaths = Object.freeze({ runtimeRoot, workspacesRoot, deliverablesRoot });
