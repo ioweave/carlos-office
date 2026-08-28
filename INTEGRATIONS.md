@@ -30,7 +30,7 @@ You can place those repositories elsewhere and configure their paths with Worksp
 - `integration.openMontagePath` — path to the OpenMontage checkout.
 - `integration.pythonCommand` — Python executable used by Python-backed integrations; defaults to `python`.
 - `integration.agentReachCommand` — Agent Reach executable; defaults to `agent-reach`.
-- `integration.minimaxH3Url` — MiniMax-H3 SGLang base URL; defaults to `http://127.0.0.1:30010`.
+- `integration.minimaxH3Url` — MiniMax-H3 SGLang base URL; defaults to `http://localhost:30010`.
 
 Equivalent environment variables are also supported:
 

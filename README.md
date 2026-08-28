@@ -172,8 +172,8 @@ npm run dev
 
 Defaults:
 
-- Platform API: `http://127.0.0.1:3002`
-- Frontend: `http://127.0.0.1:3003`
+- Platform API: `http://localhost:3002`
+- Frontend: `http://localhost:3003`
 - Browser API access is restricted to `FRONTEND_ORIGIN`.
 
 ## Validation

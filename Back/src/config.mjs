@@ -18,7 +18,7 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 const host = process.env.LOCAL_HOST?.trim();
 if (!host) throw new Error("LOCAL_HOST must be configured");
 
-const frontendOriginValue = process.env.FRONTEND_ORIGIN?.trim() || "http://127.0.0.1:3003";
+const frontendOriginValue = process.env.FRONTEND_ORIGIN?.trim() || "http://localhost:3003";
 let frontendOrigin;
 
 try {

@@ -26,7 +26,7 @@ const request = async (url, options, timeoutMs, signal) => {
 
 const tool = {
   name: "minimax-h3",
-  description: "Calls a MiniMax-H3 SGLang deployment through its /v1/videos API. Supports submitting T2VA/FL2VA/Ref2VA jobs, checking status, and downloading completed video into the Agent workspace. Default endpoint is http://127.0.0.1:30010 and can be overridden with Workspace Variable integration.minimaxH3Url.",
+  description: "Calls a MiniMax-H3 SGLang deployment through its /v1/videos API. Supports submitting T2VA/FL2VA/Ref2VA jobs, checking status, and downloading completed video into the Agent workspace. Default endpoint is http://localhost:30010 and can be overridden with Workspace Variable integration.minimaxH3Url.",
   requiresApproval: false,
   provider: null,
   model: null,
@@ -54,7 +54,7 @@ const tool = {
     const baseUrl = (inputs.baseUrl
       || getVariable("integration.minimaxH3Url")?.value
       || process.env.MINIMAX_H3_URL
-      || "http://127.0.0.1:30010").replace(/\/+$/, "");
+      || "http://localhost:30010").replace(/\/+$/, "");
     const timeoutMs = inputs.timeoutMs ?? 120_000;
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("minimax-h3: timeoutMs must be positive");
 
