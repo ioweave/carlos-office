@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { recordEvent } from "../controllers/EventController.mjs";
 import { atomicWriteFile } from "../lib/AtomicFile.mjs";
+import { cleanupExecutionRuntime } from "./ExecutionWorkspaceService.mjs";
 import { hydrateWorkflowInvocationJournals } from "./InvocationJournalService.mjs";
 import { normalizeGeneratedGraph, validateGraph } from "./WorkflowGraphService.mjs";
 
@@ -46,6 +47,7 @@ const normalizePersistedWorkflow = workflow => {
 };
 
 export const reconcileInterruptedWorkflows = async () => {
+  await cleanupExecutionRuntime();
   await mkdir(workflowsDir, { recursive: true });
   const files = await readdir(workflowsDir);
   const reconciled = [];
