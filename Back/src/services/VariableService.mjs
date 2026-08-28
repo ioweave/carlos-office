@@ -1,10 +1,9 @@
-import { mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
 
-const BACK_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const DEFAULT_DB_PATH = resolve(BACK_ROOT, ".carlos-office", "credentials.db");
+import { DATABASE_PATH, LEGACY_CREDENTIALS_PATH, withDatabase } from "./DatabaseService.mjs";
+
 const KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/;
 const MAX_VALUE_LENGTH = 65_536;
 const MAX_DESCRIPTION_LENGTH = 500;
@@ -35,7 +34,7 @@ const normalizeDescription = value => {
   return description;
 };
 
-const ensureSchema = db => {
+const ensureVariableSchema = db => {
   db.exec(`CREATE TABLE IF NOT EXISTS workspace_variables (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -51,19 +50,31 @@ const toVariable = row => row ? ({
   updatedAt: row.updated_at,
 }) : null;
 
-export const createVariableService = ({ dbPath = DEFAULT_DB_PATH } = {}) => {
+export const createVariableService = ({ dbPath = DATABASE_PATH } = {}) => {
   const path = resolve(dbPath);
-
-  const withDb = callback => {
-    mkdirSync(dirname(path), { recursive: true });
-    const db = new DatabaseSync(path);
-    try {
-      ensureSchema(db);
-      return callback(db);
-    } finally {
-      db.close();
+  let legacyChecked = false;
+  const withDb = callback => withDatabase(db => {
+    ensureVariableSchema(db);
+    if (!legacyChecked && path === resolve(DATABASE_PATH) && existsSync(LEGACY_CREDENTIALS_PATH)) {
+      const legacy = new DatabaseSync(LEGACY_CREDENTIALS_PATH);
+      try {
+        const table = legacy.prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'workspace_variables'",
+        ).get();
+        if (table) {
+          const insert = db.prepare(`INSERT OR IGNORE INTO workspace_variables (key, value, description, updated_at)
+            VALUES (?, ?, ?, ?)`);
+          for (const row of legacy.prepare("SELECT key, value, description, updated_at FROM workspace_variables").all()) {
+            insert.run(row.key, row.value, row.description ?? "", row.updated_at ?? new Date().toISOString());
+          }
+        }
+      } finally {
+        legacy.close();
+      }
+      legacyChecked = true;
     }
-  };
+    return callback(db);
+  }, { path });
 
   const listVariables = () => withDb(db => db.prepare(`
     SELECT key, value, description, updated_at

@@ -283,16 +283,19 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
       let result = rawResult.status === "failed" ? enrichFailedResult(entry, rawResult) : rawResult;
       if (result.status === "completed") {
         try {
+          const completion = await stageInvocationCompletion({
+            workflowId,
+            taskId,
+            attemptId,
+            invocationId,
+            workspaceDir,
+            completion: result.completion,
+          });
           result = {
-            ...result,
-            output: await stageInvocationCompletion({
-              workflowId,
-              taskId,
-              attemptId,
-              invocationId,
-              workspaceDir,
-              completion: result.output,
-            }),
+            status: "completed",
+            output: completion.output,
+            data: completion.data ?? null,
+            artifactDeclarations: completion.artifacts ?? [],
           };
         } catch (error) {
           const message = `Could not stage Agent artifacts: ${error instanceof Error ? error.message : String(error)}`;
@@ -336,7 +339,7 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
         void runTool(entry, message);
         return;
       }
-      if (message?.type === "completed") void settle({ status: "completed", output: message.output });
+      if (message?.type === "completed") void settle({ status: "completed", completion: message.completion });
       if (message?.type === "blocked") void settle({ status: "blocked", error: message.error, approvalId: message.approvalId ?? null });
       if (message?.type === "failed") void settle({ status: "failed", error: message.error, diagnostics: isObject(message.diagnostics) ? message.diagnostics : null });
     });

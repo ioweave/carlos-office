@@ -68,8 +68,8 @@ process.on("message", message => {
         skills: message.skills ?? [],
         invokeTool,
       });
-      const output = await agent.run(message.task);
-      finish({ type: "completed", output });
+      const completion = await agent.run(message.task);
+      finish({ type: "completed", completion });
     } catch (error) {
       if (error?.blocked) {
         finish({

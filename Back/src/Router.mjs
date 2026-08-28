@@ -129,8 +129,8 @@ export const createRouter = ({
       removedArtifacts: artifactIds.length,
     });
 
-    const job = nora.startCarlosRequest({ conversationId, messageId });
-    return { conversation: committed, job };
+    nora.startCarlosRequest({ conversationId, messageId });
+    return committed;
   };
 
   return async (req, res) => {

@@ -32,18 +32,6 @@ const reloadFromDisk = async () => {
   const entries = await readdir(skillsDir, { withFileTypes: true });
   const discovered = new Map();
 
-  // Installed Skill packages use skills/<name>/SKILL.md.
-  for (const entry of entries.filter(item => item.isDirectory())) {
-    const path = resolve(skillsDir, entry.name, "SKILL.md");
-    try {
-      discovered.set(entry.name, await loadSkillFile(entry.name, path));
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
-  }
-
-  // Native Carlos Office Skills use skills/<name>.md. They take precedence
-  // if both representations exist so saveSkill remains backwards compatible.
   for (const entry of entries.filter(item => item.isFile() && item.name.endsWith(".md"))) {
     const name = basename(entry.name, ".md");
     discovered.set(name, await loadSkillFile(name, resolve(skillsDir, entry.name)));
@@ -80,7 +68,7 @@ const ensureWatcher = () => {
   if (skillsWatcher) return;
 
   try {
-    skillsWatcher = watch(skillsDir, { recursive: true }, scheduleReload);
+    skillsWatcher = watch(skillsDir, scheduleReload);
     skillsWatcher.on("error", error => {
       console.error("[skills] Skill registry watcher failed.", {
         message: error instanceof Error ? error.message : String(error),

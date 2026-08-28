@@ -76,12 +76,13 @@ export const recordEvent = async (type, details = {}) => {
     await appendFile(eventsFile, `${JSON.stringify(event)}\n`, "utf8");
   });
   eventWrite = next;
-  await next;
-  events.push(event);
-  trimMemory();
 
   const domains = domainsForEvent(type);
   if (domains.length) notifyOfficeStateChanged(domains);
+
+  await next;
+  events.push(event);
+  trimMemory();
   return event;
 };
 

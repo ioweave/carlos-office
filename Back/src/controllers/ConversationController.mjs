@@ -76,6 +76,31 @@ const normalizeUtc = (value, label) => {
   return date.toISOString();
 };
 
+const normalizeStoredMessageContent = (actor, messageId, content) => {
+  const value = String(content ?? "").trim();
+  if (actor !== "Nora" || !/^\{\s*"output"\s*:/.test(value)) return value;
+
+  try {
+    const completion = JSON.parse(value);
+    if (
+      completion
+      && typeof completion === "object"
+      && !Array.isArray(completion)
+      && typeof completion.output === "string"
+      && Object.prototype.hasOwnProperty.call(completion, "data")
+      && Array.isArray(completion.artifacts)
+    ) {
+      return completion.output.trim();
+    }
+  } catch (error) {
+    console.warn("[conversations] Could not parse legacy Nora completion envelope.", {
+      messageId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return value;
+};
+
 const conversationPath = id => {
   validateConversationId(id);
   return resolve(conversationsDir, id, "thread.md");
@@ -132,7 +157,7 @@ const parseConversation = (content, fallbackId) => {
       id: message.id,
       actor: message.actor,
       at: normalizeUtc(message.at, `message ${message.id} timestamp`),
-      content: entry[2].trim(),
+      content: normalizeStoredMessageContent(message.actor, message.id, entry[2]),
       attachments: Array.isArray(message.attachments) ? message.attachments : [],
       artifacts: Array.isArray(message.artifacts) ? message.artifacts : [],
       workflowId: typeof message.workflowId === "string" && message.workflowId.trim()
@@ -222,13 +247,14 @@ export const migrateLegacyCarlosAttachments = async () => {
 
   for (const current of [...conversations.values()]) {
     const conversation = structuredClone(current);
-    const legacyArtifactIds = [];
+    const migratedArtifactIds = new Set();
     let changed = false;
 
     for (const message of conversation.messages) {
       if (message.actor !== "Carlos" || !message.artifacts?.length) continue;
 
       const attachmentIds = [...(message.attachments ?? [])];
+      const legacyArtifactIds = [];
       for (const artifactId of message.artifacts) {
         const artifact = await getArtifact(conversation.id, artifactId);
         if (!artifact) continue;
@@ -245,6 +271,7 @@ export const migrateLegacyCarlosAttachments = async () => {
         });
         attachmentIds.push(attachment.id);
         legacyArtifactIds.push(artifactId);
+        migratedArtifactIds.add(artifactId);
         migrated += 1;
       }
 
@@ -254,7 +281,7 @@ export const migrateLegacyCarlosAttachments = async () => {
     }
 
     if (changed) await commitConversation(conversation);
-    if (legacyArtifactIds.length) await deleteArtifacts(conversation.id, legacyArtifactIds);
+    if (migratedArtifactIds.size) await deleteArtifacts(conversation.id, [...migratedArtifactIds]);
   }
 
   return migrated;

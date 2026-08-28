@@ -23,7 +23,7 @@ const readRange = async (id, start, length) => {
   const path = pathFor(id);
   const info = await stat(path);
   const offset = Math.min(Math.max(0, start), info.size);
-  const bytes = Math.min(Math.max(1, length), MAX_READ_BYTES, info.size - offset);
+  const bytes = Math.min(length, info.size - offset);
   if (bytes <= 0) return { start: offset, end: offset, bytes: 0, text: "", eof: true, totalBytes: info.size };
 
   const handle = await open(path, "r");
@@ -116,14 +116,19 @@ const tool = {
       return { id: inputs.id, totalBytes: info.size };
     }
     if (action === "read") {
-      const start = Number.isSafeInteger(inputs.start) && inputs.start >= 0 ? inputs.start : 0;
-      const length = Number.isSafeInteger(inputs.length) && inputs.length > 0 ? inputs.length : 200_000;
+      const start = inputs.start ?? 0;
+      const length = inputs.length ?? 200_000;
+      if (!Number.isSafeInteger(start) || start < 0) throw new Error("http-content: start must be a non-negative integer");
+      if (!Number.isSafeInteger(length) || length < 1 || length > MAX_READ_BYTES) {
+        throw new Error(`http-content: length must be an integer from 1 to ${MAX_READ_BYTES}`);
+      }
       return { id: inputs.id, ...(await readRange(inputs.id, start, length)) };
     }
     if (action === "search") {
-      const maxMatches = Number.isSafeInteger(inputs.maxMatches)
-        ? Math.min(50, Math.max(1, inputs.maxMatches))
-        : 10;
+      const maxMatches = inputs.maxMatches ?? 10;
+      if (!Number.isSafeInteger(maxMatches) || maxMatches < 1 || maxMatches > 50) {
+        throw new Error("http-content: maxMatches must be an integer from 1 to 50");
+      }
       return { id: inputs.id, ...(await searchContent(inputs.id, inputs.query, maxMatches)) };
     }
     throw new Error(`http-content: unknown action ${action}`);

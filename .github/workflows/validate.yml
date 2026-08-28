@@ -1,0 +1,30 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12
+          cache: npm
+          cache-dependency-path: |
+            Back/package-lock.json
+            Front/package-lock.json
+      - name: Install backend dependencies
+        working-directory: Back
+        run: npm ci
+      - name: Validate backend
+        working-directory: Back
+        run: npm run lint && npm run check
+      - name: Install frontend dependencies
+        working-directory: Front
+        run: npm ci
+      - name: Validate frontend
+        working-directory: Front
+        run: npm run lint && npm run build

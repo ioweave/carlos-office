@@ -1,21 +1,22 @@
 const clean = input => String(input ?? "").trim();
 
-const escapeWindowsPaths = source => source.replace(
-  /[A-Za-z]:\\[^"\r\n]*/g,
-  value => value.replace(/(?<!\\)\\(?!\\)/g, "\\\\"),
-);
-
 const escapeStringControls = input => {
-  const source = escapeWindowsPaths(input);
+  const source = input;
   let result = "";
   let quoted = false;
+  let stringValue = "";
+  let windowsPath = false;
 
   for (let index = 0; index < source.length; index += 1) {
     const character = source[index];
 
     if (!quoted) {
       result += character;
-      if (character === '"') quoted = true;
+      if (character === '"') {
+        quoted = true;
+        stringValue = "";
+        windowsPath = false;
+      }
       continue;
     }
 
@@ -26,20 +27,30 @@ const escapeStringControls = input => {
     }
 
     if (character === "\\") {
+      if (!windowsPath && /^[A-Za-z]:$/.test(stringValue)) windowsPath = true;
+      if (windowsPath) {
+        result += "\\\\";
+        stringValue += "\\";
+        continue;
+      }
+
       const next = source[index + 1];
       if ('"\\/bfnrt'.includes(next)) {
         result += `\\${next}`;
+        stringValue += next;
         index += 1;
         continue;
       }
 
       if (next === "u" && /^[0-9a-fA-F]{4}$/.test(source.slice(index + 2, index + 6))) {
         result += source.slice(index, index + 6);
+        stringValue += source.slice(index, index + 6);
         index += 5;
         continue;
       }
 
       result += "\\\\";
+      stringValue += "\\";
       continue;
     }
 
@@ -51,6 +62,7 @@ const escapeStringControls = input => {
     else if (character.charCodeAt(0) < 0x20) {
       result += `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
     } else result += character;
+    stringValue += character;
   }
 
   return result;
