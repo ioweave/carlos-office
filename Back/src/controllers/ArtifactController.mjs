@@ -8,6 +8,7 @@ import { consumeManagedDeliverable } from "../services/ExecutionWorkspaceService
 import { notifyOfficeStateChanged } from "../services/OfficeStateBus.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
+const backRoot = resolve(here, "../..");
 const conversationsDir = resolve(here, "../../ObsidianVault/Conversations");
 const artifactsByConversation = new Map();
 
@@ -50,6 +51,14 @@ const persistArtifacts = async conversationId => {
   const artifacts = artifactsByConversation.get(conversationId) ?? new Map();
   await atomicWriteFile(metadataFile, JSON.stringify(Object.fromEntries(artifacts), null, 2), "utf8");
   notifyOfficeStateChanged("artifacts");
+};
+
+const isLegacyAgentRootSource = artifact => {
+  if (!artifact?.sourcePath || typeof artifact.sourcePath !== "string") return false;
+  const creator = String(artifact.createdBy ?? "");
+  if (creator !== "Temporary Agent" && !creator.startsWith("agent-")) return false;
+  const source = resolve(artifact.sourcePath);
+  return dirname(source) === backRoot;
 };
 
 export const inferArtifactType = name => MIME_BY_EXTENSION.get(extname(String(name || "")).toLowerCase()) || "application/octet-stream";
@@ -179,6 +188,7 @@ export const deleteArtifacts = async (conversationId, artifactIds) => {
     const artifact = artifacts.get(artifactId);
     if (!artifact) continue;
     await rm(resolve(conversationDir, artifact.path), { force: true });
+    if (isLegacyAgentRootSource(artifact)) await rm(resolve(artifact.sourcePath), { force: true });
     artifacts.delete(artifactId);
     deleted.push(artifactId);
   }
