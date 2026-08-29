@@ -2,30 +2,35 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   IconArrowsHorizontal,
   IconArrowsVertical,
-  IconCircle,
-  IconFlag,
   IconFocus2,
+  IconFlag,
   IconPlayerPlay,
-  IconSparkles,
   IconZoomIn,
   IconZoomOut,
 } from "@tabler/icons-react";
+import { toast } from "sonner";
 
 import { useAppContext } from "../AppContext";
 import api, { endpoints } from "../api";
+import TaskNode, {
+  COMPACT_NODE_HEIGHT,
+  COMPACT_NODE_WIDTH,
+  TASK_NODE_HEIGHT,
+  TASK_NODE_WIDTH,
+} from "./TaskNode";
+import "../styles/comfy-workflow.scss";
 
-const NODE_WIDTH = 108;
-const NODE_HEIGHT = 68;
-const X_GAP = 150;
-const Y_GAP = 92;
-const PADDING = 90;
+const X_GAP = 170;
+const Y_GAP = 86;
+const PADDING = 110;
 const GROUP_MIN_WIDTH = 190;
 const GROUP_MIN_HEIGHT = 120;
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2.2;
-const EDGE_OFFSET = 20;
-const EDGE_RADIUS = 5;
-const FIT_PADDING = 56;
+const FIT_PADDING = 70;
+const MINIMAP_WIDTH = 170;
+const MINIMAP_HEIGHT = 104;
+const MINIMAP_PADDING = 8;
 
 const humanizeId = id => String(id || "")
   .replace(/[_-]+/g, " ")
@@ -34,20 +39,7 @@ const humanizeId = id => String(id || "")
   .replace(/\b\w/g, character => character.toUpperCase());
 
 const nodeLabel = (id, task) => task?.name?.trim() || humanizeId(id) || id;
-
-const nodeTypeIcon = type => {
-  if (type === "start") return IconPlayerPlay;
-  if (type === "end") return IconFlag;
-  return IconCircle;
-};
-
-const nodeSubtitle = task => {
-  if (task?.tools?.length) return task.tools.join(", ");
-  if (task?.skills?.length) return task.skills.join(", ");
-  if (task?.provider && task?.model) return `${task.provider} · ${task.model}`;
-  return task?.type || "Task";
-};
-
+const isTask = task => task?.type === "task";
 const validPosition = value => value && Number.isFinite(value.x) && Number.isFinite(value.y);
 const validGroup = group => (
   group
@@ -58,20 +50,11 @@ const validGroup = group => (
   && Number.isFinite(Number(group.height))
 );
 const clampZoom = value => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, value));
-const edgeKey = (from, to) => JSON.stringify([from, to]);
+const dimensions = task => isTask(task)
+  ? { width: TASK_NODE_WIDTH, height: TASK_NODE_HEIGHT }
+  : { width: COMPACT_NODE_WIDTH, height: COMPACT_NODE_HEIGHT };
 
-const cloneEdgeRoutes = value => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  const result = {};
-  for (const [key, route] of Object.entries(value)) {
-    if (!route || typeof route !== "object" || Array.isArray(route)) continue;
-    const dx = Number(route.dx ?? 0);
-    const dy = Number(route.dy ?? 0);
-    if (!Number.isFinite(dx) || !Number.isFinite(dy)) continue;
-    result[key] = { dx: Math.round(dx), dy: Math.round(dy) };
-  }
-  return result;
-};
+const nodeRect = (position, task) => ({ ...position, ...dimensions(task) });
 
 const autoLayout = (tasks, edges, start, direction = "horizontal") => {
   const ids = Object.keys(tasks || {});
@@ -112,13 +95,13 @@ const autoLayout = (tasks, edges, start, direction = "horizontal") => {
     group.forEach((id, index) => {
       if (direction === "vertical") {
         positions[id] = {
-          x: PADDING + index * (NODE_WIDTH + X_GAP),
-          y: PADDING + depth * (NODE_HEIGHT + Y_GAP),
+          x: PADDING + index * (TASK_NODE_WIDTH + X_GAP),
+          y: PADDING + depth * (TASK_NODE_HEIGHT + Y_GAP),
         };
       } else {
         positions[id] = {
-          x: PADDING + depth * (NODE_WIDTH + X_GAP),
-          y: PADDING + index * (NODE_HEIGHT + Y_GAP),
+          x: PADDING + depth * (TASK_NODE_WIDTH + X_GAP),
+          y: PADDING + index * (TASK_NODE_HEIGHT + Y_GAP),
         };
       }
     });
@@ -134,138 +117,43 @@ const resolvePositions = (tasks, edges, start, savedPositions) => {
   ]));
 };
 
-const nodeRect = position => ({ x: position.x, y: position.y, width: NODE_WIDTH, height: NODE_HEIGHT });
-
-const port = (rect, side) => side === "left"
-  ? { x: rect.x, y: rect.y + rect.height / 2 }
-  : { x: rect.x + rect.width, y: rect.y + rect.height / 2 };
-
-const outwardPoint = (point, side, amount = EDGE_OFFSET) => side === "left"
-  ? { x: point.x - amount, y: point.y }
-  : { x: point.x + amount, y: point.y };
-
-const cleanPoints = points => {
-  const result = [];
-  for (const point of points) {
-    const previous = result.at(-1);
-    if (previous && previous.x === point.x && previous.y === point.y) continue;
-    result.push(point);
-  }
-  let changed = true;
-  while (changed && result.length > 2) {
-    changed = false;
-    for (let index = 1; index < result.length - 1; index += 1) {
-      const a = result[index - 1];
-      const b = result[index];
-      const c = result[index + 1];
-      if ((a.x === b.x && b.x === c.x) || (a.y === b.y && b.y === c.y)) {
-        result.splice(index, 1);
-        changed = true;
-        break;
-      }
-    }
-  }
-  return result;
-};
-
-const distance = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
-const pointToward = (from, to, amount) => {
-  const length = distance(from, to);
-  if (!length) return { ...from };
-  const ratio = amount / length;
-  return {
-    x: from.x + (to.x - from.x) * ratio,
-    y: from.y + (to.y - from.y) * ratio,
-  };
-};
-
-const roundedPath = points => {
-  const cleaned = cleanPoints(points);
-  if (!cleaned.length) return "";
-  if (cleaned.length === 1) return `M ${cleaned[0].x} ${cleaned[0].y}`;
-
-  let path = `M ${cleaned[0].x} ${cleaned[0].y}`;
-  for (let index = 1; index < cleaned.length - 1; index += 1) {
-    const previous = cleaned[index - 1];
-    const current = cleaned[index];
-    const next = cleaned[index + 1];
-    const radius = Math.min(EDGE_RADIUS, distance(previous, current) / 2, distance(current, next) / 2);
-    const before = pointToward(current, previous, radius);
-    const after = pointToward(current, next, radius);
-    path += ` L ${before.x} ${before.y} Q ${current.x} ${current.y} ${after.x} ${after.y}`;
-  }
-  const last = cleaned.at(-1);
-  return `${path} L ${last.x} ${last.y}`;
-};
-
-// Matches XYFlow's smoothstep geometry for Position.Right -> Position.Left.
-// Forward edges split vertically between the nodes. Backtracking edges split
-// horizontally between the rows instead of taking a large detour to the right.
-const smoothStepRoute = (start, end, override = null) => {
-  const sourceOut = outwardPoint(start, "right");
-  const targetOut = outwardPoint(end, "left");
-  const forward = sourceOut.x < targetOut.x;
-  const midpoint = {
-    x: (sourceOut.x + targetOut.x) / 2,
-    y: (sourceOut.y + targetOut.y) / 2,
-  };
-  const dx = Number(override?.dx ?? 0);
-  const dy = Number(override?.dy ?? 0);
-
-  if (forward) {
-    const centerX = midpoint.x + (Number.isFinite(dx) ? dx : 0);
-    const control = { x: centerX, y: midpoint.y };
-    const points = cleanPoints([
-      start,
-      sourceOut,
-      { x: centerX, y: sourceOut.y },
-      { x: centerX, y: targetOut.y },
-      targetOut,
-      end,
-    ]);
+const fallbackGroupGeometry = (group, positions, tasks, groupsById) => {
+  if (validGroup(group)) {
     return {
-      start,
-      end,
-      sourceOut,
-      targetOut,
-      forward,
-      axis: "x",
-      baseControl: midpoint,
-      control,
-      points,
-      path: roundedPath(points),
+      ...group,
+      x: Number(group.x),
+      y: Number(group.y),
+      width: Number(group.width),
+      height: Number(group.height),
     };
   }
 
-  const centerY = midpoint.y + (Number.isFinite(dy) ? dy : 0);
-  const control = { x: midpoint.x, y: centerY };
-  const points = cleanPoints([
-    start,
-    sourceOut,
-    { x: sourceOut.x, y: centerY },
-    { x: targetOut.x, y: centerY },
-    targetOut,
-    end,
-  ]);
+  const boxes = [];
+  const visit = member => {
+    if (validPosition(positions[member]) && tasks[member]) boxes.push(nodeRect(positions[member], tasks[member]));
+    const child = groupsById.get(member);
+    if (child) for (const nested of child.members || []) visit(nested);
+  };
+  for (const member of group.members || []) visit(member);
+  if (!boxes.length) return { ...group, x: PADDING, y: PADDING, width: 390, height: 260 };
+
+  const left = Math.min(...boxes.map(box => box.x)) - 46;
+  const top = Math.min(...boxes.map(box => box.y)) - 58;
+  const right = Math.max(...boxes.map(box => box.x + box.width)) + 46;
+  const bottom = Math.max(...boxes.map(box => box.y + box.height)) + 50;
   return {
-    start,
-    end,
-    sourceOut,
-    targetOut,
-    forward,
-    axis: "y",
-    baseControl: midpoint,
-    control,
-    points,
-    path: roundedPath(points),
+    ...group,
+    x: left,
+    y: top,
+    width: Math.max(GROUP_MIN_WIDTH, right - left),
+    height: Math.max(GROUP_MIN_HEIGHT, bottom - top),
   };
 };
 
-const edgeRoute = (sourceRect, targetRect, override = null) => smoothStepRoute(
-  port(sourceRect, "right"),
-  port(targetRect, "left"),
-  override,
-);
+const resolveGroups = (groups, positions, tasks) => {
+  const byId = new Map((groups || []).map(group => [group.id, group]));
+  return (groups || []).map(group => fallbackGroupGeometry(group, positions, tasks, byId));
+};
 
 const groupDepths = groups => {
   const byId = new Map((groups || []).map(group => [group.id, group]));
@@ -285,48 +173,8 @@ const groupDepths = groups => {
   return Object.fromEntries((groups || []).map(group => [group.id, depth(group.id)]));
 };
 
-const fallbackGroupGeometry = (group, positions, groupsById) => {
-  if (validGroup(group)) {
-    return {
-      ...group,
-      x: Number(group.x),
-      y: Number(group.y),
-      width: Number(group.width),
-      height: Number(group.height),
-    };
-  }
-
-  const boxes = [];
-  const visit = member => {
-    if (validPosition(positions[member])) boxes.push(nodeRect(positions[member]));
-    const child = groupsById.get(member);
-    if (child) for (const nested of child.members || []) visit(nested);
-  };
-  for (const member of group.members || []) visit(member);
-  if (!boxes.length) return { ...group, x: PADDING, y: PADDING, width: 320, height: 190 };
-
-  const left = Math.min(...boxes.map(box => box.x)) - 42;
-  const top = Math.min(...boxes.map(box => box.y)) - 54;
-  const right = Math.max(...boxes.map(box => box.x + box.width)) + 42;
-  const bottom = Math.max(...boxes.map(box => box.y + box.height)) + 48;
-  return {
-    ...group,
-    x: left,
-    y: top,
-    width: Math.max(GROUP_MIN_WIDTH, right - left),
-    height: Math.max(GROUP_MIN_HEIGHT, bottom - top),
-  };
-};
-
-const resolveGroups = (groups, positions) => {
-  const byId = new Map((groups || []).map(group => [group.id, group]));
-  return (groups || []).map(group => fallbackGroupGeometry(group, positions, byId));
-};
-
-const worldBounds = (positions, groups) => {
-  const boxes = Object.values(positions || {})
-    .filter(validPosition)
-    .map(position => ({ x: position.x, y: position.y, width: NODE_WIDTH, height: NODE_HEIGHT + 46 }));
+const worldBounds = (nodes, groups) => {
+  const boxes = nodes.filter(node => validPosition(node)).map(node => nodeRect(node, node.task));
   for (const group of groups || []) {
     if (validGroup(group)) boxes.push({ x: group.x, y: group.y, width: group.width, height: group.height });
   }
@@ -337,6 +185,16 @@ const worldBounds = (positions, groups) => {
   const right = Math.max(...boxes.map(box => box.x + box.width));
   const bottom = Math.max(...boxes.map(box => box.y + box.height));
   return { left, top, right, bottom, width: right - left, height: bottom - top };
+};
+
+const port = (rect, side) => side === "left"
+  ? { x: rect.x, y: rect.y + rect.height / 2 }
+  : { x: rect.x + rect.width, y: rect.y + rect.height / 2 };
+
+const bezierPath = (start, end) => {
+  const distance = Math.abs(end.x - start.x);
+  const control = Math.max(72, Math.min(220, distance * 0.48));
+  return `M ${start.x} ${start.y} C ${start.x + control} ${start.y}, ${end.x - control} ${end.y}, ${end.x} ${end.y}`;
 };
 
 const sameEdge = (edge, from, to) => edge?.[0] === from && edge?.[1] === to;
@@ -352,6 +210,7 @@ export default function ProcessGraph({
   selectedGroupId = "",
   groups = [],
   editable = false,
+  workflowId = null,
   onSelect,
   onEdgeSelect,
   onGroupSelect,
@@ -361,32 +220,28 @@ export default function ProcessGraph({
   onGroupsChange,
   onCanvasClick,
 }) {
-  const { officeState } = useAppContext();
+  const { officeState, refresh } = useAppContext();
   const workflowForGraph = useMemo(
-    () => (officeState.workflows || []).find(item => item.tasks === tasks) || null,
-    [officeState.workflows, tasks],
+    () => (workflowId
+      ? (officeState.workflows || []).find(item => item.id === workflowId)
+      : (officeState.workflows || []).find(item => item.tasks === tasks)) || null,
+    [officeState.workflows, tasks, workflowId],
   );
-  const storedEdgeRoutes = useMemo(
-    () => cloneEdgeRoutes(workflowForGraph?.config?._ui?.edgeRoutes),
-    [workflowForGraph?.id, workflowForGraph?.config?._ui?.edgeRoutes],
-  );
+  const [catalog, setCatalog] = useState({ models: [], tools: [], skills: [] });
   const initialPositions = useMemo(
     () => resolvePositions(tasks, edges, start, savedPositions),
     [tasks, edges, start, savedPositions],
   );
   const [positions, setPositions] = useState(initialPositions);
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(0.9);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [draggingId, setDraggingId] = useState("");
   const [panning, setPanning] = useState(false);
   const [connecting, setConnecting] = useState(null);
-  const [edgeRoutes, setEdgeRoutes] = useState(storedEdgeRoutes);
   const dragRef = useRef(null);
   const panRef = useRef(null);
   const groupDragRef = useRef(null);
   const connectRef = useRef(null);
-  const edgeDragRef = useRef(null);
-  const edgeRoutesRef = useRef(storedEdgeRoutes);
   const viewportRef = useRef(null);
   const suppressCanvasClickRef = useRef(false);
   const initialFitRef = useRef(false);
@@ -396,64 +251,48 @@ export default function ProcessGraph({
   }, [initialPositions]);
 
   useEffect(() => {
-    if (edgeDragRef.current) return;
-    edgeRoutesRef.current = storedEdgeRoutes;
-    setEdgeRoutes(storedEdgeRoutes);
-  }, [storedEdgeRoutes]);
+    if (!editable || !workflowForGraph?.id) return undefined;
+    let active = true;
+    const loadCatalog = async () => {
+      try {
+        const [modelsResponse, toolsResponse, skillsResponse] = await Promise.all([
+          api.get(endpoints.models()),
+          api.get(endpoints.tools()),
+          api.get(endpoints.skills()),
+        ]);
+        if (!active) return;
+        setCatalog({
+          models: modelsResponse.data || [],
+          tools: toolsResponse.data || [],
+          skills: skillsResponse.data || [],
+        });
+      } catch (error) {
+        console.error("[workflow-graph] Could not load inline Task options.", error);
+      }
+    };
+    void loadCatalog();
+    return () => { active = false; };
+  }, [editable, workflowForGraph?.id]);
 
-  const setEdgeRoutesLive = next => {
-    edgeRoutesRef.current = next;
-    setEdgeRoutes(next);
-  };
-
-  const persistEdgeRoutes = async routes => {
-    if (!workflowForGraph?.id) return;
-    const liveKeys = new Set((edges || []).map(([from, to]) => edgeKey(from, to)));
-    const compact = {};
-    for (const [key, route] of Object.entries(routes || {})) {
-      if (!liveKeys.has(key)) continue;
-      const dx = Math.round(Number(route?.dx ?? 0));
-      const dy = Math.round(Number(route?.dy ?? 0));
-      if (!Number.isFinite(dx) || !Number.isFinite(dy)) continue;
-      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
-      compact[key] = { dx, dy };
-    }
-
-    const nextConfig = { ...(workflowForGraph.config || {}) };
-    const nextUi = { ...(nextConfig._ui || {}) };
-    if (Object.keys(compact).length) nextUi.edgeRoutes = compact;
-    else delete nextUi.edgeRoutes;
-    if (Object.keys(nextUi).length) nextConfig._ui = nextUi;
-    else delete nextConfig._ui;
-
-    try {
-      await api.patch(endpoints.workflowConfig(workflowForGraph.id), nextConfig);
-    } catch (error) {
-      console.error("[workflow-graph] Could not persist edge route.", error);
-      const fallback = cloneEdgeRoutes(workflowForGraph?.config?._ui?.edgeRoutes);
-      edgeRoutesRef.current = fallback;
-      setEdgeRoutes(fallback);
-    }
-  };
-
-  const resolvedGroups = useMemo(() => resolveGroups(groups, positions), [groups, positions]);
-  const depths = useMemo(() => groupDepths(resolvedGroups), [resolvedGroups]);
-  const bounds = useMemo(() => worldBounds(positions, resolvedGroups), [positions, resolvedGroups]);
   const nodes = useMemo(
     () => Object.entries(tasks || {}).map(([id, task]) => ({ id, task, ...positions[id] })),
     [tasks, positions],
   );
   const rectangles = useMemo(
-    () => Object.fromEntries(nodes.filter(node => validPosition(node)).map(node => [node.id, nodeRect(node)])),
+    () => Object.fromEntries(nodes.filter(node => validPosition(node)).map(node => [node.id, nodeRect(node, node.task)])),
     [nodes],
   );
+  const resolvedGroups = useMemo(() => resolveGroups(groups, positions, tasks), [groups, positions, tasks]);
+  const depths = useMemo(() => groupDepths(resolvedGroups), [resolvedGroups]);
+  const bounds = useMemo(() => worldBounds(nodes, resolvedGroups), [nodes, resolvedGroups]);
   const routedEdges = useMemo(() => (edges || []).map(([from, to]) => {
     const source = rectangles[from];
     const target = rectangles[to];
     if (!source || !target) return null;
-    const key = edgeKey(from, to);
-    return { from, to, key, ...edgeRoute(source, target, edgeRoutes[key]) };
-  }).filter(Boolean), [edges, rectangles, edgeRoutes]);
+    const fromPoint = port(source, "right");
+    const toPoint = port(target, "left");
+    return { from, to, start: fromPoint, end: toPoint, path: bezierPath(fromPoint, toPoint) };
+  }).filter(Boolean), [edges, rectangles]);
 
   const graphPoint = event => {
     const rect = viewportRef.current?.getBoundingClientRect();
@@ -489,7 +328,7 @@ export default function ProcessGraph({
     const next = clampZoom(Math.min(
       availableWidth / Math.max(1, bounds.width),
       availableHeight / Math.max(1, bounds.height),
-      1.25,
+      1,
     ));
     setZoom(next);
     setPan({
@@ -515,12 +354,9 @@ export default function ProcessGraph({
 
   const beginNodeDrag = (event, node) => {
     if (event.button !== 0 || !validPosition(positions[node.id])) return;
-    event.stopPropagation();
-    onSelect?.({ id: node.id, ...node.task });
-    onEdgeSelect?.(null);
-    onGroupSelect?.(null);
-    if (!editable || !onMove) return;
     event.preventDefault();
+    event.stopPropagation();
+    if (!editable || !onMove) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = {
       id: node.id,
@@ -540,8 +376,8 @@ export default function ProcessGraph({
     const dx = (event.clientX - drag.startX) / zoom;
     const dy = (event.clientY - drag.startY) / zoom;
     const next = {
-      x: Math.round(drag.origin.x + dx),
-      y: Math.round(drag.origin.y + dy),
+      x: Math.max(0, Math.round(drag.origin.x + dx)),
+      y: Math.max(0, Math.round(drag.origin.y + dy)),
     };
     drag.positions = { ...drag.positions, [drag.id]: next };
     drag.moved ||= Math.abs(dx) > 2 || Math.abs(dy) > 2;
@@ -563,8 +399,8 @@ export default function ProcessGraph({
       || event.target.closest?.(".process-node-wrap")
       || event.target.closest?.(".workflow-group")
       || event.target.closest?.(".process-edge-hit")
-      || event.target.closest?.(".process-edge-handle")
-      || event.target.closest?.(".process-graph__controls")
+      || event.target.closest?.(".comfy-graph__controls")
+      || event.target.closest?.(".comfy-graph__minimap")
     ) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -626,61 +462,6 @@ export default function ProcessGraph({
     setConnecting(null);
   };
 
-  const beginEdgeDrag = (event, edge) => {
-    if (!editable || !workflowForGraph?.id || event.button !== 0) return;
-    event.preventDefault();
-    event.stopPropagation();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    onEdgeSelect?.([edge.from, edge.to]);
-    onSelect?.(null);
-    onGroupSelect?.(null);
-    const stored = edgeRoutesRef.current[edge.key] || { dx: 0, dy: 0 };
-    const origin = edge.axis === "x"
-      ? { dx: Number(stored.dx || 0), dy: 0 }
-      : { dx: 0, dy: Number(stored.dy || 0) };
-    edgeDragRef.current = {
-      pointerId: event.pointerId,
-      key: edge.key,
-      axis: edge.axis,
-      startX: event.clientX,
-      startY: event.clientY,
-      origin,
-      moved: false,
-    };
-  };
-
-  const moveEdgeDrag = event => {
-    const drag = edgeDragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    const dx = (event.clientX - drag.startX) / zoom;
-    const dy = (event.clientY - drag.startY) / zoom;
-    const delta = drag.axis === "x" ? dx : dy;
-    const route = drag.axis === "x"
-      ? { dx: Math.round((drag.origin.dx || 0) + dx), dy: 0 }
-      : { dx: 0, dy: Math.round((drag.origin.dy || 0) + dy) };
-    const next = { ...edgeRoutesRef.current, [drag.key]: route };
-    drag.moved ||= Math.abs(delta) > 2;
-    setEdgeRoutesLive(next);
-  };
-
-  const endEdgeDrag = event => {
-    const drag = edgeDragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    edgeDragRef.current = null;
-    if (drag.moved) void persistEdgeRoutes(edgeRoutesRef.current);
-  };
-
-  const resetEdgeRoute = (event, edge) => {
-    if (!editable || !workflowForGraph?.id) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const next = { ...edgeRoutesRef.current };
-    delete next[edge.key];
-    setEdgeRoutesLive(next);
-    void persistEdgeRoutes(next);
-  };
-
   const groupDescendants = groupId => {
     const byId = new Map(resolvedGroups.map(group => [group.id, group]));
     const taskIds = new Set();
@@ -704,7 +485,6 @@ export default function ProcessGraph({
     if (event.button !== 0) return;
     event.stopPropagation();
     onGroupSelect?.(group);
-    onSelect?.(null);
     onEdgeSelect?.(null);
     if (!editable || !onGroupsChange) return;
     event.preventDefault();
@@ -742,16 +522,16 @@ export default function ProcessGraph({
       const moveIds = new Set([drag.id, ...drag.descendants.groupIds]);
       nextGroups = drag.groups.map(item => moveIds.has(item.id) ? {
         ...item,
-        x: Math.round(item.x + dx),
-        y: Math.round(item.y + dy),
+        x: Math.max(0, Math.round(item.x + dx)),
+        y: Math.max(0, Math.round(item.y + dy)),
       } : item);
       nextPositions = { ...drag.positions };
       for (const taskId of drag.descendants.taskIds) {
         const point = drag.positions[taskId];
         if (!point) continue;
         nextPositions[taskId] = {
-          x: Math.round(point.x + dx),
-          y: Math.round(point.y + dy),
+          x: Math.max(0, Math.round(point.x + dx)),
+          y: Math.max(0, Math.round(point.y + dy)),
         };
       }
     }
@@ -782,15 +562,15 @@ export default function ProcessGraph({
       event.target.closest?.(".process-node-wrap")
       || event.target.closest?.(".workflow-group")
       || event.target.closest?.(".process-edge-hit")
-      || event.target.closest?.(".process-edge-handle")
-      || event.target.closest?.(".process-graph__controls")
+      || event.target.closest?.(".comfy-graph__controls")
+      || event.target.closest?.(".comfy-graph__minimap")
     ) return;
     onCanvasClick?.(graphPoint(event));
   };
 
   const handleWheel = event => {
     event.preventDefault();
-    if (event.ctrlKey || event.metaKey) {
+    if (event.ctrlKey || event.metaKey || event.altKey) {
       zoomAt(zoom * (event.deltaY > 0 ? 0.9 : 1.1), event.clientX, event.clientY);
       return;
     }
@@ -800,17 +580,54 @@ export default function ProcessGraph({
     }));
   };
 
+  const saveTask = async (taskId, task) => {
+    if (!editable || !workflowForGraph?.id) return;
+    try {
+      await api.patch(endpoints.workflowTask(workflowForGraph.id, taskId), task);
+      await refresh();
+    } catch (error) {
+      toast.error(error.response?.data?.error || `Could not save Task ${taskId}.`);
+      throw error;
+    }
+  };
+
+  const deleteTask = async node => {
+    if (!editable || !workflowForGraph?.id || node.task?.type !== "task") return;
+    if (!window.confirm(`Remove Task "${nodeLabel(node.id, node.task)}"?`)) return;
+    try {
+      await api.delete(endpoints.workflowTask(workflowForGraph.id, node.id));
+      onSelect?.(null);
+      await refresh();
+      toast.success("Task removed.");
+    } catch (error) {
+      toast.error(error.response?.data?.error || `Could not remove Task ${node.id}.`);
+    }
+  };
+
   if (!nodes.length) return <div className="process-graph process-graph--empty">No graph data.</div>;
 
   const sortedGroups = [...resolvedGroups].sort((left, right) => (depths[left.id] || 0) - (depths[right.id] || 0));
-  const previewPath = connecting ? smoothStepRoute(connecting.start, connecting.pointer).path : "";
+  const previewPath = connecting ? bezierPath(connecting.start, connecting.pointer) : "";
+  const viewport = viewportRef.current;
+  const minimapScale = Math.min(
+    (MINIMAP_WIDTH - MINIMAP_PADDING * 2) / Math.max(1, bounds.width),
+    (MINIMAP_HEIGHT - MINIMAP_PADDING * 2) / Math.max(1, bounds.height),
+  );
+  const minimapX = value => MINIMAP_PADDING + (value - bounds.left) * minimapScale;
+  const minimapY = value => MINIMAP_PADDING + (value - bounds.top) * minimapScale;
+  const visibleWorld = viewport ? {
+    x: -pan.x / zoom,
+    y: -pan.y / zoom,
+    width: viewport.clientWidth / zoom,
+    height: viewport.clientHeight / zoom,
+  } : null;
 
   return (
     <div
       ref={viewportRef}
-      className={`process-graph process-graph--infinite ${panning ? "process-graph--panning" : ""} ${editable ? "process-graph--editable" : "process-graph--locked"}`}
+      className={`process-graph comfy-graph ${panning ? "comfy-graph--panning" : ""} ${editable ? "comfy-graph--editable" : "comfy-graph--locked"}`}
       role="region"
-      aria-label="Process graph"
+      aria-label="Workflow graph"
       style={{
         "--graph-grid-size": `${20 * zoom}px`,
         "--graph-grid-x": `${pan.x}px`,
@@ -823,17 +640,8 @@ export default function ProcessGraph({
       onClick={handleCanvasClick}
       onWheel={handleWheel}
     >
-      <div className="process-graph__controls" onPointerDown={event => event.stopPropagation()}>
-        <button type="button" onClick={() => zoomAt(zoom / 1.2)} title="Zoom out" aria-label="Zoom out"><IconZoomOut size={15} /></button>
-        <span>{Math.round(zoom * 100)}%</span>
-        <button type="button" onClick={() => zoomAt(zoom * 1.2)} title="Zoom in" aria-label="Zoom in"><IconZoomIn size={15} /></button>
-        <button type="button" onClick={fitView} title="Fit graph" aria-label="Fit graph"><IconFocus2 size={15} /></button>
-        {editable && <button type="button" onClick={() => applyAutoLayout("horizontal")} title="Auto-layout left to right" aria-label="Auto-layout horizontally"><IconArrowsHorizontal size={15} /></button>}
-        {editable && <button type="button" onClick={() => applyAutoLayout("vertical")} title="Auto-layout top to bottom" aria-label="Auto-layout vertically"><IconArrowsVertical size={15} /></button>}
-      </div>
-
       <div
-        className="process-graph__world"
+        className="comfy-graph__world"
         style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` }}
       >
         {sortedGroups.map(group => (
@@ -855,8 +663,8 @@ export default function ProcessGraph({
             <span className="workflow-group__title">
               <strong>{group.type === "map" ? "Map" : group.type === "loop" ? "Loop" : "Group"}</strong>
               {group.name && <span>{group.name}</span>}
-              {group.type === "map" && <small>Concurrency {group.concurrency ?? 1}</small>}
-              {group.type === "loop" && <small>QC ≥ {Math.round((group.minimumScore ?? 0.8) * 100)}%</small>}
+              {group.type === "map" && <small>{group.concurrency ?? 1}×</small>}
+              {group.type === "loop" && <small>QC {Math.round((group.minimumScore ?? 0.8) * 100)}%</small>}
             </span>
             {editable && (
               <span
@@ -871,18 +679,12 @@ export default function ProcessGraph({
           </div>
         ))}
 
-        <svg className="process-graph__edges" width="1" height="1" aria-hidden="true">
-          <defs>
-            <marker id="workflow-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
-              <path d="M 0 0 L 8 4 L 0 8 z" className="process-edge__arrow" />
-            </marker>
-          </defs>
+        <svg className="comfy-graph__edges" width="1" height="1" aria-hidden="true">
           {routedEdges.map(edge => (
-            <g key={edge.key}>
+            <g key={`${edge.from}:${edge.to}`}>
               <path
-                className={sameEdge(selectedEdge, edge.from, edge.to) ? "process-edge process-edge--selected" : "process-edge"}
+                className={sameEdge(selectedEdge, edge.from, edge.to) ? "comfy-edge comfy-edge--selected" : "comfy-edge"}
                 d={edge.path}
-                markerEnd="url(#workflow-arrow)"
               />
               {editable && (
                 <path
@@ -891,104 +693,122 @@ export default function ProcessGraph({
                   onClick={event => {
                     event.stopPropagation();
                     onEdgeSelect?.([edge.from, edge.to]);
-                    onSelect?.(null);
                     onGroupSelect?.(null);
                   }}
                 />
               )}
             </g>
           ))}
-          {connecting && <path className="process-edge process-edge--preview" d={previewPath} />}
+          {connecting && <path className="comfy-edge comfy-edge--preview" d={previewPath} />}
         </svg>
 
-        {editable && workflowForGraph?.id && routedEdges
-          .filter(edge => sameEdge(selectedEdge, edge.from, edge.to))
-          .map(edge => (
-            <button
-              key={`route-${edge.key}`}
-              type="button"
-              className={`process-edge-handle process-edge-handle--${edge.axis}`}
-              style={{ left: edge.control.x, top: edge.control.y }}
-              onPointerDown={event => beginEdgeDrag(event, edge)}
-              onPointerMove={moveEdgeDrag}
-              onPointerUp={endEdgeDrag}
-              onPointerCancel={endEdgeDrag}
-              onDoubleClick={event => resetEdgeRoute(event, edge)}
-              onClick={event => event.stopPropagation()}
-              title={`Drag ${edge.axis === "x" ? "horizontally" : "vertically"} to reroute · double-click to reset`}
-              aria-label={`Reroute ${edge.from} to ${edge.to}`}
-            />
-          ))}
-
         {nodes.map(node => {
-          const Icon = nodeTypeIcon(node.task?.type);
-          const status = statuses[node.id] || node.task?.status || "";
           const selected = selectedId === node.id;
           const dragging = draggingId === node.id;
           const canInput = node.task?.type !== "start";
           const canOutput = node.task?.type !== "end";
+          const size = dimensions(node.task);
+          const nodeEditable = editable && Boolean(workflowForGraph?.id) && node.task?.type === "task";
+          const hasRuntime = Boolean((node.task?.attempts || []).length || statuses[node.id] || node.task?.status);
+
           return (
             <div
               key={node.id}
-              className={`process-node-wrap ${selected ? "process-node-wrap--selected" : ""} ${dragging ? "process-node-wrap--dragging" : ""}`}
-              style={{ left: node.x, top: node.y, width: NODE_WIDTH, height: NODE_HEIGHT }}
+              className={`process-node-wrap comfy-node-wrap ${selected ? "comfy-node-wrap--selected" : ""} ${dragging ? "comfy-node-wrap--dragging" : ""}`}
+              style={{ left: node.x, top: node.y, width: size.width, height: size.height }}
             >
-              {onRevise && node.task?.type === "task" && (
-                <div className="process-node__toolbar">
-                  <button
-                    type="button"
-                    onClick={event => {
-                      event.stopPropagation();
-                      onRevise({ id: node.id, ...node.task });
-                    }}
-                    aria-label={`Ask Nora to revise ${nodeLabel(node.id, node.task)}`}
-                    title="Ask Nora to revise"
-                  >
-                    <IconSparkles size={14} />
-                  </button>
+              {node.task?.type === "task" ? (
+                <TaskNode
+                  taskId={node.id}
+                  task={node.task}
+                  status={statuses[node.id] || node.task?.status || ""}
+                  selected={selected}
+                  editable={nodeEditable}
+                  catalog={catalog}
+                  onSave={nodeEditable ? saveTask : null}
+                  onDelete={nodeEditable ? () => deleteTask(node) : null}
+                  onRevise={onRevise ? () => onRevise({ id: node.id, ...node.task }) : null}
+                  onInspect={!nodeEditable && onSelect && (hasRuntime || !workflowForGraph?.id) ? () => onSelect({ id: node.id, ...node.task }) : null}
+                  dragHandlers={{
+                    onPointerDown: event => beginNodeDrag(event, node),
+                    onPointerMove: moveNode,
+                    onPointerUp: endNodeDrag,
+                    onPointerCancel: endNodeDrag,
+                  }}
+                />
+              ) : (
+                <div
+                  className={`workflow-terminal-node workflow-terminal-node--${node.task?.type || "task"}`}
+                  onPointerDown={event => beginNodeDrag(event, node)}
+                  onPointerMove={moveNode}
+                  onPointerUp={endNodeDrag}
+                  onPointerCancel={endNodeDrag}
+                >
+                  {node.task?.type === "start" ? <IconPlayerPlay size={15} /> : <IconFlag size={15} />}
+                  <strong>{nodeLabel(node.id, node.task)}</strong>
                 </div>
               )}
-              <button
-                type="button"
-                className={`process-node process-node--${node.task?.type || "task"} ${selected ? "process-node--selected" : ""} ${status ? `process-node--${status}` : ""}`}
-                onPointerDown={event => beginNodeDrag(event, node)}
-                onPointerMove={moveNode}
-                onPointerUp={endNodeDrag}
-                onPointerCancel={endNodeDrag}
-                onClick={event => {
-                  event.stopPropagation();
-                  onSelect?.({ id: node.id, ...node.task });
-                  onEdgeSelect?.(null);
-                  onGroupSelect?.(null);
-                }}
-              >
-                <span className="process-node__icon"><Icon size={20} stroke={1.7} /></span>
-                {status && <span className="process-node__status" title={status} />}
-              </button>
-              {canInput && (
-                <span
-                  className="process-node__port process-node__port--input"
-                  data-connect-input={node.id}
-                  title="Incoming connection"
-                />
-              )}
+
+              {canInput && <span className="workflow-node-socket workflow-node-socket--input" data-connect-input={node.id} title="Input" />}
               {canOutput && (
                 <span
-                  className={`process-node__port process-node__port--output ${editable ? "process-node__port--interactive" : ""}`}
+                  className={`workflow-node-socket workflow-node-socket--output ${editable ? "workflow-node-socket--interactive" : ""}`}
                   onPointerDown={editable ? event => beginConnect(event, node.id) : undefined}
                   onPointerMove={editable ? moveConnect : undefined}
                   onPointerUp={editable ? endConnect : undefined}
                   onPointerCancel={editable ? endConnect : undefined}
-                  title={editable ? "Drag to connect" : "Outgoing connection"}
+                  title={editable ? "Drag to connect" : "Output"}
                 />
               )}
-              <span className="process-node__description">
-                <strong>{nodeLabel(node.id, node.task)}</strong>
-                <small>{nodeSubtitle(node.task)}</small>
-              </span>
             </div>
           );
         })}
+      </div>
+
+      <div className="comfy-graph__controls" onPointerDown={event => event.stopPropagation()}>
+        <button type="button" onClick={() => zoomAt(zoom / 1.2)} title="Zoom out" aria-label="Zoom out"><IconZoomOut size={14} /></button>
+        <span>{Math.round(zoom * 100)}%</span>
+        <button type="button" onClick={() => zoomAt(zoom * 1.2)} title="Zoom in" aria-label="Zoom in"><IconZoomIn size={14} /></button>
+        <button type="button" onClick={fitView} title="Fit graph" aria-label="Fit graph"><IconFocus2 size={14} /></button>
+        {editable && <button type="button" onClick={() => applyAutoLayout("horizontal")} title="Auto-layout left to right" aria-label="Auto-layout horizontally"><IconArrowsHorizontal size={14} /></button>}
+        {editable && <button type="button" onClick={() => applyAutoLayout("vertical")} title="Auto-layout top to bottom" aria-label="Auto-layout vertically"><IconArrowsVertical size={14} /></button>}
+      </div>
+
+      <div className="comfy-graph__minimap" onPointerDown={event => event.stopPropagation()}>
+        <svg viewBox={`0 0 ${MINIMAP_WIDTH} ${MINIMAP_HEIGHT}`} width={MINIMAP_WIDTH} height={MINIMAP_HEIGHT} aria-label="Workflow minimap">
+          {resolvedGroups.filter(validGroup).map(group => (
+            <rect
+              key={`group-${group.id}`}
+              className="comfy-minimap-group"
+              x={minimapX(group.x)}
+              y={minimapY(group.y)}
+              width={Math.max(2, group.width * minimapScale)}
+              height={Math.max(2, group.height * minimapScale)}
+            />
+          ))}
+          {nodes.filter(validPosition).map(node => {
+            const size = dimensions(node.task);
+            return (
+              <rect
+                key={node.id}
+                className={`comfy-minimap-node comfy-minimap-node--${node.task?.type || "task"}`}
+                x={minimapX(node.x)}
+                y={minimapY(node.y)}
+                width={Math.max(3, size.width * minimapScale)}
+                height={Math.max(3, size.height * minimapScale)}
+              />
+            );
+          })}
+          {visibleWorld && (
+            <rect
+              className="comfy-minimap-viewport"
+              x={minimapX(visibleWorld.x)}
+              y={minimapY(visibleWorld.y)}
+              width={Math.max(4, visibleWorld.width * minimapScale)}
+              height={Math.max(4, visibleWorld.height * minimapScale)}
+            />
+          )}
+        </svg>
       </div>
     </div>
   );
