@@ -570,14 +570,8 @@ export default function ProcessGraph({
 
   const handleWheel = event => {
     event.preventDefault();
-    if (event.ctrlKey || event.metaKey || event.altKey) {
-      zoomAt(zoom * (event.deltaY > 0 ? 0.9 : 1.1), event.clientX, event.clientY);
-      return;
-    }
-    setPan(current => ({
-      x: current.x - event.deltaX,
-      y: current.y - event.deltaY,
-    }));
+    if (event.deltaY === 0) return;
+    zoomAt(zoom * (event.deltaY > 0 ? 0.9 : 1.1), event.clientX, event.clientY);
   };
 
   const saveTask = async (taskId, task) => {
