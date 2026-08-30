@@ -4,10 +4,10 @@ import config from "./src/config.mjs";
 import { createRouter } from "./src/Router.mjs";
 import { listModels as listNoraModels, startNora, stopNora } from "./src/runtime/NoraProcess.mjs";
 import { createAppCommandService } from "./src/services/AppCommandService.mjs";
+import { attachAppWebSocket } from "./src/services/AppWebSocketService.mjs";
 import { initializeDatabase } from "./src/services/DatabaseService.mjs";
 import { loadKnowledge } from "./src/services/KnowledgeService.mjs";
 import { createOfficeStateService } from "./src/services/OfficeStateService.mjs";
-import { attachOfficeStateWebSocket } from "./src/services/OfficeStateWebSocketService.mjs";
 import { prepareVaultStructure } from "./src/services/VaultMaintenanceService.mjs";
 import { reconcileInterruptedWorkflows } from "./src/services/WorkflowRecoveryService.mjs";
 
@@ -250,10 +250,10 @@ server.prependListener("upgrade", req => {
   normalizeAcceptedFrontendOrigin(req);
 });
 
-const officeStateSocket = attachOfficeStateWebSocket({
+const appSocket = attachAppWebSocket({
   server,
   allowedOrigin: config.frontendOrigin,
-  service: officeStateService,
+  stateService: officeStateService,
   onCommand: executeAppCommand,
 });
 
@@ -265,7 +265,7 @@ schedules.startScheduler(runScheduledWorkflow);
 
 const shutdown = () => {
   schedules.stopScheduler();
-  officeStateSocket.close();
+  appSocket.close();
   officeStateService.dispose();
   engine.shutdownProcessEngine();
   stopNora();
