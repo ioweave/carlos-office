@@ -5,8 +5,8 @@ const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const OPEN = 1;
 const CLOSING = 2;
 const CLOSED = 3;
-const MAX_CLIENT_FRAME_BYTES = 64 * 1024;
-const MAX_CLIENT_BUFFER_BYTES = 128 * 1024;
+const MAX_CLIENT_FRAME_BYTES = 2 * 1024 * 1024;
+const MAX_CLIENT_BUFFER_BYTES = 4 * 1024 * 1024;
 
 const nonNegativeInteger = value => {
   if (value == null || value === "") return 0;
@@ -124,10 +124,11 @@ const createClient = socket => {
   return client;
 };
 
-export const attachOfficeStateWebSocket = ({ server, allowedOrigin, service }) => {
+export const attachOfficeStateWebSocket = ({ server, allowedOrigin, service, onCommand }) => {
   if (!server) throw new Error("Office state WebSocket requires the HTTP server");
   if (!allowedOrigin || typeof allowedOrigin !== "string") throw new Error("Office state WebSocket requires one allowed frontend origin");
   if (!service) throw new Error("Office state WebSocket requires the Office state service");
+  if (typeof onCommand !== "function") throw new Error("Office state WebSocket requires an app command handler");
 
   const clients = new Set();
   const handleUpgrade = (req, socket) => {
@@ -184,17 +185,47 @@ export const attachOfficeStateWebSocket = ({ server, allowedOrigin, service }) =
       unsubscribe();
     };
 
-    const sendLatest = () => {
-      const next = sendQueue.catch(() => {}).then(async () => {
-        if (client.readyState !== OPEN || socket.destroyed) return;
-        const payload = await service.responseSince({ since: lastRevision, clientInstance });
-        if (!payload.reset && !payload.changed.length) return;
-        lastRevision = payload.revision;
-        clientInstance = payload.instance;
-        await client.sendText({ type: "state", ...payload });
-      });
+    const enqueueSend = operation => {
+      const next = sendQueue.catch(() => {}).then(operation);
       sendQueue = next;
       return next;
+    };
+
+    const sendLatest = () => enqueueSend(async () => {
+      if (client.readyState !== OPEN || socket.destroyed) return;
+      const payload = await service.responseSince({ since: lastRevision, clientInstance });
+      if (!payload.reset && !payload.changed.length) return;
+      lastRevision = payload.revision;
+      clientInstance = payload.instance;
+      await client.sendText({ type: "state", ...payload });
+    });
+
+    const sendCommandResult = (id, result) => enqueueSend(() => client.sendText({
+      type: "command-result",
+      id,
+      ...result,
+    }));
+
+    const handleCommand = async payload => {
+      let message;
+      try {
+        message = JSON.parse(payload.toString("utf8"));
+      } catch {
+        throw protocolError("Invalid WebSocket command JSON");
+      }
+      if (!message || message.type !== "command" || typeof message.id !== "string" || typeof message.command !== "string") {
+        throw protocolError("Invalid WebSocket command envelope");
+      }
+
+      try {
+        const data = await onCommand({ command: message.command, payload: message.payload ?? {} });
+        await sendCommandResult(message.id, { ok: true, data });
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
+        if (statusCode >= 500) console.error("[app-command] Command failed.", { command: message.command, message: text });
+        await sendCommandResult(message.id, { ok: false, error: text, statusCode });
+      }
     };
 
     const unsubscribe = service.subscribe(() => {
@@ -221,7 +252,12 @@ export const attachOfficeStateWebSocket = ({ server, allowedOrigin, service }) =
             client.isAlive = true;
             return;
           }
-          // State synchronization is server-push only. Ignore application data from clients.
+          if (opcode === 0x1) {
+            void handleCommand(payload).catch(error => {
+              console.error("[app-command] Invalid command frame.", { message: error instanceof Error ? error.message : String(error) });
+              if (error?.websocketCode) client.close(error.websocketCode, "Protocol error");
+            });
+          }
         });
       } catch (error) {
         console.error("[office-state] Invalid WebSocket client frame.", { message: error instanceof Error ? error.message : String(error) });

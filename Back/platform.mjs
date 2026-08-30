@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import config from "./src/config.mjs";
 import { createRouter } from "./src/Router.mjs";
 import { listModels as listNoraModels, startNora, stopNora } from "./src/runtime/NoraProcess.mjs";
+import { createAppCommandService } from "./src/services/AppCommandService.mjs";
 import { initializeDatabase } from "./src/services/DatabaseService.mjs";
 import { loadKnowledge } from "./src/services/KnowledgeService.mjs";
 import { createOfficeStateService } from "./src/services/OfficeStateService.mjs";
@@ -193,10 +194,20 @@ const officeStateService = createOfficeStateService({
   authorization,
   engine,
   skills,
-  attachments,
-  artifacts,
 });
 await officeStateService.initialize();
+
+const executeAppCommand = createAppCommandService({
+  nora,
+  processes,
+  conversations,
+  attachments,
+  artifacts,
+  authorization,
+  events,
+  engine,
+  officeState: officeStateService,
+});
 
 const officeState = createOfficeStateController({
   allowedOrigin: config.frontendOrigin,
@@ -243,6 +254,7 @@ const officeStateSocket = attachOfficeStateWebSocket({
   server,
   allowedOrigin: config.frontendOrigin,
   service: officeStateService,
+  onCommand: executeAppCommand,
 });
 
 server.listen(config.port, config.host, () => {

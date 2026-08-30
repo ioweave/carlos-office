@@ -7,12 +7,8 @@ import { subscribeOfficeStateChanges } from "./OfficeStateBus.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const vaultDir = resolve(here, "../../ObsidianVault");
-const DEFAULT_DOMAINS = [
-  "nora", "models", "workflows", "approvals", "agents", "skillsRevision",
-  "conversations", "attachments", "artifacts",
-];
+const DEFAULT_DOMAINS = ["nora", "models", "workflows", "approvals", "agents", "skillsRevision", "conversations"];
 const ENTITY_DOMAINS = new Set(["workflows", "approvals", "agents", "conversations"]);
-const RESOURCE_DOMAINS = new Set(["attachments", "artifacts"]);
 const WATCH_DEBOUNCE_MS = 50;
 const MAX_PATCH_JOURNAL_ENTRIES = 5000;
 
@@ -23,34 +19,30 @@ const normalizeDomains = domains => {
   return [...normalized];
 };
 
+const conversationSummary = conversation => {
+  const messages = conversation.messages ?? [];
+  const lastMessage = messages.at(-1) ?? null;
+  const firstCarlos = messages.find(message => message.actor === "Carlos");
+  return {
+    id: conversation.id,
+    title: conversation.title ?? null,
+    nora: conversation.nora ?? null,
+    messageCount: messages.length,
+    lastMessageId: lastMessage?.id ?? "",
+    lastMessageAt: lastMessage?.at ?? "",
+    lastActor: lastMessage?.actor ?? "",
+    firstCarlosPreview: firstCarlos?.content?.replace(/\s+/g, " ").trim().slice(0, 56) ?? "",
+  };
+};
+
 const entityPatch = (previous = [], next = []) => {
   const before = new Map((previous || []).filter(item => item?.id).map(item => [item.id, item]));
   const after = new Map((next || []).filter(item => item?.id).map(item => [item.id, item]));
   const upsert = [];
   const remove = [];
-  for (const [id, value] of after) {
-    if (JSON.stringify(before.get(id)) !== JSON.stringify(value)) upsert.push(value);
-  }
+  for (const [id, value] of after) if (JSON.stringify(before.get(id)) !== JSON.stringify(value)) upsert.push(value);
   for (const id of before.keys()) if (!after.has(id)) remove.push(id);
   return { kind: "entities", upsert, remove };
-};
-
-const resourcePatch = (previous = {}, next = {}) => {
-  const before = previous && typeof previous === "object" ? previous : {};
-  const after = next && typeof next === "object" ? next : {};
-  const upsert = [];
-  const remove = [];
-  for (const [id, value] of Object.entries(after)) {
-    if (JSON.stringify(before[id]) !== JSON.stringify(value)) upsert.push({ id, value });
-  }
-  for (const id of Object.keys(before)) if (!Object.prototype.hasOwnProperty.call(after, id)) remove.push(id);
-  return { kind: "resources", upsert, remove };
-};
-
-const patchFor = (domain, previous, next) => {
-  if (ENTITY_DOMAINS.has(domain)) return entityPatch(previous, next);
-  if (RESOURCE_DOMAINS.has(domain)) return resourcePatch(previous, next);
-  return null;
 };
 
 export const createOfficeStateService = ({
@@ -60,8 +52,6 @@ export const createOfficeStateService = ({
   authorization,
   engine,
   skills,
-  attachments,
-  artifacts,
 }) => {
   const instance = randomUUID();
   const cache = new Map();
@@ -75,12 +65,6 @@ export const createOfficeStateService = ({
   let refreshQueue = Promise.resolve();
   let watchersStarted = false;
 
-  const conversationResourceMap = async listResource => {
-    const records = conversations.listConversations();
-    const entries = await Promise.all(records.map(async conversation => [conversation.id, await listResource(conversation.id)]));
-    return Object.fromEntries(entries);
-  };
-
   const readers = {
     nora: () => nora.getNoraState(),
     models: () => nora.listModels(),
@@ -88,9 +72,7 @@ export const createOfficeStateService = ({
     approvals: () => authorization.listApprovals(),
     agents: () => engine.listAgentProcesses(),
     skillsRevision: () => skills.getSkillsRevision(),
-    conversations: () => conversations.listConversations(),
-    attachments: () => conversationResourceMap(attachments.listAttachments),
-    artifacts: () => conversationResourceMap(artifacts.listArtifacts),
+    conversations: () => conversations.listConversations().map(conversationSummary),
   };
 
   const fullState = () => Object.fromEntries([...cache].map(([domain, entry]) => [domain, entry.value]));
@@ -122,7 +104,7 @@ export const createOfficeStateService = ({
     for (const [domain, entry] of cache) {
       if (entry.revision <= since) continue;
       changed.add(domain);
-      if (!ENTITY_DOMAINS.has(domain) && !RESOURCE_DOMAINS.has(domain)) state[domain] = entry.value;
+      if (!ENTITY_DOMAINS.has(domain)) state[domain] = entry.value;
     }
 
     const patches = patchJournal
@@ -168,8 +150,9 @@ export const createOfficeStateService = ({
     revision += 1;
     for (const entry of changed) {
       cache.set(entry.domain, { value: entry.value, serialized: entry.serialized, revision });
-      const patch = patchFor(entry.domain, entry.previous, entry.value);
-      if (patch) patchJournal.push({ revision, domain: entry.domain, ...patch });
+      if (ENTITY_DOMAINS.has(entry.domain)) {
+        patchJournal.push({ revision, domain: entry.domain, ...entityPatch(entry.previous, entry.value) });
+      }
     }
     pruneJournal();
     notifyListeners();
@@ -214,9 +197,7 @@ export const createOfficeStateService = ({
   const startWatchers = () => {
     if (watchersStarted) return;
     watchersStarted = true;
-    // Watchers are only a fallback for edits made outside Carlos Office. Internal mutations publish
-    // through OfficeStateBus and therefore do not depend on filesystem notification timing.
-    watchDurableState(resolve(vaultDir, "Conversations"), ["conversations", "attachments", "artifacts"]);
+    watchDurableState(resolve(vaultDir, "Conversations"), ["conversations"]);
     watchDurableState(resolve(vaultDir, "System/Workflows"), ["workflows"]);
     watchDurableState(resolve(vaultDir, "System/Runtime/Authorizations"), ["approvals"]);
   };

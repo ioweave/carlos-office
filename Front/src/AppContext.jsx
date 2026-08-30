@@ -1,15 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
-import api, { endpoints } from "./api";
+import api from "./api";
 
 const PAGES = new Set(["office", "chat", "processes", "operations", "capabilities", "store", "providers"]);
 const ACTIVE_PAGE_STORAGE_KEY = "office-active-page-v1";
 const ACTIVE_CONVERSATION_STORAGE_KEY = "office-active-conversation-v2";
 const THEME_STORAGE_KEY = "office-theme";
-const LONG_POLL_WAIT_MS = 240_000;
-const PING_TIMEOUT_MS = 250_000;
-const FALLBACK_RETRY_MS = 5_000;
 const WS_RECONNECT_MAX_MS = 15_000;
+const COMMAND_TIMEOUT_MS = 120_000;
 
 const EMPTY_OFFICE_STATE = {
   nora: { provider: "", model: "", activeRequests: [] },
@@ -19,8 +17,6 @@ const EMPTY_OFFICE_STATE = {
   agents: [],
   skillsRevision: 0,
   conversations: [],
-  attachments: {},
-  artifacts: {},
 };
 
 const systemPrefersDark = () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
@@ -35,15 +31,12 @@ const storedActiveConversation = () => {
   try { return sessionStorage.getItem(ACTIVE_CONVERSATION_STORAGE_KEY) || ""; } catch { return ""; }
 };
 
-const conversationRevision = conversations => new Map((conversations || []).map(conversation => {
-  const lastMessage = conversation.messages?.at(-1) ?? null;
-  return [conversation.id, {
-    count: conversation.messages?.length ?? 0,
-    lastMessageId: lastMessage?.id ?? "",
-    lastMessageAt: lastMessage?.at ?? "",
-    lastActor: lastMessage?.actor ?? "",
-  }];
-}));
+const conversationRevision = conversations => new Map((conversations || []).map(conversation => [conversation.id, {
+  count: conversation.messageCount ?? 0,
+  lastMessageId: conversation.lastMessageId ?? "",
+  lastMessageAt: conversation.lastMessageAt ?? "",
+  lastActor: conversation.lastActor ?? "",
+}]));
 
 const applyEntityPatch = (current, patch) => {
   const byId = new Map((Array.isArray(current) ? current : []).filter(item => item?.id).map(item => [item.id, item]));
@@ -52,19 +45,10 @@ const applyEntityPatch = (current, patch) => {
   return [...byId.values()];
 };
 
-const applyResourcePatch = (current, patch) => {
-  const next = { ...(current && typeof current === "object" ? current : {}) };
-  for (const id of patch.remove || []) delete next[id];
-  for (const entry of patch.upsert || []) if (entry?.id) next[entry.id] = entry.value;
-  return next;
-};
-
 const applyPatches = (base, patches) => {
   let next = { ...base };
   for (const patch of Array.isArray(patches) ? patches : []) {
-    if (!patch?.domain) continue;
-    if (patch.kind === "entities") next[patch.domain] = applyEntityPatch(next[patch.domain], patch);
-    if (patch.kind === "resources") next[patch.domain] = applyResourcePatch(next[patch.domain], patch);
+    if (patch?.kind === "entities" && patch.domain) next[patch.domain] = applyEntityPatch(next[patch.domain], patch);
   }
   return next;
 };
@@ -78,6 +62,7 @@ const websocketUrl = () => {
   return base;
 };
 
+const commandId = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const AppContext = createContext(null);
 
 export const AppProvider = ({ children }) => {
@@ -95,7 +80,7 @@ export const AppProvider = ({ children }) => {
   const revisionRef = useRef(0);
   const instanceRef = useRef(null);
   const websocketRef = useRef(null);
-  const websocketReadyRef = useRef(false);
+  const commandRequestsRef = useRef(new Map());
   const conversationRevisionRef = useRef(new Map());
   const conversationRevisionReadyRef = useRef(false);
 
@@ -125,30 +110,39 @@ export const AppProvider = ({ children }) => {
     return shouldApply;
   }, []);
 
-  const requestPing = useCallback(async ({ waitMs = 0, signal = null } = {}) => {
-    try {
-      const response = await api.get(endpoints.ping(), {
-        params: {
-          since: revisionRef.current,
-          wait: waitMs,
-          ...(instanceRef.current ? { instance: instanceRef.current } : {}),
-        },
-        signal,
-        timeout: PING_TIMEOUT_MS,
-      });
-      applyStatePayload(response.data || {});
-      return response.data || null;
-    } catch (error) {
-      const cancelled = error?.code === "ERR_CANCELED" || error?.name === "CanceledError";
-      if (!cancelled) {
-        console.error("[app] Office ping failed.", { message: error instanceof Error ? error.message : String(error) });
-        if (!websocketReadyRef.current) setConnected(false);
-      }
-      return null;
-    } finally { setLoading(false); }
-  }, [applyStatePayload]);
+  const sendCommand = useCallback((command, payload = {}) => new Promise((resolve, reject) => {
+    const socket = websocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      reject(new Error("Carlos Office is not connected."));
+      return;
+    }
 
-  const refresh = useCallback(async () => { await requestPing({ waitMs: 0 }); }, [requestPing]);
+    const id = commandId();
+    const timer = window.setTimeout(() => {
+      commandRequestsRef.current.delete(id);
+      reject(new Error(`Command timed out: ${command}`));
+    }, COMMAND_TIMEOUT_MS);
+    commandRequestsRef.current.set(id, { resolve, reject, timer });
+
+    try {
+      socket.send(JSON.stringify({ type: "command", id, command, payload }));
+    } catch (error) {
+      window.clearTimeout(timer);
+      commandRequestsRef.current.delete(id);
+      reject(error);
+    }
+  }), []);
+
+  const refresh = useCallback(async () => {
+    try {
+      await sendCommand("state.refresh");
+      return true;
+    } catch (error) {
+      console.error("[app] Could not refresh Office state.", { message: error instanceof Error ? error.message : String(error) });
+      return false;
+    }
+  }, [sendCommand]);
+
   const setActivePage = useCallback(value => {
     if (!PAGES.has(value)) return;
     setActivePageState(value);
@@ -233,107 +227,84 @@ export const AppProvider = ({ children }) => {
 
   useEffect(() => {
     let stopped = false;
-    let fallbackController = null;
-    let fallbackTimer = null;
     let reconnectTimer = null;
     let reconnectDelay = 750;
 
-    const stopFallback = () => {
-      if (fallbackTimer !== null) window.clearTimeout(fallbackTimer);
-      fallbackTimer = null;
-      fallbackController?.abort();
-      fallbackController = null;
+    const rejectPendingCommands = message => {
+      for (const request of commandRequestsRef.current.values()) {
+        window.clearTimeout(request.timer);
+        request.reject(new Error(message));
+      }
+      commandRequestsRef.current.clear();
     };
-    const scheduleFallback = delay => {
-      if (stopped || websocketReadyRef.current || document.hidden) return;
-      if (fallbackTimer !== null) window.clearTimeout(fallbackTimer);
-      fallbackTimer = window.setTimeout(() => {
-        fallbackTimer = null;
-        void fallbackPoll();
-      }, delay);
-    };
-    const fallbackPoll = async () => {
-      if (stopped || websocketReadyRef.current || document.hidden || fallbackController) return;
-      fallbackController = new AbortController();
-      const payload = await requestPing({
-        waitMs: instanceRef.current ? LONG_POLL_WAIT_MS : 0,
-        signal: fallbackController.signal,
-      });
-      fallbackController = null;
-      if (stopped || websocketReadyRef.current || document.hidden) return;
-      scheduleFallback(payload ? 0 : FALLBACK_RETRY_MS);
-    };
+
     const scheduleReconnect = () => {
-      if (stopped || document.hidden || reconnectTimer !== null) return;
+      if (stopped || reconnectTimer !== null) return;
       reconnectTimer = window.setTimeout(() => {
         reconnectTimer = null;
-        connectWebSocket();
+        connect();
       }, reconnectDelay);
       reconnectDelay = Math.min(Math.round(reconnectDelay * 1.7), WS_RECONNECT_MAX_MS);
     };
-    const connectWebSocket = () => {
-      if (stopped || document.hidden) return;
+
+    const connect = () => {
+      if (stopped) return;
       const current = websocketRef.current;
       if (current && [WebSocket.CONNECTING, WebSocket.OPEN].includes(current.readyState)) return;
+
       const url = websocketUrl();
       url.searchParams.set("since", String(revisionRef.current));
       if (instanceRef.current) url.searchParams.set("instance", instanceRef.current);
       const socket = new WebSocket(url);
       websocketRef.current = socket;
+
       socket.onopen = () => {
         if (stopped || websocketRef.current !== socket) return;
-        websocketReadyRef.current = true;
         reconnectDelay = 750;
         setConnected(true);
-        stopFallback();
       };
       socket.onmessage = event => {
         if (stopped || websocketRef.current !== socket) return;
         try {
           const payload = JSON.parse(event.data);
-          if (payload?.type === "state") applyStatePayload(payload);
+          if (payload?.type === "state") {
+            applyStatePayload(payload);
+            return;
+          }
+          if (payload?.type !== "command-result" || typeof payload.id !== "string") return;
+          const request = commandRequestsRef.current.get(payload.id);
+          if (!request) return;
+          window.clearTimeout(request.timer);
+          commandRequestsRef.current.delete(payload.id);
+          if (payload.ok) request.resolve(payload.data);
+          else {
+            const error = new Error(payload.error || "App command failed.");
+            error.statusCode = payload.statusCode;
+            request.reject(error);
+          }
         } catch (error) {
-          console.error("[app] Invalid Office state WebSocket message.", { message: error instanceof Error ? error.message : String(error) });
+          console.error("[app] Invalid WebSocket message.", { message: error instanceof Error ? error.message : String(error) });
         }
       };
       socket.onerror = () => {};
       socket.onclose = () => {
         if (websocketRef.current === socket) websocketRef.current = null;
-        websocketReadyRef.current = false;
         if (stopped) return;
         setConnected(false);
-        scheduleFallback(0);
+        rejectPendingCommands("Carlos Office connection closed before the command completed.");
         scheduleReconnect();
       };
     };
-    const bootstrap = async () => {
-      await requestPing({ waitMs: 0 });
-      if (stopped) return;
-      connectWebSocket();
-      if (!websocketReadyRef.current) scheduleFallback(FALLBACK_RETRY_MS);
-    };
-    const handleVisibility = () => {
-      if (document.hidden) {
-        stopFallback();
-        if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-        websocketRef.current?.close(1000, "Page hidden");
-        return;
-      }
-      void requestPing({ waitMs: 0 }).then(() => connectWebSocket());
-    };
-    void bootstrap();
-    document.addEventListener("visibilitychange", handleVisibility);
+
+    connect();
     return () => {
       stopped = true;
-      stopFallback();
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      rejectPendingCommands("Carlos Office connection closed.");
       websocketRef.current?.close(1000, "App unmounted");
       websocketRef.current = null;
-      websocketReadyRef.current = false;
-      document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [applyStatePayload, requestPing]);
+  }, [applyStatePayload]);
 
   return (
     <AppContext.Provider value={{
@@ -349,6 +320,7 @@ export const AppProvider = ({ children }) => {
       connected,
       loading,
       refresh,
+      sendCommand,
       chatRequest,
       operationsRequest,
       unreadConversationIds: [...unreadConversationIds],
