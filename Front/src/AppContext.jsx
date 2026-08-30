@@ -146,7 +146,9 @@ export const AppProvider = ({ children }) => {
   const setActivePage = useCallback(value => {
     if (!PAGES.has(value)) return;
     setActivePageState(value);
-    try { sessionStorage.setItem(ACTIVE_PAGE_STORAGE_KEY, value); } catch {}
+    try { sessionStorage.setItem(ACTIVE_PAGE_STORAGE_KEY, value); } catch {
+      // Session storage may be unavailable in restricted browser contexts.
+    }
   }, []);
   const markConversationRead = useCallback(conversationId => {
     if (!conversationId) return;
@@ -163,7 +165,9 @@ export const AppProvider = ({ children }) => {
     try {
       if (id) sessionStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, id);
       else sessionStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
-    } catch {}
+    } catch {
+      // Session storage may be unavailable in restricted browser contexts.
+    }
     if (id) markConversationRead(id);
   }, [markConversationRead]);
   const setTheme = value => {

@@ -113,8 +113,11 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
   const speechRecognitionRef = useRef(null);
   const speechBaseRef = useRef("");
 
-  const nora = officeState.nora || { provider: "", model: "", activeRequests: [] };
-  const models = officeState.models || [];
+  const nora = useMemo(
+    () => officeState.nora || { provider: "", model: "", activeRequests: [] },
+    [officeState.nora],
+  );
+  const models = useMemo(() => officeState.models || [], [officeState.models]);
   const providers = useMemo(() => models.map(item => item.provider), [models]);
   const modelsFor = provider => models.find(item => item.provider === provider)?.models || [];
   const activeSummary = useMemo(
@@ -136,6 +139,8 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
   );
   const requestJob = activeRequest || (localRequestJob?.conversationId === activeConversationId ? localRequestJob : null);
   const working = sending || Boolean(requestJob);
+  const conversationMessageCount = conversation?.messages?.length || 0;
+  const conversationLastMessageAt = conversation?.messages?.at(-1)?.at || "";
 
   const resetEditing = useCallback(() => {
     setEditingConversationId("");
@@ -181,7 +186,7 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
       .then(bundle => {
         if (!active) return;
         setCanonicalConversation(bundle.conversation || null);
-        setAttachments(current => mergeResources(current, bundle.attachments));
+        setAttachments(bundle.attachments || []);
         setArtifacts(bundle.artifacts || []);
       })
       .catch(error => {
@@ -193,13 +198,7 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
         }
       });
     return () => { active = false; };
-  }, [
-    activeConversationId,
-    activeSummary?.lastMessageAt,
-    activeSummary?.lastMessageId,
-    activeSummary?.messageCount,
-    sendCommand,
-  ]);
+  }, [activeConversationId, activeSummary, sendCommand]);
 
   useEffect(() => {
     const selection = canonicalConversation?.nora || activeSummary?.nora || nora;
@@ -233,21 +232,25 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
       if (thread) thread.scrollTop = thread.scrollHeight;
     });
     return () => cancelAnimationFrame(frame);
-  }, [conversation?.id, conversation?.messages?.length, conversation?.messages?.at(-1)?.at]);
+  }, [conversation?.id, conversationLastMessageAt, conversationMessageCount]);
 
   useEffect(() => {
     if (activeConversationId) markConversationRead(activeConversationId);
-  }, [activeConversationId, conversation?.messages?.length, conversation?.messages?.at(-1)?.at, markConversationRead]);
+  }, [activeConversationId, conversationLastMessageAt, conversationMessageCount, markConversationRead]);
 
   const stopListening = useCallback(() => {
     const recognition = speechRecognitionRef.current;
     if (!recognition) return;
-    try { recognition.stop(); } catch {}
+    try { recognition.stop(); } catch {
+      // Recognition may already have stopped asynchronously.
+    }
   }, []);
 
   useEffect(() => () => {
     uploadControllerRef.current?.abort();
-    try { speechRecognitionRef.current?.stop(); } catch {}
+    try { speechRecognitionRef.current?.stop(); } catch {
+      // Recognition may already have stopped asynchronously.
+    }
     window.speechSynthesis?.cancel();
   }, []);
 

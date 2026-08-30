@@ -50,18 +50,20 @@ const inline = (text, keyPrefix, artifactByName, onArtifact) => {
     if (token.startsWith("`")) {
       const code = token.slice(1, -1);
       const artifact = artifactByName.get(code);
-      nodes.push(artifact && typeof onArtifact === "function"
-        ? (
-            <button
-              key={key}
-              type="button"
-              className="markdown-artifact-link markdown-artifact-link--code"
-              onClick={() => onArtifact(artifact)}
-            >
-              <code>{code}</code>
-            </button>
-          )
-        : <code key={key}>{code}</code>);
+      if (artifact && typeof onArtifact === "function") {
+        nodes.push(
+          <button
+            key={key}
+            type="button"
+            className="markdown-artifact-link markdown-artifact-link--code"
+            onClick={() => onArtifact(artifact)}
+          >
+            <code>{code}</code>
+          </button>,
+        );
+      } else {
+        nodes.push(<code key={key}>{code}</code>);
+      }
     } else if (token.startsWith("**")) {
       nodes.push(<strong key={key}>{inline(token.slice(2, -2), `${key}-b`, artifactByName, onArtifact)}</strong>);
     } else if (token.startsWith("~~")) {
@@ -190,14 +192,16 @@ export default function MarkdownContent({ children, artifacts = [], onArtifact =
         const match = lines[i].match(matcher);
         if (!match) break;
         const task = match[1].match(/^\[([ xX])\]\s+(.+)$/);
-        items.push(task
-          ? (
-              <li key={items.length} className="markdown-task-item">
-                <input type="checkbox" checked={task[1].toLowerCase() === "x"} readOnly />
-                <span>{renderInline(task[2], `li-${i}`)}</span>
-              </li>
-            )
-          : <li key={items.length}>{renderInline(match[1], `li-${i}`)}</li>);
+        if (task) {
+          items.push(
+            <li key={items.length} className="markdown-task-item">
+              <input type="checkbox" checked={task[1].toLowerCase() === "x"} readOnly />
+              <span>{renderInline(task[2], `li-${i}`)}</span>
+            </li>,
+          );
+        } else {
+          items.push(<li key={items.length}>{renderInline(match[1], `li-${i}`)}</li>);
+        }
         i += 1;
       }
       blocks.push(unordered
