@@ -21,16 +21,18 @@ const normalizeDomains = domains => {
 
 const conversationSummary = conversation => {
   const messages = conversation.messages ?? [];
-  const lastMessage = messages.at(-1) ?? null;
+  const latestMessage = messages.reduce((latest, message) => (
+    !latest || Date.parse(message.at ?? "") > Date.parse(latest.at ?? "") ? message : latest
+  ), null);
   const firstCarlos = messages.find(message => message.actor === "Carlos");
   return {
     id: conversation.id,
     title: conversation.title ?? null,
     nora: conversation.nora ?? null,
     messageCount: messages.length,
-    lastMessageId: lastMessage?.id ?? "",
-    lastMessageAt: lastMessage?.at ?? "",
-    lastActor: lastMessage?.actor ?? "",
+    lastMessageId: latestMessage?.id ?? "",
+    lastMessageAt: latestMessage?.at ?? "",
+    lastActor: latestMessage?.actor ?? "",
     firstCarlosPreview: firstCarlos?.content?.replace(/\s+/g, " ").trim().slice(0, 56) ?? "",
   };
 };
@@ -218,38 +220,8 @@ export const createOfficeStateService = ({
     return () => listeners.delete(listener);
   };
 
-  const ping = async ({ since = 0, clientInstance = null, waitMs = 0, signal = null } = {}) => {
-    if (!Number.isSafeInteger(since) || since < 0) throw new Error("Ping revision must be a non-negative integer");
-    if (!Number.isSafeInteger(waitMs) || waitMs < 0) throw new Error("Ping wait must be a non-negative integer");
-    await initialize();
-    const immediate = createResponse(since, clientInstance);
-    if (immediate.reset || immediate.changed.length || waitMs === 0 || signal?.aborted) return immediate;
-
-    return new Promise(resolvePromise => {
-      let settled = false;
-      let timer = null;
-      let unsubscribe = null;
-      const finish = payload => {
-        if (settled) return;
-        settled = true;
-        if (timer !== null) clearTimeout(timer);
-        signal?.removeEventListener("abort", handleAbort);
-        unsubscribe?.();
-        resolvePromise(payload);
-      };
-      const handleAbort = () => finish(null);
-      const handleRevision = () => {
-        const response = createResponse(since, clientInstance);
-        if (response.reset || response.changed.length) finish(response);
-      };
-      unsubscribe = subscribe(handleRevision);
-      timer = setTimeout(() => finish(createResponse(since, clientInstance)), waitMs);
-      signal?.addEventListener("abort", handleAbort, { once: true });
-      handleRevision();
-    });
-  };
-
   const responseSince = async ({ since = 0, clientInstance = null } = {}) => {
+    if (!Number.isSafeInteger(since) || since < 0) throw new Error("State revision must be a non-negative integer");
     await initialize();
     return createResponse(since, clientInstance);
   };
@@ -273,7 +245,6 @@ export const createOfficeStateService = ({
   return {
     initialize,
     invalidate,
-    ping,
     responseSince,
     subscribe,
     dispose,

@@ -27,6 +27,8 @@ const sameStringList = (left = [], right = []) => JSON.stringify(left) === JSON.
 
 export const createAppCommandService = ({
   nora,
+  noraRegistry,
+  listModels,
   processes,
   conversations,
   attachments,
@@ -36,9 +38,31 @@ export const createAppCommandService = ({
   engine,
   officeState,
 }) => {
-  if (!nora || !processes || !conversations || !attachments || !artifacts || !authorization || !events || !engine || !officeState) {
+  if (
+    !nora
+    || !noraRegistry
+    || typeof listModels !== "function"
+    || !processes
+    || !conversations
+    || !attachments
+    || !artifacts
+    || !authorization
+    || !events
+    || !engine
+    || !officeState
+  ) {
     throw new Error("App command service requires the complete Carlos Office command dependencies");
   }
+
+  const modelSelection = payload => {
+    const provider = requireString(payload.provider, "Provider");
+    const model = requireString(payload.model, "Model");
+    const providerEntry = listModels().find(item => item.provider === provider);
+    if (!providerEntry || !providerEntry.models?.includes(model)) {
+      throw requestError(`Unknown model selection: ${provider}/${model}`);
+    }
+    return { provider, model };
+  };
 
   const conversationBundle = async conversationId => {
     const conversation = await conversations.getConversation(conversationId);
@@ -157,6 +181,12 @@ export const createAppCommandService = ({
       await officeState.invalidate(REFRESH_DOMAINS);
       return { revision: officeState.revision };
     },
+    "nora.setModel": async payload => {
+      const selection = modelSelection(payload);
+      await noraRegistry.saveNoraDefinition(selection);
+      await officeState.invalidate(["nora", "models"]);
+      return nora.getNoraState();
+    },
     "conversation.get": async payload => conversationBundle(requireString(payload.conversationId, "Conversation ID")),
     "conversation.create": async payload => nora.createConversation({
       provider: payload.provider ?? null,
@@ -174,10 +204,7 @@ export const createAppCommandService = ({
     },
     "conversation.setModel": async payload => nora.setConversationModel(
       requireString(payload.conversationId, "Conversation ID"),
-      {
-        provider: requireString(payload.provider, "Provider"),
-        model: requireString(payload.model, "Model"),
-      },
+      modelSelection(payload),
     ),
     "conversation.send": sendCarlosMessage,
     "conversation.editMessage": editCarlosMessage,

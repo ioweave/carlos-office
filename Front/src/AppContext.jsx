@@ -216,7 +216,9 @@ export const AppProvider = ({ children }) => {
       }
       return unread;
     });
-    if (activeConversationId && !next.has(activeConversationId)) setActiveConversationId("");
+    if (activeConversationId && previous.has(activeConversationId) && !next.has(activeConversationId)) {
+      setActiveConversationId("");
+    }
     conversationRevisionRef.current = next;
   }, [activeConversationId, activePage, officeState.conversations, setActiveConversationId]);
 
@@ -290,7 +292,6 @@ export const AppProvider = ({ children }) => {
           console.error("[app] Invalid WebSocket message.", { message: error instanceof Error ? error.message : String(error) });
         }
       };
-      socket.onerror = () => {};
       socket.onclose = () => {
         if (websocketRef.current === socket) websocketRef.current = null;
         if (stopped) return;

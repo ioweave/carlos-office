@@ -22,7 +22,6 @@ import { createCredentialController } from "./src/controllers/CredentialControll
 import * as events from "./src/controllers/EventController.mjs";
 import { createKnowledgeController } from "./src/controllers/KnowledgeController.mjs";
 import * as nora from "./src/controllers/NoraController.mjs";
-import { createOfficeStateController } from "./src/controllers/OfficeStateController.mjs";
 import * as processes from "./src/controllers/ProcessController.mjs";
 import * as providers from "./src/controllers/ProviderController.mjs";
 import * as schedules from "./src/controllers/ScheduleController.mjs";
@@ -199,6 +198,8 @@ await officeStateService.initialize();
 
 const executeAppCommand = createAppCommandService({
   nora,
+  noraRegistry,
+  listModels: listNoraModels,
   processes,
   conversations,
   attachments,
@@ -207,13 +208,6 @@ const executeAppCommand = createAppCommandService({
   events,
   engine,
   officeState: officeStateService,
-});
-
-const officeState = createOfficeStateController({
-  allowedOrigin: config.frontendOrigin,
-  noraRegistry,
-  nora,
-  service: officeStateService,
 });
 
 const server = createServer((req, res) => {
@@ -225,10 +219,6 @@ const server = createServer((req, res) => {
   }
   if (providerResources.matches(req)) {
     void providerResources.handle(req, res);
-    return;
-  }
-  if (officeState.matches(req)) {
-    void officeState.handle(req, res);
     return;
   }
   if (credentials.matches(req)) {
