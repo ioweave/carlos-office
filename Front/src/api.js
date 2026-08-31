@@ -12,18 +12,11 @@ const api = axios.create({
 });
 
 export const endpoints = {
-  ping: () => "/ping",
   health: () => "/health",
   models: () => "/models",
   nora: () => "/nora",
   events: () => "/events",
 
-  conversations: () => "/conversations",
-  conversation: id => `/conversations/${id}`,
-  conversationMessage: (id, messageId) => `/conversations/${id}/messages/${messageId}`,
-  conversationModel: id => `/conversations/${id}/model`,
-  conversationRequest: id => `/conversations/${id}/requests`,
-  conversationRequestJob: (id, requestId) => `/conversations/${id}/requests/${requestId}`,
   conversationAttachments: id => `/conversations/${id}/attachments`,
   conversationAttachment: (id, attachmentId) => `/conversations/${id}/attachments/${attachmentId}`,
   conversationArtifacts: id => `/conversations/${id}/artifacts`,
