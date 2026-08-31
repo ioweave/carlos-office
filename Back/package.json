@@ -5,7 +5,7 @@
   "type": "module",
   "main": "platform.mjs",
   "engines": {
-    "node": ">=22.12"
+    "node": ">=22.13"
   },
   "scripts": {
     "start": "node platform.mjs",
