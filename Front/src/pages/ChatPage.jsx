@@ -11,59 +11,18 @@ import ConversationSidebar from "../components/ConversationSidebar";
 import { conversationTitle, sortConversationSummaries } from "../lib/chatPresentation";
 import "../styles/chat-features.scss";
 
-const createMessageId = () => {
-  const uuid = globalThis.crypto?.randomUUID?.();
-  if (uuid) return `message-${uuid}`;
-  return `message-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-};
-
-const filePayload = file => new Promise((resolve, reject) => {
-  const reader = new FileReader();
-  reader.onload = () => {
-    const value = String(reader.result || "");
-    const comma = value.indexOf(",");
-    resolve({
-      name: file.name,
-      type: file.type || "application/octet-stream",
-      content: comma >= 0 ? value.slice(comma + 1) : "",
-      encoding: "base64",
-    });
-  };
-  reader.onerror = () => reject(reader.error || new Error(`Could not read ${file.name}.`));
-  reader.readAsDataURL(file);
-});
-
 const clipboardExtension = type => ({
   "image/gif": "gif",
   "image/jpeg": "jpg",
   "image/png": "png",
   "image/webp": "webp",
 }[type] || "png");
-
 const speechText = value => String(value || "")
   .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
   .replace(/```[\s\S]*?```/g, " code block ")
   .replace(/[`*_>#~|-]+/g, " ")
   .replace(/\s+/g, " ")
   .trim();
-
-const mergeOptimisticConversation = (canonical, optimistic) => {
-  if (!optimistic) return canonical;
-  if (!canonical) return optimistic;
-  if (canonical.id !== optimistic.id) return canonical;
-
-  const canonicalIds = new Set((canonical.messages || []).map(message => message.id));
-  const localMessages = (optimistic.messages || []).filter(message => !canonicalIds.has(message.id));
-  if (!localMessages.length) return canonical;
-  return { ...canonical, messages: [...(canonical.messages || []), ...localMessages] };
-};
-
-const mergeResources = (current, incoming) => {
-  const byId = new Map((current || []).map(item => [item.id, item]));
-  for (const item of incoming || []) if (item?.id) byId.set(item.id, item);
-  return [...byId.values()];
-};
-
 const summaryFromConversation = conversation => {
   const messages = conversation?.messages || [];
   const lastMessage = messages.at(-1) || null;
@@ -84,21 +43,25 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
   const {
     officeState,
     activeConversationId,
-    setActiveConversationId,
     unreadConversationIds,
     markConversationRead,
-    sendCommand,
+    chatConversation: conversation,
+    chatAttachments: attachments,
+    chatArtifacts: artifacts,
+    chatWorking: working,
+    openChatConversation,
+    startNewChat,
+    renameChatConversation,
+    deleteChatConversation,
+    setChatConversationModel,
+    sendChatMessage,
+    editChatMessage,
+    cancelChatRequest,
   } = useAppContext();
-  const [canonicalConversation, setCanonicalConversation] = useState(null);
-  const [optimisticConversation, setOptimisticConversation] = useState(null);
-  const [attachments, setAttachments] = useState([]);
-  const [artifacts, setArtifacts] = useState([]);
   const [selectedArtifact, setSelectedArtifact] = useState(null);
   const [modelDraft, setModelDraft] = useState({ provider: "", model: "" });
   const [input, setInput] = useState("");
   const [files, setFiles] = useState([]);
-  const [sending, setSending] = useState(false);
-  const [localRequestJob, setLocalRequestJob] = useState(null);
   const [listening, setListening] = useState(false);
   const [speakingMessageId, setSpeakingMessageId] = useState("");
   const [editingConversationId, setEditingConversationId] = useState("");
@@ -108,15 +71,10 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
   const [messageDraft, setMessageDraft] = useState("");
   const textareaRef = useRef(null);
   const chatThreadRef = useRef(null);
-  const uploadControllerRef = useRef(null);
-  const sendInFlightRef = useRef(false);
   const speechRecognitionRef = useRef(null);
   const speechBaseRef = useRef("");
 
-  const nora = useMemo(
-    () => officeState.nora || { provider: "", model: "", activeRequests: [] },
-    [officeState.nora],
-  );
+  const nora = useMemo(() => officeState.nora || { provider: "", model: "" }, [officeState.nora]);
   const models = useMemo(() => officeState.models || [], [officeState.models]);
   const providers = useMemo(() => models.map(item => item.provider), [models]);
   const modelsFor = provider => models.find(item => item.provider === provider)?.models || [];
@@ -124,21 +82,11 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
     () => (officeState.conversations || []).find(item => item.id === activeConversationId) || null,
     [activeConversationId, officeState.conversations],
   );
-  const conversation = useMemo(
-    () => mergeOptimisticConversation(canonicalConversation, optimisticConversation),
-    [canonicalConversation, optimisticConversation],
-  );
   const conversations = useMemo(() => {
     const summaries = [...(officeState.conversations || [])];
     if (conversation?.id && !summaries.some(item => item.id === conversation.id)) summaries.push(summaryFromConversation(conversation));
     return sortConversationSummaries(summaries);
   }, [conversation, officeState.conversations]);
-  const activeRequest = useMemo(
-    () => (nora.activeRequests || []).find(item => item.conversationId === activeConversationId) || null,
-    [activeConversationId, nora.activeRequests],
-  );
-  const requestJob = activeRequest || (localRequestJob?.conversationId === activeConversationId ? localRequestJob : null);
-  const working = sending || Boolean(requestJob);
   const conversationMessageCount = conversation?.messages?.length || 0;
   const conversationLastMessageAt = conversation?.messages?.at(-1)?.at || "";
 
@@ -154,15 +102,10 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
     if (!id) return;
     window.speechSynthesis?.cancel();
     setSpeakingMessageId("");
-    setActiveConversationId(id);
-    setCanonicalConversation(null);
-    setOptimisticConversation(null);
-    setAttachments([]);
-    setArtifacts([]);
     setSelectedArtifact(null);
     resetEditing();
-    markConversationRead(id);
-  }, [markConversationRead, resetEditing, setActiveConversationId]);
+    openChatConversation(id);
+  }, [openChatConversation, resetEditing]);
 
   useEffect(() => {
     if (!openRequest) return;
@@ -174,59 +117,15 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
   }, [openRequest, openConversation]);
 
   useEffect(() => {
-    if (!activeConversationId) {
-      setCanonicalConversation(null);
-      setAttachments([]);
-      setArtifacts([]);
+    const selection = conversation?.nora || activeSummary?.nora || nora;
+    setModelDraft({ provider: selection?.provider || "", model: selection?.model || "" });
+  }, [activeSummary?.nora, conversation?.nora, nora]);
+
+  useEffect(() => {
+    if (!conversation?.id) {
+      setSelectedArtifact(null);
       return undefined;
     }
-
-    let active = true;
-    void sendCommand("conversation.get", { conversationId: activeConversationId })
-      .then(bundle => {
-        if (!active) return;
-        setCanonicalConversation(bundle.conversation || null);
-        setAttachments(bundle.attachments || []);
-        setArtifacts(bundle.artifacts || []);
-      })
-      .catch(error => {
-        if (active && error.statusCode !== 404) {
-          console.error("[chat] Could not load Conversation.", {
-            conversationId: activeConversationId,
-            message: error instanceof Error ? error.message : String(error),
-          });
-        }
-      });
-    return () => { active = false; };
-  }, [activeConversationId, activeSummary, sendCommand]);
-
-  useEffect(() => {
-    const selection = canonicalConversation?.nora || activeSummary?.nora || nora;
-    setModelDraft({ provider: selection?.provider || "", model: selection?.model || "" });
-  }, [activeSummary?.nora, canonicalConversation?.nora, nora.model, nora.provider]);
-
-  useEffect(() => {
-    if (!canonicalConversation || !optimisticConversation || canonicalConversation.id !== optimisticConversation.id) return;
-    const canonicalIds = new Set((canonicalConversation.messages || []).map(message => message.id));
-    const localIds = (optimisticConversation.messages || []).map(message => message.id);
-    if (localIds.length && localIds.every(id => canonicalIds.has(id))) setOptimisticConversation(null);
-  }, [canonicalConversation, optimisticConversation]);
-
-  useEffect(() => {
-    if (!localRequestJob) return;
-    if ((nora.activeRequests || []).some(job => job.id === localRequestJob.id)) {
-      setLocalRequestJob(null);
-      return;
-    }
-    const completedAt = Date.parse(activeSummary?.lastMessageAt || "");
-    const startedAt = Date.parse(localRequestJob.startedAt || "");
-    if (activeSummary?.lastActor === "Nora" && Number.isFinite(completedAt) && completedAt >= startedAt) {
-      setLocalRequestJob(null);
-    }
-  }, [activeSummary?.lastActor, activeSummary?.lastMessageAt, localRequestJob, nora.activeRequests]);
-
-  useEffect(() => {
-    if (!conversation?.id) return undefined;
     const frame = requestAnimationFrame(() => {
       const thread = chatThreadRef.current;
       if (thread) thread.scrollTop = thread.scrollHeight;
@@ -247,7 +146,6 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
   }, []);
 
   useEffect(() => () => {
-    uploadControllerRef.current?.abort();
     try { speechRecognitionRef.current?.stop(); } catch {
       // Recognition may already have stopped asynchronously.
     }
@@ -255,20 +153,15 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
   }, []);
 
   const startNew = () => {
-    if (sending || sendInFlightRef.current) return;
+    if (working) return;
     stopListening();
     window.speechSynthesis?.cancel();
     setSpeakingMessageId("");
-    setActiveConversationId("");
-    setCanonicalConversation(null);
-    setOptimisticConversation(null);
-    setAttachments([]);
-    setArtifacts([]);
     setSelectedArtifact(null);
-    setLocalRequestJob(null);
     setInput("");
     setFiles([]);
     resetEditing();
+    startNewChat();
     setModelDraft({ provider: nora.provider || "", model: nora.model || "" });
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
@@ -298,8 +191,7 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
     }
 
     try {
-      const updated = await sendCommand("conversation.rename", { conversationId: item.id, title: nextTitle });
-      if (updated?.id === activeConversationId) setCanonicalConversation(updated);
+      await renameChatConversation(item.id, nextTitle);
     } catch (error) {
       toast.error(error.message || "Could not rename conversation.");
     } finally {
@@ -312,8 +204,7 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
     if (!window.confirm(`Delete "${conversationTitle(item)}"? This cannot be undone.`)) return;
 
     try {
-      await sendCommand("conversation.delete", { conversationId: item.id });
-      if (activeConversationId === item.id) startNew();
+      await deleteChatConversation(item.id);
       if (editingConversationId === item.id) cancelRename();
       toast.success("Conversation deleted.");
     } catch (error) {
@@ -344,60 +235,23 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
       return;
     }
 
-    const previous = conversation;
-    const messageIndex = previous.messages.findIndex(item => item.id === message.id);
-    if (messageIndex < 0) return;
-    setOptimisticConversation({
-      ...previous,
-      messages: previous.messages.slice(0, messageIndex + 1).map(item => (
-        item.id === message.id ? { ...item, content, pending: true } : item
-      )),
-      workflows: [],
-    });
     cancelMessageEdit();
-    setSending(true);
-
     try {
-      const result = await sendCommand("conversation.editMessage", {
-        conversationId: previous.id,
-        messageId: message.id,
-        content,
-      });
-      setCanonicalConversation(result.conversation);
-      setOptimisticConversation(null);
-      setLocalRequestJob(result.job || null);
+      await editChatMessage({ messageId: message.id, content });
       toast.success("Message committed. Later conversation history was replaced.");
     } catch (error) {
-      setOptimisticConversation(null);
       toast.error(error.message || "Could not edit message.");
-    } finally {
-      setSending(false);
     }
-  };
-
-  const ensureConversation = async optimisticMessage => {
-    if (activeConversationId) return activeConversationId;
-    const provider = modelDraft.provider || nora.provider || providers[0] || "";
-    const model = modelDraft.model || nora.model || modelsFor(provider)[0] || "";
-    if (!provider || !model) throw new Error("Select a provider and model before sending.");
-
-    const created = await sendCommand("conversation.create", { provider, model });
-    setActiveConversationId(created.id);
-    setCanonicalConversation(created);
-    setOptimisticConversation({ ...created, messages: [optimisticMessage] });
-    setModelDraft(created.nora || { provider, model });
-    return created.id;
   };
 
   const saveModel = async () => {
     if (!conversation?.id || !modelDraft.provider || !modelDraft.model) return;
     try {
-      const updated = await sendCommand("conversation.setModel", {
+      await setChatConversationModel({
         conversationId: conversation.id,
         provider: modelDraft.provider,
         model: modelDraft.model,
       });
-      setCanonicalConversation(updated);
       toast.success("Conversation model updated.");
     } catch (error) {
       toast.error(error.message || "Could not update model.");
@@ -407,113 +261,34 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
   const send = async event => {
     event.preventDefault();
     const message = input.trim();
-    if (sendInFlightRef.current || working || editingMessageId || (!message && files.length === 0)) return;
+    if (working || editingMessageId || (!message && files.length === 0)) return;
 
     stopListening();
-    sendInFlightRef.current = true;
-    const previous = conversation;
     const content = message || "Review the attached files.";
     const pendingFiles = [...files];
-    const optimistic = {
-      id: createMessageId(),
-      actor: "Carlos",
-      at: new Date().toISOString(),
-      content,
-      attachments: [],
-      artifacts: [],
-      pending: true,
-    };
-    setOptimisticConversation(previous
-      ? { ...previous, messages: [...(previous.messages || []), optimistic] }
-      : { id: activeConversationId || "", messages: [optimistic], workflows: [], nora: modelDraft });
     setInput("");
     setFiles([]);
-    setSending(true);
-
-    const controller = new AbortController();
-    uploadControllerRef.current = controller;
-    const uploaded = [];
-    let id = activeConversationId || "";
-    let accepted = false;
 
     try {
-      id = await ensureConversation(optimistic);
-      const createdAttachments = await Promise.all(pendingFiles.map(async item => {
-        const payload = await filePayload(item);
-        const created = (
-          await api.post(endpoints.conversationAttachments(id), {
-            ...payload,
-            createdBy: "Carlos",
-          }, { signal: controller.signal })
-        ).data;
-        uploaded.push(created);
-        return created;
-      }));
-      const attachmentIds = createdAttachments.map(item => item.id);
-      setAttachments(current => mergeResources(current, createdAttachments));
-      setOptimisticConversation(current => current ? {
-        ...current,
-        id,
-        messages: current.messages.map(entry => (
-          entry.id === optimistic.id ? { ...entry, attachments: attachmentIds } : entry
-        )),
-      } : current);
-
-      const result = await sendCommand("conversation.send", {
-        conversationId: id,
+      await sendChatMessage({
         content,
-        attachments: attachmentIds,
-        messageId: optimistic.id,
+        files: pendingFiles,
+        provider: modelDraft.provider,
+        model: modelDraft.model,
       });
-      accepted = true;
-      setLocalRequestJob(result.job || null);
-      setOptimisticConversation(current => current ? {
-        ...current,
-        id,
-        messages: current.messages.map(entry => (
-          entry.id === optimistic.id ? { ...entry, pending: false, attachments: attachmentIds } : entry
-        )),
-      } : current);
-      markConversationRead(id);
     } catch (error) {
-      if (!accepted && uploaded.length && id) {
-        try {
-          await sendCommand("conversation.deleteAttachments", {
-            conversationId: id,
-            attachmentIds: uploaded.map(item => item.id),
-          });
-        } catch (cleanupError) {
-          console.error("[chat] Could not clean up failed message attachments.", {
-            conversationId: id,
-            message: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-          });
-        }
-        const removed = new Set(uploaded.map(item => item.id));
-        setAttachments(current => current.filter(item => !removed.has(item.id)));
-      }
-      if (!accepted) setOptimisticConversation(previous || null);
-      if (error?.code !== "ERR_CANCELED" && error?.name !== "CanceledError") {
+      if (error?.code !== "ERR_CANCELED" && error?.name !== "CanceledError" && error?.name !== "AbortError") {
         setInput(content);
         setFiles(pendingFiles);
         toast.error(error.message || "Request failed.");
       }
-    } finally {
-      uploadControllerRef.current = null;
-      sendInFlightRef.current = false;
-      setSending(false);
     }
   };
 
   const stop = async () => {
-    uploadControllerRef.current?.abort();
-    if (!requestJob || !activeConversationId) return;
     try {
-      await sendCommand("conversation.cancelRequest", {
-        conversationId: activeConversationId,
-        requestId: requestJob.id,
-      });
-      setLocalRequestJob(null);
-      toast.message("Nora request cancelled.");
+      const cancelled = await cancelChatRequest();
+      if (cancelled) toast.message("Nora request cancelled.");
     } catch (error) {
       toast.error(error.message || "Could not cancel Nora request.");
     }
@@ -789,7 +564,7 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
             onStop={stop}
             onSubmit={send}
             onEnter={event => {
-              if (event.repeat || sendInFlightRef.current || working) return;
+              if (event.repeat || working) return;
               event.currentTarget.form?.requestSubmit();
             }}
           />

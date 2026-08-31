@@ -1,6 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
-import api from "./api";
+import api, { endpoints } from "./api";
 
 const PAGES = new Set(["office", "chat", "processes", "operations", "capabilities", "store", "providers"]);
 const ACTIVE_PAGE_STORAGE_KEY = "office-active-page-v1";
@@ -30,29 +30,12 @@ const storedActivePage = () => {
 const storedActiveConversation = () => {
   try { return sessionStorage.getItem(ACTIVE_CONVERSATION_STORAGE_KEY) || ""; } catch { return ""; }
 };
-
 const conversationRevision = conversations => new Map((conversations || []).map(conversation => [conversation.id, {
   count: conversation.messageCount ?? 0,
   lastMessageId: conversation.lastMessageId ?? "",
   lastMessageAt: conversation.lastMessageAt ?? "",
   lastActor: conversation.lastActor ?? "",
 }]));
-
-const applyEntityPatch = (current, patch) => {
-  const byId = new Map((Array.isArray(current) ? current : []).filter(item => item?.id).map(item => [item.id, item]));
-  for (const id of patch.remove || []) byId.delete(id);
-  for (const item of patch.upsert || []) if (item?.id) byId.set(item.id, item);
-  return [...byId.values()];
-};
-
-const applyPatches = (base, patches) => {
-  let next = { ...base };
-  for (const patch of Array.isArray(patches) ? patches : []) {
-    if (patch?.kind === "entities" && patch.domain) next[patch.domain] = applyEntityPatch(next[patch.domain], patch);
-  }
-  return next;
-};
-
 const websocketUrl = () => {
   const base = new URL(api.defaults.baseURL || window.location.origin, window.location.href);
   base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
@@ -61,13 +44,54 @@ const websocketUrl = () => {
   base.hash = "";
   return base;
 };
-
 const commandId = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const createMessageId = () => {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  return uuid ? `message-${uuid}` : `message-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+const filePayload = file => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const value = String(reader.result || "");
+    const comma = value.indexOf(",");
+    resolve({
+      name: file.name,
+      type: file.type || "application/octet-stream",
+      content: comma >= 0 ? value.slice(comma + 1) : "",
+      encoding: "base64",
+    });
+  };
+  reader.onerror = () => reject(reader.error || new Error(`Could not read ${file.name}.`));
+  reader.readAsDataURL(file);
+});
+const mergeOptimisticConversation = (canonical, optimistic) => {
+  if (!optimistic) return canonical;
+  if (!canonical || canonical.id !== optimistic.id) return optimistic;
+  const canonicalById = new Map((canonical.messages || []).map(message => [message.id, message]));
+  const localMessages = (optimistic.messages || []).filter(message => {
+    const persisted = canonicalById.get(message.id);
+    return !persisted
+      || persisted.content !== message.content
+      || JSON.stringify(persisted.attachments ?? []) !== JSON.stringify(message.attachments ?? []);
+  });
+  if (!localMessages.length) return canonical;
+  const localById = new Map(localMessages.map(message => [message.id, message]));
+  const messages = (canonical.messages || []).map(message => localById.get(message.id) ?? message);
+  for (const message of localMessages) if (!canonicalById.has(message.id)) messages.push(message);
+  return { ...canonical, ...optimistic, messages };
+};
+const mergeResources = (current, incoming) => {
+  const byId = new Map((current || []).map(item => [item.id, item]));
+  for (const item of incoming || []) if (item?.id) byId.set(item.id, item);
+  return [...byId.values()];
+};
+
 const AppContext = createContext(null);
 
 export const AppProvider = ({ children }) => {
+  const initialConversationId = storedActiveConversation();
   const [activePage, setActivePageState] = useState(storedActivePage);
-  const [activeConversationId, setActiveConversationIdState] = useState(storedActiveConversation);
+  const [activeConversationId, setActiveConversationIdState] = useState(initialConversationId);
   const [theme, setThemeState] = useState(() => localStorage.getItem(THEME_STORAGE_KEY) || "system");
   const [systemDark, setSystemDark] = useState(systemPrefersDark);
   const [officeState, setOfficeState] = useState(EMPTY_OFFICE_STATE);
@@ -76,38 +100,48 @@ export const AppProvider = ({ children }) => {
   const [chatRequest, setChatRequest] = useState(null);
   const [operationsRequest, setOperationsRequest] = useState(null);
   const [unreadConversationIds, setUnreadConversationIds] = useState(() => new Set());
+  const [chatCanonicalConversation, setChatCanonicalConversation] = useState(null);
+  const [chatOptimisticConversation, setChatOptimisticConversation] = useState(null);
+  const [chatAttachments, setChatAttachments] = useState([]);
+  const [chatArtifacts, setChatArtifacts] = useState([]);
+  const [chatSending, setChatSending] = useState(false);
+  const [chatLocalRequestJob, setChatLocalRequestJob] = useState(null);
   const stateRef = useRef(EMPTY_OFFICE_STATE);
-  const revisionRef = useRef(0);
-  const instanceRef = useRef(null);
   const websocketRef = useRef(null);
   const commandRequestsRef = useRef(new Map());
   const conversationRevisionRef = useRef(new Map());
   const conversationRevisionReadyRef = useRef(false);
+  const activeConversationIdRef = useRef(initialConversationId);
+  const chatUploadControllerRef = useRef(null);
+  const chatSendInFlightRef = useRef(false);
 
   const effectiveTheme = theme === "system" ? (systemDark ? "dark" : "light") : theme;
+  const chatConversation = useMemo(
+    () => mergeOptimisticConversation(chatCanonicalConversation, chatOptimisticConversation),
+    [chatCanonicalConversation, chatOptimisticConversation],
+  );
+  const activeConversationSummary = useMemo(
+    () => (officeState.conversations || []).find(item => item.id === activeConversationId) || null,
+    [activeConversationId, officeState.conversations],
+  );
+  const chatActiveRequest = useMemo(
+    () => (officeState.nora?.activeRequests || []).find(item => item.conversationId === activeConversationId) || null,
+    [activeConversationId, officeState.nora?.activeRequests],
+  );
+  const chatRequestJob = chatActiveRequest
+    || (chatLocalRequestJob?.conversationId === activeConversationId ? chatLocalRequestJob : null);
+  const chatWorking = chatSending || Boolean(chatRequestJob);
 
   const applyStatePayload = useCallback(payload => {
-    if (!payload || payload.ok !== true) return false;
-    const nextRevision = Number.isSafeInteger(payload.revision) ? payload.revision : revisionRef.current;
-    const nextInstance = typeof payload.instance === "string" ? payload.instance : instanceRef.current;
-    const isNewInstance = Boolean(nextInstance && nextInstance !== instanceRef.current);
-    const resetting = Boolean(payload.reset || isNewInstance);
-    const shouldApply = resetting || nextRevision > revisionRef.current;
-
-    if (shouldApply) {
-      let nextState = resetting
-        ? { ...EMPTY_OFFICE_STATE, ...(payload.state || {}) }
-        : { ...stateRef.current, ...(payload.state || {}) };
-      if (!resetting) nextState = applyPatches(nextState, payload.patches);
-      stateRef.current = nextState;
-      setOfficeState(nextState);
-    }
-
-    revisionRef.current = resetting ? nextRevision : Math.max(revisionRef.current, nextRevision);
-    instanceRef.current = nextInstance;
+    if (!payload || typeof payload.state !== "object" || Array.isArray(payload.state)) return false;
+    const nextState = payload.reset
+      ? { ...EMPTY_OFFICE_STATE, ...payload.state }
+      : { ...stateRef.current, ...payload.state };
+    stateRef.current = nextState;
+    setOfficeState(nextState);
     setConnected(true);
     setLoading(false);
-    return shouldApply;
+    return true;
   }, []);
 
   const sendCommand = useCallback((command, payload = {}) => new Promise((resolve, reject) => {
@@ -161,6 +195,7 @@ export const AppProvider = ({ children }) => {
   }, []);
   const setActiveConversationId = useCallback(conversationId => {
     const id = typeof conversationId === "string" ? conversationId : "";
+    activeConversationIdRef.current = id;
     setActiveConversationIdState(id);
     try {
       if (id) sessionStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, id);
@@ -179,19 +214,234 @@ export const AppProvider = ({ children }) => {
     const order = ["system", "light", "dark"];
     setTheme(order[(order.indexOf(theme) + 1) % order.length]);
   };
-  const openConversation = conversationId => {
+
+  const clearChatSession = useCallback(() => {
+    chatUploadControllerRef.current?.abort();
+    setChatCanonicalConversation(null);
+    setChatOptimisticConversation(null);
+    setChatAttachments([]);
+    setChatArtifacts([]);
+    setChatLocalRequestJob(null);
+    setChatSending(false);
+    chatSendInFlightRef.current = false;
+  }, []);
+
+  const loadChatConversation = useCallback(async conversationId => {
+    if (!conversationId || !connected) return null;
+    try {
+      const bundle = await sendCommand("conversation.get", { conversationId });
+      if (activeConversationIdRef.current !== conversationId) return null;
+      setChatCanonicalConversation(bundle.conversation || null);
+      setChatAttachments(bundle.attachments || []);
+      setChatArtifacts(bundle.artifacts || []);
+      return bundle.conversation || null;
+    } catch (error) {
+      if (error.statusCode !== 404) {
+        console.error("[chat] Could not load Conversation.", {
+          conversationId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return null;
+    }
+  }, [connected, sendCommand]);
+
+  const openChatConversation = useCallback(conversationId => {
+    if (!conversationId) return;
     setActiveConversationId(conversationId);
+    setChatCanonicalConversation(null);
+    setChatOptimisticConversation(null);
+    setChatAttachments([]);
+    setChatArtifacts([]);
+    setChatLocalRequestJob(null);
+  }, [setActiveConversationId]);
+
+  const startNewChat = useCallback(() => {
+    setActiveConversationId("");
+    clearChatSession();
+  }, [clearChatSession, setActiveConversationId]);
+
+  const renameChatConversation = useCallback(async (conversationId, title) => {
+    const updated = await sendCommand("conversation.rename", { conversationId, title });
+    if (activeConversationIdRef.current === conversationId) setChatCanonicalConversation(updated);
+    return updated;
+  }, [sendCommand]);
+
+  const deleteChatConversation = useCallback(async conversationId => {
+    const result = await sendCommand("conversation.delete", { conversationId });
+    if (activeConversationIdRef.current === conversationId) startNewChat();
+    return result;
+  }, [sendCommand, startNewChat]);
+
+  const setChatConversationModel = useCallback(async ({ conversationId, provider, model }) => {
+    const updated = await sendCommand("conversation.setModel", { conversationId, provider, model });
+    if (activeConversationIdRef.current === conversationId) setChatCanonicalConversation(updated);
+    return updated;
+  }, [sendCommand]);
+
+  const sendChatMessage = useCallback(async ({ content, files = [], provider = "", model = "" }) => {
+    const text = String(content || "").trim() || "Review the attached files.";
+    if (chatSendInFlightRef.current || chatWorking) throw new Error("A Nora request is already in progress.");
+
+    chatSendInFlightRef.current = true;
+    const previous = chatConversation;
+    const optimistic = {
+      id: createMessageId(),
+      actor: "Carlos",
+      at: new Date().toISOString(),
+      content: text,
+      attachments: [],
+      artifacts: [],
+      pending: true,
+    };
+    setChatOptimisticConversation(previous
+      ? { ...previous, messages: [...(previous.messages || []), optimistic] }
+      : { id: activeConversationId || "", messages: [optimistic], workflows: [], nora: { provider, model } });
+    setChatSending(true);
+
+    const controller = new AbortController();
+    chatUploadControllerRef.current = controller;
+    const uploaded = [];
+    let conversationId = activeConversationId || "";
+    let accepted = false;
+
+    try {
+      if (!conversationId) {
+        const defaultProvider = provider || officeState.nora?.provider || officeState.models?.[0]?.provider || "";
+        const defaultModel = model
+          || officeState.nora?.model
+          || officeState.models?.find(item => item.provider === defaultProvider)?.models?.[0]
+          || "";
+        if (!defaultProvider || !defaultModel) throw new Error("Select a provider and model before sending.");
+        const created = await sendCommand("conversation.create", { provider: defaultProvider, model: defaultModel });
+        conversationId = created.id;
+        setActiveConversationId(created.id);
+        setChatCanonicalConversation(created);
+        setChatOptimisticConversation({ ...created, messages: [optimistic] });
+      }
+
+      const createdAttachments = await Promise.all(files.map(async file => {
+        const payload = await filePayload(file);
+        const created = (
+          await api.post(endpoints.conversationAttachments(conversationId), {
+            ...payload,
+            createdBy: "Carlos",
+          }, { signal: controller.signal })
+        ).data;
+        uploaded.push(created);
+        return created;
+      }));
+      const attachmentIds = createdAttachments.map(item => item.id);
+      setChatAttachments(current => mergeResources(current, createdAttachments));
+      setChatOptimisticConversation(current => current ? {
+        ...current,
+        id: conversationId,
+        messages: current.messages.map(message => (
+          message.id === optimistic.id ? { ...message, attachments: attachmentIds } : message
+        )),
+      } : current);
+
+      const result = await sendCommand("conversation.send", {
+        conversationId,
+        content: text,
+        attachments: attachmentIds,
+        messageId: optimistic.id,
+      });
+      accepted = true;
+      setChatLocalRequestJob(result.job || null);
+      setChatOptimisticConversation(current => current ? {
+        ...current,
+        id: conversationId,
+        messages: current.messages.map(message => (
+          message.id === optimistic.id ? { ...message, pending: false, attachments: attachmentIds } : message
+        )),
+      } : current);
+      markConversationRead(conversationId);
+      return { ...result, conversationId };
+    } catch (error) {
+      if (!accepted && uploaded.length && conversationId) {
+        try {
+          await sendCommand("conversation.deleteAttachments", {
+            conversationId,
+            attachmentIds: uploaded.map(item => item.id),
+          });
+        } catch (cleanupError) {
+          console.error("[chat] Could not clean up failed message attachments.", {
+            conversationId,
+            message: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          });
+        }
+        const removed = new Set(uploaded.map(item => item.id));
+        setChatAttachments(current => current.filter(item => !removed.has(item.id)));
+      }
+      if (!accepted) setChatOptimisticConversation(previous || null);
+      throw error;
+    } finally {
+      chatUploadControllerRef.current = null;
+      chatSendInFlightRef.current = false;
+      setChatSending(false);
+    }
+  }, [activeConversationId, chatConversation, chatWorking, markConversationRead, officeState.models, officeState.nora, sendCommand, setActiveConversationId]);
+
+  const editChatMessage = useCallback(async ({ messageId, content }) => {
+    if (!chatConversation?.id || chatWorking) throw new Error("Conversation is busy.");
+    const text = String(content || "").trim();
+    if (!text) throw new Error("Message cannot be empty.");
+    const messageIndex = chatConversation.messages.findIndex(message => message.id === messageId);
+    if (messageIndex < 0) throw new Error("Message not found.");
+
+    const previous = chatConversation;
+    setChatOptimisticConversation({
+      ...previous,
+      messages: previous.messages.slice(0, messageIndex + 1).map(message => (
+        message.id === messageId ? { ...message, content: text, pending: true } : message
+      )),
+      workflows: [],
+    });
+    setChatSending(true);
+
+    try {
+      const result = await sendCommand("conversation.editMessage", {
+        conversationId: previous.id,
+        messageId,
+        content: text,
+      });
+      setChatCanonicalConversation(result.conversation);
+      setChatOptimisticConversation(null);
+      setChatLocalRequestJob(result.job || null);
+      return result;
+    } catch (error) {
+      setChatOptimisticConversation(null);
+      throw error;
+    } finally {
+      setChatSending(false);
+    }
+  }, [chatConversation, chatWorking, sendCommand]);
+
+  const cancelChatRequest = useCallback(async () => {
+    chatUploadControllerRef.current?.abort();
+    if (!chatRequestJob || !activeConversationId) return false;
+    await sendCommand("conversation.cancelRequest", {
+      conversationId: activeConversationId,
+      requestId: chatRequestJob.id,
+    });
+    setChatLocalRequestJob(null);
+    return true;
+  }, [activeConversationId, chatRequestJob, sendCommand]);
+
+  const openConversation = useCallback(conversationId => {
+    openChatConversation(conversationId);
     setChatRequest({ conversationId, token: Date.now() });
     setActivePage("chat");
-  };
-  const askNora = prefill => {
+  }, [openChatConversation, setActivePage]);
+  const askNora = useCallback(prefill => {
     setChatRequest({ prefill, token: Date.now() });
     setActivePage("chat");
-  };
-  const openOperations = workflowId => {
+  }, [setActivePage]);
+  const openOperations = useCallback(workflowId => {
     setOperationsRequest(workflowId ? { workflowId, token: Date.now() } : null);
     setActivePage("operations");
-  };
+  }, [setActivePage]);
 
   useEffect(() => {
     const next = conversationRevision(officeState.conversations);
@@ -216,11 +466,55 @@ export const AppProvider = ({ children }) => {
       }
       return unread;
     });
-    if (activeConversationId && previous.has(activeConversationId) && !next.has(activeConversationId)) {
-      setActiveConversationId("");
-    }
+    if (activeConversationId && previous.has(activeConversationId) && !next.has(activeConversationId)) startNewChat();
     conversationRevisionRef.current = next;
-  }, [activeConversationId, activePage, officeState.conversations, setActiveConversationId]);
+  }, [activeConversationId, activePage, officeState.conversations, startNewChat]);
+
+  useEffect(() => {
+    if (!activeConversationId) {
+      setChatCanonicalConversation(null);
+      setChatAttachments([]);
+      setChatArtifacts([]);
+      return;
+    }
+    if (!connected) return;
+    void loadChatConversation(activeConversationId);
+  }, [
+    activeConversationId,
+    activeConversationSummary?.lastMessageId,
+    activeConversationSummary?.lastMessageAt,
+    activeConversationSummary?.title,
+    activeConversationSummary?.nora?.provider,
+    activeConversationSummary?.nora?.model,
+    connected,
+    loadChatConversation,
+  ]);
+
+  useEffect(() => {
+    if (!chatCanonicalConversation || !chatOptimisticConversation) return;
+    if (chatCanonicalConversation.id !== chatOptimisticConversation.id) return;
+    const canonicalById = new Map(chatCanonicalConversation.messages.map(message => [message.id, message]));
+    const synchronized = chatOptimisticConversation.messages.every(message => {
+      const canonical = canonicalById.get(message.id);
+      return canonical
+        && canonical.content === message.content
+        && JSON.stringify(canonical.attachments ?? []) === JSON.stringify(message.attachments ?? []);
+    });
+    if (synchronized) setChatOptimisticConversation(null);
+  }, [chatCanonicalConversation, chatOptimisticConversation]);
+
+  useEffect(() => {
+    if (!chatLocalRequestJob) return;
+    if ((officeState.nora?.activeRequests || []).some(job => job.id === chatLocalRequestJob.id)) {
+      setChatLocalRequestJob(null);
+      return;
+    }
+    const completedAt = Date.parse(activeConversationSummary?.lastMessageAt || "");
+    const startedAt = Date.parse(chatLocalRequestJob.startedAt || "");
+    if (activeConversationSummary?.lastActor === "Nora" && Number.isFinite(completedAt) && completedAt >= startedAt) {
+      setChatLocalRequestJob(null);
+    }
+  }, [activeConversationSummary?.lastActor, activeConversationSummary?.lastMessageAt, chatLocalRequestJob, officeState.nora?.activeRequests]);
 
   useEffect(() => { document.documentElement.dataset.theme = effectiveTheme; }, [effectiveTheme]);
   useEffect(() => {
@@ -243,7 +537,6 @@ export const AppProvider = ({ children }) => {
       }
       commandRequestsRef.current.clear();
     };
-
     const scheduleReconnect = () => {
       if (stopped || reconnectTimer !== null) return;
       reconnectTimer = window.setTimeout(() => {
@@ -252,18 +545,13 @@ export const AppProvider = ({ children }) => {
       }, reconnectDelay);
       reconnectDelay = Math.min(Math.round(reconnectDelay * 1.7), WS_RECONNECT_MAX_MS);
     };
-
     const connect = () => {
       if (stopped) return;
       const current = websocketRef.current;
       if (current && [WebSocket.CONNECTING, WebSocket.OPEN].includes(current.readyState)) return;
 
-      const url = websocketUrl();
-      url.searchParams.set("since", String(revisionRef.current));
-      if (instanceRef.current) url.searchParams.set("instance", instanceRef.current);
-      const socket = new WebSocket(url);
+      const socket = new WebSocket(websocketUrl());
       websocketRef.current = socket;
-
       socket.onopen = () => {
         if (stopped || websocketRef.current !== socket) return;
         reconnectDelay = 750;
@@ -311,6 +599,10 @@ export const AppProvider = ({ children }) => {
     };
   }, [applyStatePayload]);
 
+  useEffect(() => () => {
+    chatUploadControllerRef.current?.abort();
+  }, []);
+
   return (
     <AppContext.Provider value={{
       activePage,
@@ -333,6 +625,19 @@ export const AppProvider = ({ children }) => {
       openConversation,
       askNora,
       openOperations,
+      chatConversation,
+      chatAttachments,
+      chatArtifacts,
+      chatWorking,
+      chatRequestJob,
+      openChatConversation,
+      startNewChat,
+      renameChatConversation,
+      deleteChatConversation,
+      setChatConversationModel,
+      sendChatMessage,
+      editChatMessage,
+      cancelChatRequest,
     }}>
       {children}
     </AppContext.Provider>

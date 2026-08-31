@@ -2,31 +2,30 @@ import { createServer } from "node:http";
 
 import config from "./src/config.mjs";
 import { createRouter } from "./src/Router.mjs";
-import { listModels as listNoraModels, startNora, stopNora } from "./src/runtime/NoraProcess.mjs";
-import { createAppCommandService } from "./src/services/AppCommandService.mjs";
-import { attachAppWebSocket } from "./src/services/AppWebSocketService.mjs";
-import { initializeDatabase } from "./src/services/DatabaseService.mjs";
-import { loadKnowledge } from "./src/services/KnowledgeService.mjs";
-import { createOfficeStateService } from "./src/services/OfficeStateService.mjs";
-import { prepareVaultStructure } from "./src/services/VaultMaintenanceService.mjs";
-import { reconcileInterruptedWorkflows } from "./src/services/WorkflowRecoveryService.mjs";
-
-import * as noraRegistry from "./src/registry/Nora.mjs";
-import * as tools from "./src/registry/Tools.mjs";
-import * as skills from "./src/registry/Skills.mjs";
+import { attachAppSocket } from "./src/controllers/AppSocketController.mjs";
 import * as artifacts from "./src/controllers/ArtifactController.mjs";
-import * as attachments from "./src/controllers/AttachmentController.mjs";
 import * as authorization from "./src/controllers/AuthorizationController.mjs";
+import * as chat from "./src/controllers/ChatController.mjs";
 import * as conversations from "./src/controllers/ConversationController.mjs";
 import { createCredentialController } from "./src/controllers/CredentialController.mjs";
 import * as events from "./src/controllers/EventController.mjs";
 import { createKnowledgeController } from "./src/controllers/KnowledgeController.mjs";
 import * as nora from "./src/controllers/NoraController.mjs";
+import { setNoraModel } from "./src/controllers/NoraConfigController.mjs";
 import * as processes from "./src/controllers/ProcessController.mjs";
 import * as providers from "./src/controllers/ProviderController.mjs";
 import * as schedules from "./src/controllers/ScheduleController.mjs";
+import { createStateController } from "./src/controllers/StateController.mjs";
 import { createVariableController } from "./src/controllers/VariableController.mjs";
+import * as noraRegistry from "./src/registry/Nora.mjs";
+import * as skills from "./src/registry/Skills.mjs";
+import * as tools from "./src/registry/Tools.mjs";
+import { listModels as listNoraModels, startNora, stopNora } from "./src/runtime/NoraProcess.mjs";
+import { initializeDatabase } from "./src/services/DatabaseService.mjs";
+import { loadKnowledge } from "./src/services/KnowledgeService.mjs";
 import * as engine from "./src/services/ProcessEngine.mjs";
+import { prepareVaultStructure } from "./src/services/VaultMaintenanceService.mjs";
+import { reconcileInterruptedWorkflows } from "./src/services/WorkflowRecoveryService.mjs";
 
 await prepareVaultStructure();
 initializeDatabase();
@@ -87,20 +86,14 @@ const rewriteCorsOrigin = (headers, actualOrigin) => {
   if (!headers || typeof headers !== "object" || Array.isArray(headers)) return headers;
   const rewritten = { ...headers };
   for (const [name, value] of Object.entries(rewritten)) {
-    if (name.toLowerCase() === "access-control-allow-origin" && value === config.frontendOrigin) {
-      rewritten[name] = actualOrigin;
-    }
+    if (name.toLowerCase() === "access-control-allow-origin" && value === config.frontendOrigin) rewritten[name] = actualOrigin;
   }
   return rewritten;
 };
 
 const normalizeAcceptedFrontendOrigin = (req, res = null) => {
   const actualOrigin = req.headers.origin ?? null;
-  if (
-    !actualOrigin
-    || actualOrigin === config.frontendOrigin
-    || !isLocalNetworkOrigin(actualOrigin)
-  ) return false;
+  if (!actualOrigin || actualOrigin === config.frontendOrigin || !isLocalNetworkOrigin(actualOrigin)) return false;
 
   req.headers.origin = config.frontendOrigin;
   if (!res) return true;
@@ -115,8 +108,7 @@ const normalizeAcceptedFrontendOrigin = (req, res = null) => {
 
   const setHeader = res.setHeader;
   res.setHeader = function setHeaderWithLanOrigin(name, value) {
-    const nextValue = String(name).toLowerCase() === "access-control-allow-origin"
-      && value === config.frontendOrigin
+    const nextValue = String(name).toLowerCase() === "access-control-allow-origin" && value === config.frontendOrigin
       ? actualOrigin
       : value;
     return setHeader.call(this, name, nextValue);
@@ -142,11 +134,7 @@ const runScheduledWorkflow = async workflow => {
   }
 };
 
-const routerNora = {
-  ...nora,
-  listModels: listNoraModels,
-};
-
+const routerNora = { ...nora, listModels: listNoraModels };
 const router = createRouter({
   allowedOrigin: config.frontendOrigin,
   nora: routerNora,
@@ -160,10 +148,7 @@ const router = createRouter({
   skills,
   engine,
 });
-const conversationResources = conversations.createConversationResourceController({
-  allowedOrigin: config.frontendOrigin,
-  nora,
-});
+const conversationResources = conversations.createConversationResourceController({ allowedOrigin: config.frontendOrigin, nora });
 
 const reloadProviderRuntime = async () => {
   await providers.loadProviderPreferences();
@@ -181,34 +166,32 @@ const credentials = createCredentialController({
 });
 const knowledge = createKnowledgeController({ allowedOrigin: config.frontendOrigin });
 const variables = createVariableController({ allowedOrigin: config.frontendOrigin });
-const officeStateNora = {
-  getNoraState: nora.getNoraState,
-  listModels: listNoraModels,
-};
-
-const officeStateService = createOfficeStateService({
-  nora: officeStateNora,
+const stateController = createStateController({
+  nora: { getNoraState: nora.getNoraState, listModels: listNoraModels },
   processes,
   conversations,
   authorization,
   engine,
   skills,
 });
-await officeStateService.initialize();
+await stateController.initialize();
 
-const executeAppCommand = createAppCommandService({
-  nora,
-  noraRegistry,
-  listModels: listNoraModels,
-  processes,
-  conversations,
-  attachments,
-  artifacts,
-  authorization,
-  events,
-  engine,
-  officeState: officeStateService,
-});
+const commands = {
+  "state.refresh": async () => {
+    await stateController.refresh();
+    return { refreshed: true };
+  },
+  "nora.setModel": setNoraModel,
+  "conversation.get": chat.getConversation,
+  "conversation.create": chat.createConversation,
+  "conversation.rename": chat.renameConversation,
+  "conversation.delete": chat.deleteConversation,
+  "conversation.setModel": chat.setConversationModel,
+  "conversation.send": chat.sendMessage,
+  "conversation.editMessage": chat.editMessage,
+  "conversation.cancelRequest": chat.cancelRequest,
+  "conversation.deleteAttachments": chat.deleteAttachments,
+};
 
 const server = createServer((req, res) => {
   normalizeAcceptedFrontendOrigin(req, res);
@@ -240,11 +223,11 @@ server.prependListener("upgrade", req => {
   normalizeAcceptedFrontendOrigin(req);
 });
 
-const appSocket = attachAppWebSocket({
+const appSocket = attachAppSocket({
   server,
   allowedOrigin: config.frontendOrigin,
-  stateService: officeStateService,
-  onCommand: executeAppCommand,
+  stateController,
+  commands,
 });
 
 server.listen(config.port, config.host, () => {
@@ -256,7 +239,7 @@ schedules.startScheduler(runScheduledWorkflow);
 const shutdown = () => {
   schedules.stopScheduler();
   appSocket.close();
-  officeStateService.dispose();
+  stateController.dispose();
   engine.shutdownProcessEngine();
   stopNora();
   server.close(() => process.exit(0));

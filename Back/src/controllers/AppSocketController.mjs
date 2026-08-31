@@ -8,13 +8,6 @@ const CLOSED = 3;
 const MAX_CLIENT_FRAME_BYTES = 2 * 1024 * 1024;
 const MAX_CLIENT_BUFFER_BYTES = 4 * 1024 * 1024;
 
-const nonNegativeInteger = value => {
-  if (value == null || value === "") return 0;
-  if (!/^\d+$/.test(value)) return null;
-  const number = Number(value);
-  return Number.isSafeInteger(number) ? number : null;
-};
-
 const frame = (opcode, payload = Buffer.alloc(0)) => {
   const body = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload), "utf8");
   let header;
@@ -35,6 +28,7 @@ const frame = (opcode, payload = Buffer.alloc(0)) => {
 };
 
 const protocolError = message => Object.assign(new Error(message), { websocketCode: 1002 });
+const commandError = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 
 const parseClientFrames = (buffer, onFrame) => {
   let offset = 0;
@@ -98,7 +92,7 @@ const createClient = socket => {
     readyState: OPEN,
     isAlive: true,
     input: Buffer.alloc(0),
-    async sendText(value) {
+    async send(value) {
       if (client.readyState !== OPEN || socket.destroyed) return false;
       const writable = socket.write(frame(0x1, JSON.stringify(value)));
       if (!writable) await waitForDrain(socket);
@@ -124,11 +118,11 @@ const createClient = socket => {
   return client;
 };
 
-export const attachAppWebSocket = ({ server, allowedOrigin, stateService, onCommand }) => {
-  if (!server) throw new Error("App WebSocket requires the HTTP server");
-  if (!allowedOrigin || typeof allowedOrigin !== "string") throw new Error("App WebSocket requires one allowed frontend origin");
-  if (!stateService) throw new Error("App WebSocket requires the Office state service");
-  if (typeof onCommand !== "function") throw new Error("App WebSocket requires an app command handler");
+export const attachAppSocket = ({ server, allowedOrigin, stateController, commands }) => {
+  if (!server) throw new Error("App socket requires the HTTP server");
+  if (!allowedOrigin || typeof allowedOrigin !== "string") throw new Error("App socket requires one allowed frontend origin");
+  if (!stateController) throw new Error("App socket requires the State controller");
+  if (!commands || typeof commands !== "object" || Array.isArray(commands)) throw new Error("App socket requires command handlers");
 
   const clients = new Set();
   const handleUpgrade = (req, socket) => {
@@ -147,11 +141,9 @@ export const attachAppWebSocket = ({ server, allowedOrigin, stateService, onComm
       return;
     }
 
-    const requestedSince = nonNegativeInteger(url.searchParams.get("since"));
     const key = req.headers["sec-websocket-key"];
     if (
-      requestedSince === null
-      || req.headers.upgrade?.toLowerCase() !== "websocket"
+      req.headers.upgrade?.toLowerCase() !== "websocket"
       || req.headers["sec-websocket-version"] !== "13"
       || typeof key !== "string"
       || !key.trim()
@@ -173,10 +165,28 @@ export const attachAppWebSocket = ({ server, allowedOrigin, stateService, onComm
     const client = createClient(socket);
     clients.add(client);
     let cleaned = false;
-    let lastRevision = requestedSince;
-    let clientInstance = url.searchParams.get("instance");
     let sendQueue = Promise.resolve();
     let commandQueue = Promise.resolve();
+
+    const enqueueSend = operation => {
+      const next = sendQueue.catch(() => {}).then(operation);
+      sendQueue = next;
+      return next;
+    };
+
+    const sendState = ({ changed, state, reset = false }) => enqueueSend(() => client.send({
+      type: "state",
+      reset,
+      changed,
+      state,
+    }));
+
+    const unsubscribe = stateController.subscribe(payload => {
+      void sendState(payload).catch(error => {
+        console.error("[state] WebSocket state send failed.", { message: error instanceof Error ? error.message : String(error) });
+        client.close(1011, "State synchronization failed");
+      });
+    });
 
     const cleanup = () => {
       if (cleaned) return;
@@ -186,40 +196,22 @@ export const attachAppWebSocket = ({ server, allowedOrigin, stateService, onComm
       unsubscribe();
     };
 
-    const enqueueSend = operation => {
-      const next = sendQueue.catch(() => {}).then(operation);
-      sendQueue = next;
-      return next;
-    };
-
-    const sendLatest = () => enqueueSend(async () => {
-      if (client.readyState !== OPEN || socket.destroyed) return;
-      const payload = await stateService.responseSince({ since: lastRevision, clientInstance });
-      if (!payload.reset && !payload.changed.length) return;
-      lastRevision = payload.revision;
-      clientInstance = payload.instance;
-      await client.sendText({ type: "state", ...payload });
-    });
-
-    const sendCommandResult = (id, result) => enqueueSend(() => client.sendText({
-      type: "command-result",
-      id,
-      ...result,
-    }));
+    const sendCommandResult = (id, result) => enqueueSend(() => client.send({ type: "command-result", id, ...result }));
 
     const handleCommand = async payload => {
       let message;
-      try {
-        message = JSON.parse(payload.toString("utf8"));
-      } catch {
-        throw protocolError("Invalid WebSocket command JSON");
-      }
+      try { message = JSON.parse(payload.toString("utf8")); } catch { throw protocolError("Invalid WebSocket command JSON"); }
       if (!message || message.type !== "command" || typeof message.id !== "string" || typeof message.command !== "string") {
         throw protocolError("Invalid WebSocket command envelope");
       }
+      if (!message.payload || typeof message.payload !== "object" || Array.isArray(message.payload)) {
+        throw protocolError("Invalid WebSocket command payload");
+      }
 
       try {
-        const data = await onCommand({ command: message.command, payload: message.payload ?? {} });
+        const handler = commands[message.command];
+        if (typeof handler !== "function") throw commandError(`Unknown app command: ${message.command}`, 404);
+        const data = await handler(message.payload);
         await sendCommandResult(message.id, { ok: true, data });
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
@@ -237,13 +229,6 @@ export const attachAppWebSocket = ({ server, allowedOrigin, stateService, onComm
         if (error?.websocketCode) client.close(error.websocketCode, "Protocol error");
       });
     };
-
-    const unsubscribe = stateService.subscribe(() => {
-      void sendLatest().catch(error => {
-        console.error("[office-state] WebSocket state send failed.", { message: error instanceof Error ? error.message : String(error) });
-        client.close(1011, "State synchronization failed");
-      });
-    });
 
     socket.on("data", chunk => {
       try {
@@ -265,21 +250,23 @@ export const attachAppWebSocket = ({ server, allowedOrigin, stateService, onComm
           if (opcode === 0x1) enqueueCommand(payload);
         });
       } catch (error) {
-        console.error("[app-websocket] Invalid client frame.", { message: error instanceof Error ? error.message : String(error) });
+        console.error("[app-socket] Invalid client frame.", { message: error instanceof Error ? error.message : String(error) });
         if (client.readyState === OPEN) client.close(error.websocketCode || 1002, "Protocol error");
         else client.terminate();
       }
     });
     socket.on("error", error => {
-      console.error("[app-websocket] Client error.", { message: error instanceof Error ? error.message : String(error) });
+      console.error("[app-socket] Client error.", { message: error instanceof Error ? error.message : String(error) });
     });
     socket.on("close", cleanup);
     socket.on("end", cleanup);
 
-    void sendLatest().catch(error => {
-      console.error("[app-websocket] Initial state send failed.", { message: error instanceof Error ? error.message : String(error) });
-      client.close(1011, "State synchronization failed");
-    });
+    void stateController.snapshot()
+      .then(state => sendState({ changed: Object.keys(state), state, reset: true }))
+      .catch(error => {
+        console.error("[app-socket] Initial state send failed.", { message: error instanceof Error ? error.message : String(error) });
+        client.close(1011, "State synchronization failed");
+      });
   };
 
   server.on("upgrade", handleUpgrade);
