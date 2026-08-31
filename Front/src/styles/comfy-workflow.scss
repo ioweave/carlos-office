@@ -1,4 +1,17 @@
 .comfy-graph {
+  --workflow-node-base: #4b6584;
+  --workflow-node-border: #778ca3;
+  --workflow-node-selected: #a55eea;
+  --workflow-node-ready: #2bcbba;
+  --workflow-node-running: #45aaf2;
+  --workflow-node-blocked: #fd9644;
+  --workflow-node-failed: #eb3b5a;
+  --workflow-node-completed: #20bf6b;
+  --workflow-node-muted: #778ca3;
+  --workflow-node-start: #26de81;
+  --workflow-node-end: #8854d0;
+  --workflow-node-socket: #4b7bec;
+
   position: relative;
   width: 100%;
   min-height: 620px;
@@ -84,9 +97,9 @@
   display: flex;
   flex-direction: column;
   overflow: visible;
-  border: 1px solid color-mix(in srgb, var(--color-border) 80%, #000);
+  border: 1px solid color-mix(in srgb, var(--workflow-node-border) 52%, var(--color-border));
   border-radius: 7px;
-  background: color-mix(in srgb, var(--color-surface) 94%, #090909);
+  background: color-mix(in srgb, var(--color-surface) 92%, var(--workflow-node-base));
   box-shadow: 0 7px 18px color-mix(in srgb, #000 34%, transparent);
   color: var(--color-text);
   font-size: 10px;
@@ -94,9 +107,9 @@
 }
 
 .workflow-task-node--selected {
-  border-color: var(--color-accent);
+  border-color: var(--workflow-node-selected);
   box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--color-accent) 44%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--workflow-node-selected) 44%, transparent),
     0 8px 20px color-mix(in srgb, #000 38%, transparent);
 }
 
@@ -107,20 +120,33 @@
   gap: 7px;
   padding: 0 7px 0 9px;
   border-radius: 6px 6px 0 0;
-  background: color-mix(in srgb, #6f6672 72%, var(--color-surface));
+  background: color-mix(in srgb, var(--workflow-node-base) 78%, var(--color-surface));
   cursor: move;
 }
 
+.workflow-task-node--ready .workflow-task-node__titlebar {
+  background: color-mix(in srgb, var(--workflow-node-ready) 70%, var(--color-surface));
+}
+
 .workflow-task-node--running .workflow-task-node__titlebar {
-  background: color-mix(in srgb, var(--color-accent) 58%, #4c4750);
+  background: color-mix(in srgb, var(--workflow-node-running) 72%, var(--color-surface));
+}
+
+.workflow-task-node--blocked .workflow-task-node__titlebar {
+  background: color-mix(in srgb, var(--workflow-node-blocked) 72%, var(--color-surface));
 }
 
 .workflow-task-node--failed .workflow-task-node__titlebar {
-  background: color-mix(in srgb, #9d3c4b 68%, var(--color-surface));
+  background: color-mix(in srgb, var(--workflow-node-failed) 72%, var(--color-surface));
 }
 
 .workflow-task-node--completed .workflow-task-node__titlebar {
-  background: color-mix(in srgb, #397a5d 62%, var(--color-surface));
+  background: color-mix(in srgb, var(--workflow-node-completed) 68%, var(--color-surface));
+}
+
+.workflow-task-node--cancelled .workflow-task-node__titlebar,
+.workflow-task-node--skipped .workflow-task-node__titlebar {
+  background: color-mix(in srgb, var(--workflow-node-muted) 70%, var(--color-surface));
 }
 
 .workflow-task-node__titlebar > strong {
@@ -140,20 +166,33 @@
   flex: 0 0 auto;
   border: 1px solid color-mix(in srgb, #fff 70%, transparent);
   border-radius: 50%;
-  background: color-mix(in srgb, #fff 28%, transparent);
+  background: color-mix(in srgb, var(--workflow-node-border) 78%, transparent);
+}
+
+.workflow-task-node--ready .workflow-task-node__status {
+  background: var(--workflow-node-ready);
 }
 
 .workflow-task-node--running .workflow-task-node__status {
-  background: #d8caff;
-  box-shadow: 0 0 6px #cbb8ff;
+  background: var(--workflow-node-running);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--workflow-node-running) 72%, transparent);
+}
+
+.workflow-task-node--blocked .workflow-task-node__status {
+  background: #fed330;
 }
 
 .workflow-task-node--failed .workflow-task-node__status {
-  background: #ffd1d8;
+  background: #fc5c65;
 }
 
 .workflow-task-node--completed .workflow-task-node__status {
-  background: #c7f0db;
+  background: #26de81;
+}
+
+.workflow-task-node--cancelled .workflow-task-node__status,
+.workflow-task-node--skipped .workflow-task-node__status {
+  background: var(--workflow-node-muted);
 }
 
 .workflow-task-node__saving {
@@ -342,18 +381,18 @@
   padding: 0 13px;
   border: 1px solid color-mix(in srgb, var(--color-border) 80%, #000);
   border-radius: 7px;
-  background: color-mix(in srgb, #5d565f 70%, var(--color-surface));
+  background: color-mix(in srgb, var(--workflow-node-base) 72%, var(--color-surface));
   box-shadow: 0 5px 13px color-mix(in srgb, #000 30%, transparent);
   color: #f5f2f7;
   cursor: move;
 }
 
 .workflow-terminal-node--start {
-  background: color-mix(in srgb, #3f725c 72%, var(--color-surface));
+  background: color-mix(in srgb, var(--workflow-node-start) 66%, var(--color-surface));
 }
 
 .workflow-terminal-node--end {
-  background: color-mix(in srgb, #73516e 72%, var(--color-surface));
+  background: color-mix(in srgb, var(--workflow-node-end) 72%, var(--color-surface));
 }
 
 .workflow-terminal-node strong {
@@ -369,7 +408,7 @@
   top: 50%;
   width: 11px;
   height: 11px;
-  border: 2px solid #bfa9ff;
+  border: 2px solid var(--workflow-node-socket);
   border-radius: 50%;
   background: color-mix(in srgb, var(--color-bg) 92%, #000);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-bg) 88%, transparent);
@@ -390,7 +429,7 @@
 }
 
 .workflow-node-socket--interactive:hover {
-  background: #bfa9ff;
+  background: var(--workflow-node-socket);
   transform: translateY(-50%) scale(1.18);
 }
 
@@ -527,16 +566,16 @@
 }
 
 .comfy-minimap-node {
-  fill: color-mix(in srgb, #779bc2 74%, var(--color-text-faint));
+  fill: var(--workflow-node-base);
   rx: 1.5px;
 }
 
 .comfy-minimap-node--start {
-  fill: #5d9b7e;
+  fill: var(--workflow-node-start);
 }
 
 .comfy-minimap-node--end {
-  fill: #9b7195;
+  fill: var(--workflow-node-end);
 }
 
 .comfy-minimap-viewport {

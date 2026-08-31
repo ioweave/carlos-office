@@ -57,7 +57,7 @@ const validateLayout = (workflow, layout) => {
     if (!isObject(position)) throw new Error(`Invalid Workflow position for Task: ${taskId}`);
     const x = Number(position.x);
     const y = Number(position.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) throw new Error(`Invalid Workflow position for Task: ${taskId}`);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error(`Invalid Workflow position for Task: ${taskId}`);
   }
 };
 const normalizeLayout = (workflow, layout) => {

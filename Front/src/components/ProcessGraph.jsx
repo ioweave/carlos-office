@@ -376,8 +376,8 @@ export default function ProcessGraph({
     const dx = (event.clientX - drag.startX) / zoom;
     const dy = (event.clientY - drag.startY) / zoom;
     const next = {
-      x: Math.max(0, Math.round(drag.origin.x + dx)),
-      y: Math.max(0, Math.round(drag.origin.y + dy)),
+      x: Math.round(drag.origin.x + dx),
+      y: Math.round(drag.origin.y + dy),
     };
     drag.positions = { ...drag.positions, [drag.id]: next };
     drag.moved ||= Math.abs(dx) > 2 || Math.abs(dy) > 2;
@@ -522,16 +522,16 @@ export default function ProcessGraph({
       const moveIds = new Set([drag.id, ...drag.descendants.groupIds]);
       nextGroups = drag.groups.map(item => moveIds.has(item.id) ? {
         ...item,
-        x: Math.max(0, Math.round(item.x + dx)),
-        y: Math.max(0, Math.round(item.y + dy)),
+        x: Math.round(item.x + dx),
+        y: Math.round(item.y + dy),
       } : item);
       nextPositions = { ...drag.positions };
       for (const taskId of drag.descendants.taskIds) {
         const point = drag.positions[taskId];
         if (!point) continue;
         nextPositions[taskId] = {
-          x: Math.max(0, Math.round(point.x + dx)),
-          y: Math.max(0, Math.round(point.y + dy)),
+          x: Math.round(point.x + dx),
+          y: Math.round(point.y + dy),
         };
       }
     }
@@ -568,11 +568,29 @@ export default function ProcessGraph({
     onCanvasClick?.(graphPoint(event));
   };
 
-  const handleWheel = event => {
-    event.preventDefault();
-    if (event.deltaY === 0) return;
-    zoomAt(zoom * (event.deltaY > 0 ? 0.9 : 1.1), event.clientX, event.clientY);
-  };
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return undefined;
+
+    const handleWheel = event => {
+      if (event.deltaY === 0) return;
+      event.preventDefault();
+      const rect = viewport.getBoundingClientRect();
+      const next = clampZoom(zoom * (event.deltaY > 0 ? 0.9 : 1.1));
+      if (next === zoom) return;
+
+      const worldX = (event.clientX - rect.left - pan.x) / zoom;
+      const worldY = (event.clientY - rect.top - pan.y) / zoom;
+      setPan({
+        x: event.clientX - rect.left - worldX * next,
+        y: event.clientY - rect.top - worldY * next,
+      });
+      setZoom(next);
+    };
+
+    viewport.addEventListener("wheel", handleWheel, { passive: false });
+    return () => viewport.removeEventListener("wheel", handleWheel);
+  }, [zoom, pan]);
 
   const saveTask = async (taskId, task) => {
     if (!editable || !workflowForGraph?.id) return;
@@ -632,7 +650,6 @@ export default function ProcessGraph({
       onPointerUp={endPan}
       onPointerCancel={endPan}
       onClick={handleCanvasClick}
-      onWheel={handleWheel}
     >
       <div
         className="comfy-graph__world"
