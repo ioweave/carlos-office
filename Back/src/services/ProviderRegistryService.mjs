@@ -164,7 +164,11 @@ export const replaceProviderSettings = settings => {
       db.exec("COMMIT");
       return loadProviderSettings();
     } catch (error) {
-      try { db.exec("ROLLBACK"); } catch {}
+      try { db.exec("ROLLBACK"); } catch (rollbackError) {
+        console.error("[providers] Could not roll back provider settings.", {
+          message: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+        });
+      }
       throw error;
     }
   });

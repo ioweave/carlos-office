@@ -137,14 +137,6 @@ const validateGroupDrafts = groups => {
   return null;
 };
 
-const mapProgress = task => {
-  const attempt = [...(task?.attempts || [])].reverse()[0];
-  if (!attempt?.executionGroups?.some(group => group.type === "map")) return null;
-  const completed = (attempt.invocations || []).filter(invocation => invocation.kind === "map-item" && invocation.status === "completed").length;
-  const active = (attempt.invocations || []).filter(invocation => invocation.kind === "agent" && invocation.status === "running").length;
-  return { completed, active };
-};
-
 function WorkflowInspector({
   workflow,
   selectedTaskId,

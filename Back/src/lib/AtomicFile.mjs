@@ -19,8 +19,18 @@ export const atomicWriteFile = async (path, data, encoding = null) => {
     handle = null;
     await rename(temporary, path);
   } catch (error) {
-    try { await handle?.close(); } catch {}
-    try { await rm(temporary, { force: true }); } catch {}
+    try { await handle?.close(); } catch (cleanupError) {
+      console.warn("[atomic-file] Could not close temporary file.", {
+        path,
+        message: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+      });
+    }
+    try { await rm(temporary, { force: true }); } catch (cleanupError) {
+      console.warn("[atomic-file] Could not remove temporary file.", {
+        path: temporary,
+        message: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+      });
+    }
     throw error;
   }
 };

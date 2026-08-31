@@ -305,7 +305,11 @@ export const initializeDatabase = () => withDatabase(db => {
     setMeta(db, "schema.version", "1");
     db.exec("COMMIT");
   } catch (error) {
-    try { db.exec("ROLLBACK"); } catch {}
+    try { db.exec("ROLLBACK"); } catch (rollbackError) {
+      console.error("[database] Could not roll back failed initialization.", {
+        message: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+      });
+    }
     throw error;
   }
 

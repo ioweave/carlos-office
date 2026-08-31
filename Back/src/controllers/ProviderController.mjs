@@ -189,9 +189,9 @@ export const isModelEnabled = (provider, model) => preferenceFor(provider, model
 export const filterModelOptions = options => (
   Array.isArray(options)
     ? options.map(entry => ({
-        provider: entry.provider,
-        models: (entry.models ?? []).filter(model => isModelEnabled(entry.provider, model)),
-      })).filter(entry => entry.provider && entry.models.length)
+      provider: entry.provider,
+      models: (entry.models ?? []).filter(model => isModelEnabled(entry.provider, model)),
+    })).filter(entry => entry.provider && entry.models.length)
     : []
 );
 

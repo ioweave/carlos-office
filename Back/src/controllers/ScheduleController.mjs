@@ -9,6 +9,10 @@ import { createWorkflow, getProcess } from "./ProcessController.mjs";
 const here = dirname(fileURLToPath(import.meta.url));
 const schedulesDir = resolve(here, "../../ObsidianVault/System/Schedules");
 const schedules = new Map();
+const hasInvalidFileNameCharacter = value => [...value].some(character => {
+  const code = character.charCodeAt(0);
+  return code < 32 || [34, 42, 47, 58, 60, 62, 63, 92, 124].includes(code);
+});
 
 let schedulerTimer = null;
 let ticking = false;
@@ -22,7 +26,7 @@ const validateFileName = (value, label) => {
     || value.trim() !== value
     || value === "."
     || value === ".."
-    || /[<>:"/\\|?*\u0000-\u001F]/.test(value)
+    || hasInvalidFileNameCharacter(value)
   ) {
     throw new Error(`Invalid ${label}: ${value}`);
   }
@@ -208,7 +212,6 @@ const recordLoadFailure = async (filename, error) => {
 const normalizeStoredSchedule = stored => ({
   inputs: {},
   config: {},
-  lastRunAt: null,
   nextRunAt: null,
   ...structuredClone(stored),
   timing: normalizeTiming(stored.timing),

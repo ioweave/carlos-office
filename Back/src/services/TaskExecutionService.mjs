@@ -324,7 +324,7 @@ const runPool = async (count, workers, operation) => {
 export const executeTaskWithGroups = async ({
   workflow,
   taskId,
-  task,
+  _task,
   input,
   runAgent,
   review,
@@ -383,16 +383,16 @@ export const executeTaskWithGroups = async ({
       if (isCancelled()) return { status: "cancelled", error: "Workflow stopped" };
       const nextInput = feedback
         ? {
-            ...clone(context.input),
-            __loopReview: {
-              groupId: group.id,
-              iteration,
-              previousOutput: feedback.output,
-              previousData: feedback.data,
-              score: feedback.score,
-              feedback: feedback.feedback,
-            },
-          }
+          ...clone(context.input),
+          __loopReview: {
+            groupId: group.id,
+            iteration,
+            previousOutput: feedback.output,
+            previousData: feedback.data,
+            score: feedback.score,
+            feedback: feedback.feedback,
+          },
+        }
         : context.input;
       const candidate = await inner({
         ...context,

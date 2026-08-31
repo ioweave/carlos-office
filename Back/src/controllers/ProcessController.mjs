@@ -19,10 +19,14 @@ const workflowWrites = new Map();
 const deletedWorkflowIds = new Set();
 const TASK_STATUSES = new Set(["pending", "ready", "running", "blocked", "completed", "failed", "skipped", "cancelled"]);
 const RESUMABLE_TASK_STATUSES = new Set(["blocked", "failed", "cancelled"]);
+const hasInvalidFileNameCharacter = value => [...value].some(character => {
+  const code = character.charCodeAt(0);
+  return code < 32 || [34, 42, 47, 58, 60, 62, 63, 92, 124].includes(code);
+});
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 
 const validateFileName = (value, label) => {
-  if (typeof value !== "string" || !value.trim() || value.trim() !== value || value === "." || value === ".." || /[<>:"/\\|?*\u0000-\u001F]/.test(value)) {
+  if (typeof value !== "string" || !value.trim() || value.trim() !== value || value === "." || value === ".." || hasInvalidFileNameCharacter(value)) {
     throw new Error(`Invalid ${label}: ${value}`);
   }
 };
