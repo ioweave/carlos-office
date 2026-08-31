@@ -1,0 +1,145 @@
+name: Temporary Workflow Canvas Fix
+
+on:
+  push:
+    branches: [v1.1]
+    paths:
+      - .github/workflows/temporary-workflow-canvas-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v1.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13
+      - name: Apply canvas fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          graph_path = Path("Front/src/components/ProcessGraph.jsx")
+          graph = graph_path.read_text()
+
+          replacements = [
+              (
+                  '''    const next = {\n      x: Math.max(0, Math.round(drag.origin.x + dx)),\n      y: Math.max(0, Math.round(drag.origin.y + dy)),\n    };''',
+                  '''    const next = {\n      x: Math.round(drag.origin.x + dx),\n      y: Math.round(drag.origin.y + dy),\n    };''',
+              ),
+              (
+                  '''      nextGroups = drag.groups.map(item => moveIds.has(item.id) ? {\n        ...item,\n        x: Math.max(0, Math.round(item.x + dx)),\n        y: Math.max(0, Math.round(item.y + dy)),\n      } : item);''',
+                  '''      nextGroups = drag.groups.map(item => moveIds.has(item.id) ? {\n        ...item,\n        x: Math.round(item.x + dx),\n        y: Math.round(item.y + dy),\n      } : item);''',
+              ),
+              (
+                  '''        nextPositions[taskId] = {\n          x: Math.max(0, Math.round(point.x + dx)),\n          y: Math.max(0, Math.round(point.y + dy)),\n        };''',
+                  '''        nextPositions[taskId] = {\n          x: Math.round(point.x + dx),\n          y: Math.round(point.y + dy),\n        };''',
+              ),
+              (
+                  '''  const handleWheel = event => {\n    event.preventDefault();\n    if (event.deltaY === 0) return;\n    zoomAt(zoom * (event.deltaY > 0 ? 0.9 : 1.1), event.clientX, event.clientY);\n  };''',
+                  '''  useEffect(() => {\n    const viewport = viewportRef.current;\n    if (!viewport) return undefined;\n\n    const handleWheel = event => {\n      if (event.deltaY === 0) return;\n      event.preventDefault();\n      const rect = viewport.getBoundingClientRect();\n      const next = clampZoom(zoom * (event.deltaY > 0 ? 0.9 : 1.1));\n      if (next === zoom) return;\n\n      const worldX = (event.clientX - rect.left - pan.x) / zoom;\n      const worldY = (event.clientY - rect.top - pan.y) / zoom;\n      setPan({\n        x: event.clientX - rect.left - worldX * next,\n        y: event.clientY - rect.top - worldY * next,\n      });\n      setZoom(next);\n    };\n\n    viewport.addEventListener("wheel", handleWheel, { passive: false });\n    return () => viewport.removeEventListener("wheel", handleWheel);\n  }, [zoom, pan]);''',
+              ),
+              (
+                  '''      onClick={handleCanvasClick}\n      onWheel={handleWheel}\n    >''',
+                  '''      onClick={handleCanvasClick}\n    >''',
+              ),
+          ]
+
+          for old, new in replacements:
+              if graph.count(old) != 1:
+                  raise SystemExit(f"Expected exactly one ProcessGraph match, found {graph.count(old)} for: {old[:80]!r}")
+              graph = graph.replace(old, new)
+          graph_path.write_text(graph)
+
+          controller_path = Path("Back/src/controllers/ProcessController.mjs")
+          controller = controller_path.read_text()
+          old = '    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) throw new Error(`Invalid Workflow position for Task: ${taskId}`);'
+          new = '    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error(`Invalid Workflow position for Task: ${taskId}`);'
+          if controller.count(old) != 1:
+              raise SystemExit(f"Expected one ProcessController layout validation match, found {controller.count(old)}")
+          controller_path.write_text(controller.replace(old, new))
+
+          style_path = Path("Front/src/styles/comfy-workflow.scss")
+          style = style_path.read_text()
+
+          color_replacements = [
+              (
+                  '''.comfy-graph {\n  position: relative;''',
+                  '''.comfy-graph {\n  --workflow-node-base: #4b6584;\n  --workflow-node-border: #778ca3;\n  --workflow-node-selected: #a55eea;\n  --workflow-node-ready: #2bcbba;\n  --workflow-node-running: #45aaf2;\n  --workflow-node-blocked: #fd9644;\n  --workflow-node-failed: #eb3b5a;\n  --workflow-node-completed: #20bf6b;\n  --workflow-node-muted: #778ca3;\n  --workflow-node-start: #26de81;\n  --workflow-node-end: #8854d0;\n  --workflow-node-socket: #4b7bec;\n\n  position: relative;''',
+              ),
+              (
+                  '''  border: 1px solid color-mix(in srgb, var(--color-border) 80%, #000);\n  border-radius: 7px;\n  background: color-mix(in srgb, var(--color-surface) 94%, #090909);''',
+                  '''  border: 1px solid color-mix(in srgb, var(--workflow-node-border) 52%, var(--color-border));\n  border-radius: 7px;\n  background: color-mix(in srgb, var(--color-surface) 92%, var(--workflow-node-base));''',
+              ),
+              (
+                  '''.workflow-task-node--selected {\n  border-color: var(--color-accent);\n  box-shadow:\n    0 0 0 1px color-mix(in srgb, var(--color-accent) 44%, transparent),''',
+                  '''.workflow-task-node--selected {\n  border-color: var(--workflow-node-selected);\n  box-shadow:\n    0 0 0 1px color-mix(in srgb, var(--workflow-node-selected) 44%, transparent),''',
+              ),
+              (
+                  '''  background: color-mix(in srgb, #6f6672 72%, var(--color-surface));''',
+                  '''  background: color-mix(in srgb, var(--workflow-node-base) 78%, var(--color-surface));''',
+              ),
+              (
+                  '''.workflow-task-node--running .workflow-task-node__titlebar {\n  background: color-mix(in srgb, var(--color-accent) 58%, #4c4750);\n}\n\n.workflow-task-node--failed .workflow-task-node__titlebar {\n  background: color-mix(in srgb, #9d3c4b 68%, var(--color-surface));\n}\n\n.workflow-task-node--completed .workflow-task-node__titlebar {\n  background: color-mix(in srgb, #397a5d 62%, var(--color-surface));\n}''',
+                  '''.workflow-task-node--ready .workflow-task-node__titlebar {\n  background: color-mix(in srgb, var(--workflow-node-ready) 70%, var(--color-surface));\n}\n\n.workflow-task-node--running .workflow-task-node__titlebar {\n  background: color-mix(in srgb, var(--workflow-node-running) 72%, var(--color-surface));\n}\n\n.workflow-task-node--blocked .workflow-task-node__titlebar {\n  background: color-mix(in srgb, var(--workflow-node-blocked) 72%, var(--color-surface));\n}\n\n.workflow-task-node--failed .workflow-task-node__titlebar {\n  background: color-mix(in srgb, var(--workflow-node-failed) 72%, var(--color-surface));\n}\n\n.workflow-task-node--completed .workflow-task-node__titlebar {\n  background: color-mix(in srgb, var(--workflow-node-completed) 68%, var(--color-surface));\n}\n\n.workflow-task-node--cancelled .workflow-task-node__titlebar,\n.workflow-task-node--skipped .workflow-task-node__titlebar {\n  background: color-mix(in srgb, var(--workflow-node-muted) 70%, var(--color-surface));\n}''',
+              ),
+              (
+                  '''  background: color-mix(in srgb, #fff 28%, transparent);''',
+                  '''  background: color-mix(in srgb, var(--workflow-node-border) 78%, transparent);''',
+              ),
+              (
+                  '''.workflow-task-node--running .workflow-task-node__status {\n  background: #d8caff;\n  box-shadow: 0 0 6px #cbb8ff;\n}\n\n.workflow-task-node--failed .workflow-task-node__status {\n  background: #ffd1d8;\n}\n\n.workflow-task-node--completed .workflow-task-node__status {\n  background: #c7f0db;\n}''',
+                  '''.workflow-task-node--ready .workflow-task-node__status {\n  background: var(--workflow-node-ready);\n}\n\n.workflow-task-node--running .workflow-task-node__status {\n  background: var(--workflow-node-running);\n  box-shadow: 0 0 6px color-mix(in srgb, var(--workflow-node-running) 72%, transparent);\n}\n\n.workflow-task-node--blocked .workflow-task-node__status {\n  background: #fed330;\n}\n\n.workflow-task-node--failed .workflow-task-node__status {\n  background: #fc5c65;\n}\n\n.workflow-task-node--completed .workflow-task-node__status {\n  background: #26de81;\n}\n\n.workflow-task-node--cancelled .workflow-task-node__status,\n.workflow-task-node--skipped .workflow-task-node__status {\n  background: var(--workflow-node-muted);\n}''',
+              ),
+              (
+                  '''  background: color-mix(in srgb, #5d565f 70%, var(--color-surface));''',
+                  '''  background: color-mix(in srgb, var(--workflow-node-base) 72%, var(--color-surface));''',
+              ),
+              (
+                  '''.workflow-terminal-node--start {\n  background: color-mix(in srgb, #3f725c 72%, var(--color-surface));\n}\n\n.workflow-terminal-node--end {\n  background: color-mix(in srgb, #73516e 72%, var(--color-surface));\n}''',
+                  '''.workflow-terminal-node--start {\n  background: color-mix(in srgb, var(--workflow-node-start) 66%, var(--color-surface));\n}\n\n.workflow-terminal-node--end {\n  background: color-mix(in srgb, var(--workflow-node-end) 72%, var(--color-surface));\n}''',
+              ),
+              (
+                  '''  border: 2px solid #bfa9ff;''',
+                  '''  border: 2px solid var(--workflow-node-socket);''',
+              ),
+              (
+                  '''  background: #bfa9ff;\n  transform: translateY(-50%) scale(1.18);''',
+                  '''  background: var(--workflow-node-socket);\n  transform: translateY(-50%) scale(1.18);''',
+              ),
+              (
+                  '''.comfy-minimap-node {\n  fill: color-mix(in srgb, #779bc2 74%, var(--color-text-faint));''',
+                  '''.comfy-minimap-node {\n  fill: var(--workflow-node-base);''',
+              ),
+              (
+                  '''.comfy-minimap-node--start {\n  fill: #5d9b7e;\n}\n\n.comfy-minimap-node--end {\n  fill: #9b7195;\n}''',
+                  '''.comfy-minimap-node--start {\n  fill: var(--workflow-node-start);\n}\n\n.comfy-minimap-node--end {\n  fill: var(--workflow-node-end);\n}''',
+              ),
+          ]
+
+          for old, new in color_replacements:
+              if style.count(old) != 1:
+                  raise SystemExit(f"Expected exactly one SCSS match, found {style.count(old)} for: {old[:80]!r}")
+              style = style.replace(old, new)
+          style_path.write_text(style)
+          PY
+      - name: Validate
+        run: |
+          npm --prefix Back ci
+          npm --prefix Back run lint
+          npm --prefix Back run check
+          npm --prefix Front ci
+          npm --prefix Front run build
+          npm --prefix Front run lint
+      - name: Commit fixes
+        run: |
+          git config user.name "Carlos Encalada"
+          git config user.email "42809876+ioweave@users.noreply.github.com"
+          git add Back/src/controllers/ProcessController.mjs Front/src/components/ProcessGraph.jsx Front/src/styles/comfy-workflow.scss
+          git commit -m "Fix infinite workflow canvas and node palette"
+          git push origin HEAD:v1.1
