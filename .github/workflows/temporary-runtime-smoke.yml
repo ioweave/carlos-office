@@ -1,0 +1,135 @@
+name: Temporary Runtime Smoke
+
+on:
+  push:
+    branches: [v1.1]
+    paths:
+      - .github/workflows/temporary-runtime-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12
+      - name: Install backend dependencies
+        run: npm --prefix Back ci
+      - name: Start backend
+        run: |
+          cat > Back/.env <<'EOF'
+          LOCAL_HOST=127.0.0.1
+          LOCAL_PORT=3002
+          FRONTEND_ORIGIN=http://localhost:3003
+          EOF
+          node Back/platform.mjs > /tmp/carlos-office.log 2>&1 &
+          echo $! > /tmp/carlos-office.pid
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:3002/health >/dev/null; then exit 0; fi
+            sleep 0.5
+          done
+          cat /tmp/carlos-office.log
+          exit 1
+      - name: Exercise WebSocket state and chat commands
+        run: |
+          node <<'NODE'
+          import assert from "node:assert/strict";
+
+          const socketUrl = "ws://127.0.0.1:3002/ws";
+          const apiUrl = "http://127.0.0.1:3002";
+          const timeout = (label, ms = 5000) => new Promise((_, reject) => setTimeout(() => reject(new Error(`Timed out: ${label}`)), ms));
+
+          const connect = async () => {
+            const socket = new WebSocket(socketUrl);
+            const messages = [];
+            const waiters = [];
+            socket.addEventListener("message", event => {
+              const message = JSON.parse(String(event.data));
+              const index = waiters.findIndex(waiter => waiter.predicate(message));
+              if (index >= 0) {
+                const [waiter] = waiters.splice(index, 1);
+                waiter.resolve(message);
+              } else {
+                messages.push(message);
+              }
+            });
+            await Promise.race([
+              new Promise((resolve, reject) => {
+                socket.addEventListener("open", resolve, { once: true });
+                socket.addEventListener("error", () => reject(new Error("WebSocket connection failed")), { once: true });
+              }),
+              timeout("WebSocket open"),
+            ]);
+            const waitFor = predicate => {
+              const existing = messages.findIndex(predicate);
+              if (existing >= 0) return Promise.resolve(messages.splice(existing, 1)[0]);
+              return Promise.race([
+                new Promise(resolve => waiters.push({ predicate, resolve })),
+                timeout("WebSocket message"),
+              ]);
+            };
+            return { socket, waitFor };
+          };
+
+          const first = await connect();
+          const initial = await first.waitFor(message => message.type === "state" && message.reset === true);
+          assert.ok(Array.isArray(initial.state?.conversations), "Initial state must contain conversation summaries");
+
+          let sequence = 0;
+          const command = async (connection, name, payload = {}) => {
+            sequence += 1;
+            const id = `smoke-${sequence}`;
+            connection.socket.send(JSON.stringify({ type: "command", id, command: name, payload }));
+            const result = await connection.waitFor(message => message.type === "command-result" && message.id === id);
+            if (!result.ok) throw new Error(`${name} failed: ${result.error}`);
+            return result.data;
+          };
+
+          const created = await command(first, "conversation.create", {});
+          assert.ok(created.id, "Conversation create must return an ID");
+          const conversationId = created.id;
+
+          const renamed = await command(first, "conversation.rename", { conversationId, title: "Runtime Smoke" });
+          assert.equal(renamed.title, "Runtime Smoke");
+
+          const attachmentResponse = await fetch(`${apiUrl}/conversations/${encodeURIComponent(conversationId)}/attachments`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: "smoke.txt", type: "text/plain", createdBy: "Carlos", content: "runtime smoke" }),
+          });
+          assert.equal(attachmentResponse.status, 201);
+          const attachment = await attachmentResponse.json();
+          assert.ok(attachment.id, "Attachment upload must return an ID");
+
+          const loaded = await command(first, "conversation.get", { conversationId });
+          assert.equal(loaded.conversation.id, conversationId);
+          assert.ok(loaded.attachments.some(item => item.id === attachment.id), "Conversation load must include uploaded attachment metadata");
+
+          const removed = await command(first, "conversation.deleteAttachments", {
+            conversationId,
+            attachmentIds: [attachment.id],
+          });
+          assert.ok(removed.deleted.includes(attachment.id), "Attachment delete command must report the removed attachment");
+
+          await command(first, "state.refresh", {});
+          const deleted = await command(first, "conversation.delete", { conversationId });
+          assert.equal(deleted.deleted, true);
+          first.socket.close();
+
+          const second = await connect();
+          const reconnected = await second.waitFor(message => message.type === "state" && message.reset === true);
+          assert.ok(!reconnected.state.conversations.some(item => item.id === conversationId), "Reconnect snapshot must reflect deleted conversation");
+          second.socket.close();
+          NODE
+      - name: Show backend log on failure
+        if: failure()
+        run: cat /tmp/carlos-office.log || true
+      - name: Stop backend
+        if: always()
+        run: |
+          if [ -f /tmp/carlos-office.pid ]; then kill $(cat /tmp/carlos-office.pid) 2>/dev/null || true; fi
