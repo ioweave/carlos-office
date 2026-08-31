@@ -505,12 +505,11 @@ const requestError = (message, statusCode = 400) => {
   error.statusCode = statusCode;
   return error;
 };
-
 const partsFrom = pathname => pathname.split("/").filter(Boolean).map(decodeURIComponent);
 const safeFilename = value => String(value || "file").replaceAll('"', "");
 
-/** HTTP transport for conversation requests and binary resources. */
-export const createConversationResourceController = ({ allowedOrigin, nora }) => {
+/** HTTP transport only for conversation attachment and artifact resources. */
+export const createConversationResourceController = ({ allowedOrigin }) => {
   if (!allowedOrigin || typeof allowedOrigin !== "string") {
     throw new Error("Conversation resource controller requires one allowed frontend origin");
   }
@@ -524,20 +523,16 @@ export const createConversationResourceController = ({ allowedOrigin, nora }) =>
       chunks.push(chunk);
     }
     if (!chunks.length) return {};
-    try {
-      return JSON.parse(Buffer.concat(chunks, size).toString("utf8"));
-    } catch {
-      throw requestError("Invalid JSON request body");
-    }
+    try { return JSON.parse(Buffer.concat(chunks, size).toString("utf8")); } catch { throw requestError("Invalid JSON request body"); }
   };
 
   const matches = req => {
     const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
     const parts = partsFrom(url.pathname);
-    if (parts[0] !== "conversations" || !parts[1]) return false;
-    if (parts[2] === "requests" && [3, 4].includes(parts.length)) return true;
-    if (["attachments", "artifacts"].includes(parts[2]) && [3, 4].includes(parts.length)) return true;
-    return false;
+    return parts[0] === "conversations"
+      && Boolean(parts[1])
+      && ["attachments", "artifacts"].includes(parts[2])
+      && [3, 4].includes(parts.length);
   };
 
   const handle = async (req, res) => {
@@ -554,7 +549,7 @@ export const createConversationResourceController = ({ allowedOrigin, nora }) =>
 
     const cors = {
       "Access-Control-Allow-Headers": "Content-Type",
-      "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
+      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
       ...(origin ? { "Access-Control-Allow-Origin": origin, Vary: "Origin" } : {}),
     };
     const sendJson = (status, data) => {
@@ -574,70 +569,10 @@ export const createConversationResourceController = ({ allowedOrigin, nora }) =>
       const resource = parts[2];
       const resourceId = parts[3] ?? null;
 
-      if (method === "POST" && resource === "requests" && parts.length === 3) {
-        const body = await readJson(req);
-        let messageId = body.messageId == null ? null : normalizeMessageId(body.messageId);
-        const current = await getConversation(conversationId);
-        if (!current) throw requestError("Conversation not found", 404);
-
-        if (messageId) {
-          const existingIndex = current.messages.findIndex(message => message.id === messageId);
-          if (existingIndex >= 0) {
-            const existing = current.messages[existingIndex];
-            const sameRequest = (
-              existing.actor === "Carlos"
-              && existing.content === String(body.content ?? "").trim()
-              && JSON.stringify(existing.attachments ?? []) === JSON.stringify(body.attachments ?? [])
-            );
-            if (!sameRequest) throw requestError(`Message ID already exists: ${messageId}`, 409);
-
-            const hasFollowUp = current.messages.slice(existingIndex + 1).some(message => message.actor === "Nora");
-            if (hasFollowUp) {
-              sendJson(200, { action: "existing", message: null, workflow: null, deduplicated: true });
-              return;
-            }
-          } else {
-            await addMessage(conversationId, {
-              id: messageId,
-              actor: "Carlos",
-              content: body.content,
-              attachments: body.attachments ?? [],
-            });
-          }
-        } else {
-          const message = await addMessage(conversationId, {
-            actor: "Carlos",
-            content: body.content,
-            attachments: body.attachments ?? [],
-          });
-          messageId = message.id;
-        }
-
-        const running = nora.listCarlosRequests?.().find(job => (
-          job.status === "running"
-          && job.conversationId === conversationId
-          && job.messageId === messageId
-        ));
-        const job = running ?? nora.startCarlosRequest({ conversationId, messageId });
-        sendJson(202, { action: "accepted", job, deduplicated: Boolean(running) });
-        return;
-      }
-
-      if (method === "DELETE" && resource === "requests" && parts.length === 4) {
-        const cancelled = await nora.cancelCarlosRequest(resourceId, conversationId);
-        if (!cancelled) {
-          sendError(404, "Active Nora request not found");
-          return;
-        }
-        sendJson(200, { id: resourceId, cancelled: true });
-        return;
-      }
-
       if (resource === "attachments" && parts.length === 3 && method === "GET") {
         sendJson(200, await listAttachments(conversationId));
         return;
       }
-
       if (resource === "attachments" && parts.length === 3 && method === "POST") {
         const body = await readJson(req);
         const attachment = await createAttachment({
@@ -645,19 +580,15 @@ export const createConversationResourceController = ({ allowedOrigin, nora }) =>
           name: body.name,
           type: body.type,
           createdBy: body.createdBy ?? "Carlos",
-          content: body.encoding === "base64"
-            ? Buffer.from(body.content ?? "", "base64")
-            : body.content ?? "",
+          content: body.encoding === "base64" ? Buffer.from(body.content ?? "", "base64") : body.content ?? "",
         });
         sendJson(201, attachment);
         return;
       }
-
       if (resource === "artifacts" && parts.length === 3 && method === "GET") {
         sendJson(200, await listArtifacts(conversationId));
         return;
       }
-
       if (resource === "artifacts" && parts.length === 3 && method === "POST") {
         const body = await readJson(req);
         const artifact = await createArtifact({
@@ -665,14 +596,11 @@ export const createConversationResourceController = ({ allowedOrigin, nora }) =>
           name: body.name,
           type: body.type,
           createdBy: body.createdBy ?? "Carlos",
-          content: body.encoding === "base64"
-            ? Buffer.from(body.content ?? "", "base64")
-            : body.content ?? "",
+          content: body.encoding === "base64" ? Buffer.from(body.content ?? "", "base64") : body.content ?? "",
         });
         sendJson(201, artifact);
         return;
       }
-
       if (parts.length === 4 && method === "GET" && resource === "attachments") {
         const attachment = await getAttachment(conversationId, resourceId);
         if (!attachment) {
@@ -690,7 +618,6 @@ export const createConversationResourceController = ({ allowedOrigin, nora }) =>
         res.end(content);
         return;
       }
-
       if (parts.length === 4 && method === "GET" && resource === "artifacts") {
         const artifact = await getArtifact(conversationId, resourceId);
         if (!artifact) {

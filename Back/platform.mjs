@@ -148,7 +148,7 @@ const router = createRouter({
   skills,
   engine,
 });
-const conversationResources = conversations.createConversationResourceController({ allowedOrigin: config.frontendOrigin, nora });
+const conversationResources = conversations.createConversationResourceController({ allowedOrigin: config.frontendOrigin });
 
 const reloadProviderRuntime = async () => {
   await providers.loadProviderPreferences();

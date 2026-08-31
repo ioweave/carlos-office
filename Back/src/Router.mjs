@@ -79,60 +79,6 @@ export const createRouter = ({
     return events.listEvents(filters).slice(-limit).reverse();
   };
 
-  const editCarlosMessage = async (conversationId, messageId, content) => {
-    const conversation = await conversations.getConversation(conversationId);
-    if (!conversation) throw requestError("Conversation not found", 404);
-    const messageIndex = conversation.messages.findIndex(message => message.id === messageId);
-    if (messageIndex === -1) throw requestError("Message not found", 404);
-    const message = conversation.messages[messageIndex];
-    if (message.actor !== "Carlos") throw requestError("Only Carlos messages can be edited");
-    if (typeof content !== "string" || !content.trim()) throw requestError("Message content cannot be empty");
-
-    const messagePositions = new Map(conversation.messages.map((item, index) => [item.id, index]));
-    const workflowEvents = events.listEvents({ type: "nora.workflow_started", conversationId });
-    const workflowStartedAt = new Map();
-    for (const event of workflowEvents) workflowStartedAt.set(event.workflowId, Date.parse(event.at));
-    const cutoff = Date.parse(message.at);
-    const workflowIds = conversation.workflows.filter(workflowId => {
-      const workflow = processes.getWorkflow(workflowId);
-      const sourceMessageId = workflow?.config?.sourceMessageId;
-      if (sourceMessageId && messagePositions.has(sourceMessageId)) return messagePositions.get(sourceMessageId) >= messageIndex;
-      const startedAt = workflowStartedAt.get(workflowId);
-      return Number.isFinite(startedAt) && Number.isFinite(cutoff) && startedAt >= cutoff;
-    });
-
-    const retainedMessages = conversation.messages.slice(0, messageIndex + 1);
-    const retainedArtifactIds = new Set(retainedMessages.flatMap(item => item.artifacts ?? []));
-    const artifactIds = (await artifacts.listArtifacts(conversationId))
-      .filter(artifact => {
-        if (retainedArtifactIds.has(artifact.id)) return false;
-        const createdAt = Date.parse(artifact.createdAt);
-        return Number.isFinite(createdAt) && Number.isFinite(cutoff) && createdAt >= cutoff;
-      })
-      .map(artifact => artifact.id);
-
-    const committed = await conversations.editCarlosMessage(conversationId, messageId, content, workflowIds);
-    for (const workflowId of workflowIds) {
-      const workflow = processes.getWorkflow(workflowId);
-      engine.cancelWorkflowExecution(workflowId, "Conversation history edited by Carlos");
-      if (workflow && !["completed", "cancelled", "failed"].includes(workflow.status)) await processes.cancelWorkflow(workflowId);
-      if (processes.getWorkflow(workflowId)) await processes.deleteWorkflow(workflowId);
-      await cleanupWorkflowRuntime(workflowId);
-    }
-    await authorization.deleteApprovalsForWorkflows(workflowIds);
-    await artifacts.deleteArtifacts(conversationId, artifactIds);
-    await events.recordEvent("conversation.message_edited", {
-      conversationId,
-      messageId,
-      removedMessages: conversation.messages.length - messageIndex - 1,
-      removedWorkflows: workflowIds.length,
-      removedArtifacts: artifactIds.length,
-    });
-
-    nora.startCarlosRequest({ conversationId, messageId });
-    return committed;
-  };
-
   return async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
     const parts = partsFrom(url.pathname);
@@ -163,34 +109,6 @@ export const createRouter = ({
       if (method === "GET" && parts[0] === "models" && parts.length === 1) return sendJson(200, nora.listModels());
       if (method === "GET" && parts[0] === "nora" && parts.length === 1) return sendJson(200, nora.getNoraState());
       if (method === "GET" && parts[0] === "events" && parts.length === 1) return sendJson(200, listRecentEvents(url));
-
-      if (method === "GET" && parts[0] === "conversations" && parts.length === 1) return sendJson(200, conversations.listConversations());
-      if (method === "POST" && parts[0] === "conversations" && parts.length === 1) {
-        const body = await readJson(req);
-        return sendJson(201, await nora.createConversation({ id: body.id ?? null, provider: body.provider ?? null, model: body.model ?? null }));
-      }
-      if (method === "GET" && parts[0] === "conversations" && parts.length === 2) {
-        const conversation = await conversations.getConversation(parts[1]);
-        return conversation ? sendJson(200, conversation) : sendError(404, "Conversation not found");
-      }
-      if (method === "PATCH" && parts[0] === "conversations" && parts.length === 2) {
-        const body = await readJson(req);
-        return sendJson(200, await conversations.setConversationTitle(parts[1], body.title));
-      }
-      if (method === "DELETE" && parts[0] === "conversations" && parts.length === 2) {
-        const deleted = await conversations.deleteConversation(parts[1]);
-        return deleted ? sendJson(200, { id: parts[1], deleted: true }) : sendError(404, "Conversation not found");
-      }
-      if (method === "PATCH" && parts[0] === "conversations" && parts[2] === "messages" && parts.length === 4) {
-        const body = await readJson(req);
-        return sendJson(202, await editCarlosMessage(parts[1], parts[3], body.content));
-      }
-      if (method === "PATCH" && parts[0] === "conversations" && parts[2] === "model" && parts.length === 3) {
-        const body = await readJson(req);
-        return sendJson(200, await nora.setConversationModel(parts[1], { provider: body.provider, model: body.model }));
-      }
-      // /conversations/:id/requests, attachments, and artifacts are intentionally owned only by
-      // ConversationController's resource handler. They are not duplicated here.
 
       if (method === "GET" && parts[0] === "processes" && parts.length === 1) return sendJson(200, processes.listProcesses());
       if (method === "GET" && parts[0] === "processes" && parts.length === 2) {
