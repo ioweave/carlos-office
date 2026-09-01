@@ -16,6 +16,14 @@ import FilterableSortableTable from "../components/FilterableSortableTable";
 import "../styles/providers.scss";
 
 const CAPABILITIES = ["thinking", "vision", "audio", "embeddings"];
+const TIMEOUT_OPTIONS = [
+  { value: 300_000, label: "5 min" },
+  { value: 900_000, label: "15 min" },
+  { value: 1_800_000, label: "30 min" },
+  { value: 3_600_000, label: "1 hour" },
+  { value: 7_200_000, label: "2 hours" },
+  { value: 0, label: "No timeout" },
+];
 const emptyProvider = {
   name: "",
   type: "ollama",
@@ -23,7 +31,14 @@ const emptyProvider = {
   credentialService: "",
   enabled: true,
 };
-const emptyModel = { provider: "", name: "", location: "local", parameters: "", supportedCapabilities: [] };
+const emptyModel = {
+  provider: "",
+  name: "",
+  location: "local",
+  parameters: "",
+  inferenceTimeoutMs: "",
+  supportedCapabilities: [],
+};
 
 const formatParameters = value => {
   if (!Number.isFinite(value)) return "—";
@@ -45,6 +60,12 @@ const formatCost = model => {
   const money = value => value == null ? "?" : `$${Number(value).toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
   return `${money(input)} in / ${money(output)} out`;
 };
+const formatTimeout = value => {
+  if (value === 0) return "No timeout";
+  const option = TIMEOUT_OPTIONS.find(item => item.value === value);
+  return option?.label || `${Math.round(value / 60_000)} min`;
+};
+const automaticTimeout = location => location === "cloud" ? 300_000 : 1_800_000;
 
 const statusFor = model => !model.available ? "unavailable" : model.enabled ? "active" : "disabled";
 const capabilityFilterOptions = [
@@ -185,7 +206,7 @@ export default function ProvidersPage() {
     if (provider.builtIn || !window.confirm(`Remove provider ${provider.provider}?`)) return;
     try {
       setProviders((await api.delete(endpoints.provider(provider.provider))).data || []);
-      toast.success("Provider removed and Nora reloaded the registry.");
+      toast.success("Provider removed. Nora reloaded the registry.");
     } catch (error) {
       toast.error(error.response?.data?.error || `Could not remove ${provider.provider}.`);
     }
@@ -222,6 +243,29 @@ export default function ProvidersPage() {
     { key: "provider", label: "Provider", sortType: "text" },
     { key: "name", label: "Model", sortType: "mixed", className: "providers-table__model" },
     { key: "location", label: "Runtime", sortType: "text", render: row => <span className={`model-runtime model-runtime--${row.location}`}>{row.location}</span> },
+    {
+      key: "inferenceTimeoutMs",
+      label: "Inference timeout",
+      sortType: "number",
+      render: model => {
+        const key = `${model.provider}:${model.name}:timeout`;
+        const value = model.inferenceTimeoutConfigured ? String(model.inferenceTimeoutMs) : "default";
+        return (
+          <select
+            value={value}
+            disabled={saving.has(key)}
+            aria-label={`Inference timeout for ${model.name}`}
+            onChange={event => {
+              const selected = event.target.value;
+              void patchModel(model, { inferenceTimeoutMs: selected === "default" ? null : Number(selected) }, "timeout");
+            }}
+          >
+            <option value="default">Auto · {formatTimeout(automaticTimeout(model.location))}</option>
+            {TIMEOUT_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        );
+      },
+    },
     { key: "parameters", label: "Parameters", sortType: "number", render: row => formatParameters(row.parameters) },
     ...CAPABILITIES.map(capability => ({
       key: capability,
@@ -374,6 +418,14 @@ export default function ProvidersPage() {
             <label className="field"><span>Model name</span><input value={modelDraft.name} onChange={event => setModelDraft(current => ({ ...current, name: event.target.value }))} placeholder="qwen3:8b" required /></label>
             <label className="field"><span>Runtime</span><select value={modelDraft.location} onChange={event => setModelDraft(current => ({ ...current, location: event.target.value }))}><option value="local">Local</option><option value="cloud">Cloud</option></select></label>
             <label className="field"><span>Parameters · optional</span><input value={modelDraft.parameters} onChange={event => setModelDraft(current => ({ ...current, parameters: event.target.value }))} placeholder="8B" /></label>
+            <label className="field">
+              <span>Inference timeout</span>
+              <select value={modelDraft.inferenceTimeoutMs} onChange={event => setModelDraft(current => ({ ...current, inferenceTimeoutMs: event.target.value }))}>
+                <option value="">Automatic · {formatTimeout(automaticTimeout(modelDraft.location))}</option>
+                {TIMEOUT_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+              <small>Automatic is 30 minutes for local models and 5 minutes for cloud models.</small>
+            </label>
           </div>
           <div className="provider-capabilities"><span>Supported capabilities</span>{CAPABILITIES.map(capability => <label key={capability}><input type="checkbox" checked={modelDraft.supportedCapabilities.includes(capability)} onChange={() => toggleCapability(capability)} /> {capability}</label>)}</div>
           <footer className="form-actions"><button type="button" className="button button--quiet" onClick={() => setModelFormOpen(false)}>Cancel</button><button type="submit" className="button button--primary">Add model</button></footer>
