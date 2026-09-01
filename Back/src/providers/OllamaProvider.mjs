@@ -1,4 +1,5 @@
-const REQUEST_TIMEOUT_MS = 300_000;
+const CLOUD_INFERENCE_TIMEOUT_MS = 300_000;
+const LOCAL_INFERENCE_TIMEOUT_MS = 1_800_000;
 const DISCOVERY_TIMEOUT_MS = 15_000;
 
 const normalizeBaseUrl = value => {
@@ -104,18 +105,40 @@ const requestMessages = (messages, format) => {
   return instruction ? [...messages, { role: "system", content: instruction }] : messages;
 };
 
-const request = async (url, options, apiKey, timeoutMs = REQUEST_TIMEOUT_MS) => {
+const request = async (
+  url,
+  options,
+  apiKey,
+  timeoutMs = CLOUD_INFERENCE_TIMEOUT_MS,
+  timeoutCode = "provider_request_timeout",
+) => {
   const { signal: providedSignal = null, ...requestOptions } = options;
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const signal = providedSignal ? AbortSignal.any([providedSignal, timeoutSignal]) : timeoutSignal;
-  const response = await fetch(url, {
-    ...requestOptions,
-    signal,
-    headers: {
-      ...headers(apiKey),
-      ...(requestOptions.headers ?? {}),
-    },
-  });
+  const timeoutSignal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : null;
+  const signal = providedSignal && timeoutSignal
+    ? AbortSignal.any([providedSignal, timeoutSignal])
+    : providedSignal || timeoutSignal || undefined;
+
+  let response;
+  try {
+    response = await fetch(url, {
+      ...requestOptions,
+      signal,
+      headers: {
+        ...headers(apiKey),
+        ...(requestOptions.headers ?? {}),
+      },
+    });
+  } catch (error) {
+    if (timeoutSignal?.aborted && !providedSignal?.aborted) {
+      const seconds = Math.round(timeoutMs / 1000);
+      const timeoutError = new Error(`Ollama request exceeded its ${seconds} second inference timeout`);
+      timeoutError.code = timeoutCode;
+      timeoutError.retryable = false;
+      timeoutError.timeoutMs = timeoutMs;
+      throw timeoutError;
+    }
+    throw error;
+  }
 
   if (!response.ok) {
     const body = await response.text();
@@ -169,6 +192,7 @@ export const createOllamaProvider = ({
   name = "ollama",
   baseUrl = "http://localhost:11434/api",
   apiKey = null,
+  modelSettings = {},
 } = {}) => {
   if (typeof name !== "string" || !name.trim()) throw new Error("Provider name must be a non-empty string");
   const providerName = name.trim();
@@ -180,6 +204,14 @@ export const createOllamaProvider = ({
       return false;
     }
   })();
+  const timeoutForModel = model => {
+    const setting = isObject(modelSettings?.[model]) ? modelSettings[model] : {};
+    if (Number.isSafeInteger(setting.inferenceTimeoutMs) && setting.inferenceTimeoutMs >= 0) {
+      return setting.inferenceTimeoutMs;
+    }
+    const isCloud = setting.location === "cloud" || endpointIsCloud || /(?:^|[-:])cloud$/i.test(model);
+    return isCloud ? CLOUD_INFERENCE_TIMEOUT_MS : LOCAL_INFERENCE_TIMEOUT_MS;
+  };
 
   const provider = {
     name: providerName,
@@ -205,6 +237,8 @@ export const createOllamaProvider = ({
         `${apiUrl}/chat`,
         { method: "POST", body: JSON.stringify(body), signal },
         apiKey,
+        timeoutForModel(model),
+        "provider_inference_timeout",
       );
 
       return {
@@ -220,12 +254,24 @@ export const createOllamaProvider = ({
     },
 
     async listModels() {
-      const result = await request(`${apiUrl}/tags`, { method: "GET" }, apiKey, DISCOVERY_TIMEOUT_MS);
+      const result = await request(
+        `${apiUrl}/tags`,
+        { method: "GET" },
+        apiKey,
+        DISCOVERY_TIMEOUT_MS,
+        "provider_discovery_timeout",
+      );
       return (result.models ?? []).map(model => model.name ?? model.model).filter(Boolean);
     },
 
     async listModelMetadata() {
-      const result = await request(`${apiUrl}/tags`, { method: "GET" }, apiKey, DISCOVERY_TIMEOUT_MS);
+      const result = await request(
+        `${apiUrl}/tags`,
+        { method: "GET" },
+        apiKey,
+        DISCOVERY_TIMEOUT_MS,
+        "provider_discovery_timeout",
+      );
       const taggedModels = (result.models ?? []).filter(model => model?.name || model?.model);
 
       return mapWithConcurrency(taggedModels, 4, async tagged => {
@@ -237,6 +283,7 @@ export const createOllamaProvider = ({
             { method: "POST", body: JSON.stringify({ model: modelName }) },
             apiKey,
             DISCOVERY_TIMEOUT_MS,
+            "provider_discovery_timeout",
           );
         } catch {
           // Some remote/cloud catalogs expose tags but not full /show metadata.
