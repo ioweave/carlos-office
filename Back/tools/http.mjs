@@ -279,6 +279,17 @@ const tool = {
           { retryable: true, hint: "Retry with a larger timeoutMs or use a narrower request." },
         );
       }
+      if (error instanceof TypeError && error.message === "fetch failed") {
+        const causeCode = typeof error.cause?.code === "string" ? ` (${error.cause.code})` : "";
+        throw httpError(
+          `could not connect to ${target}${causeCode}`,
+          "http_network_error",
+          {
+            retryable: false,
+            hint: "The endpoint is unreachable from Carlos Office. Change the host or port, or inspect local listeners and processes with a system/command Tool instead of repeating the same request.",
+          },
+        );
+      }
       throw error;
     } finally {
       clearTimeout(timer);

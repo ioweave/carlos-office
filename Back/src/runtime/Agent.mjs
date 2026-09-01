@@ -238,7 +238,7 @@ export class Agent {
         "For deliverables generated in your workspace, use the path returned by the filesystem Tool or a workspace-relative path.",
         "Do not declare ordinary source files, configuration files, or project files merely because you edited them.",
         "If there are no deliverable files, return an empty artifacts array.",
-        "When a Tool fails, inspect its structured error and change strategy. Never repeat the same failed Tool call unchanged.",
+        "When a Tool fails, inspect its structured error and change strategy. An unchanged deterministic failure is rejected without execution, so use that feedback to choose another Tool, path, endpoint, or argument set.",
       ].join("\n\n"),
     });
     messages.push({
@@ -329,22 +329,21 @@ export class Agent {
 
         const key = callKey(call);
         const priorFailure = failedCalls.get(key);
-        if (priorFailure && !priorFailure.retryable) {
-          throw failure(
-            `Agent repeated the same deterministic failed Tool call: ${call.name}. ${priorFailure.message}`,
-            "tool",
-            "repeated_failed_tool_call",
-          );
-        }
+        let error = priorFailure && !priorFailure.retryable
+          ? Object.assign(new Error(`This exact Tool call already failed: ${priorFailure.message}`), {
+            code: "repeated_failed_tool_call",
+            retryable: false,
+            hint: "Do not repeat this call unchanged. Choose another Tool, path, endpoint, or argument set.",
+          })
+          : null;
 
-        let error = null;
-        if (call.input != null && !isObject(call.input)) {
+        if (!error && call.input != null && !isObject(call.input)) {
           error = Object.assign(new Error(`Tool ${call.name} input must be one JSON object`), {
             code: "invalid_tool_input",
             retryable: false,
             hint: "Regenerate the Tool call using the Tool's declared object input schema.",
           });
-        } else if (!this.tools.some(tool => tool.name === call.name)) {
+        } else if (!error && !this.tools.some(tool => tool.name === call.name)) {
           error = Object.assign(new Error(`Agent requested unavailable Tool: ${call.name}`), {
             code: "unavailable_tool",
             retryable: false,
@@ -401,6 +400,7 @@ export class Agent {
       }
 
       if (successfulTools > 0) {
+        failedCalls.clear();
         noProgressTurns = 0;
         continue;
       }
@@ -423,7 +423,7 @@ export class Agent {
             `No-progress turn ${noProgressTurns} of ${this.maxNoProgressTurns}.`,
             `Distinct failures: ${uniqueFailures.length}.`,
             "Use the error codes and hints to change the Tool, arguments, endpoint, file path, or strategy.",
-            "Do not repeat an unchanged deterministic failure; Carlos Office will stop the Task if you do.",
+            "An unchanged deterministic failure will be rejected without executing it again; treat that rejection as feedback rather than a reason to stop.",
           ].join(" "),
         });
       }
