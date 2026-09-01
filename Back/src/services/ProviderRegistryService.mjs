@@ -11,6 +11,7 @@ const modelPreferenceFromRows = (modelRow, capabilityRows) => {
   if (modelRow.location) preference.location = modelRow.location;
   if (modelRow.parameters != null) preference.parameters = Number(modelRow.parameters);
   if (modelRow.enabled != null) preference.enabled = Boolean(modelRow.enabled);
+  if (modelRow.inference_timeout_ms != null) preference.inferenceTimeoutMs = Number(modelRow.inference_timeout_ms);
   if (modelRow.input_cost != null || modelRow.output_cost != null) {
     preference.costPerMillionTokens = {
       inputUsd: modelRow.input_cost == null ? null : Number(modelRow.input_cost),
@@ -35,7 +36,8 @@ const modelPreferenceFromRows = (modelRow, capabilityRows) => {
 export const loadProviderSettings = () => withDatabase(db => {
   const providers = db.prepare(`SELECT name, adapter, base_url, credential_service, enabled, built_in
     FROM providers ORDER BY name`).all();
-  const modelRows = db.prepare(`SELECT provider_name, model, manual, location, parameters, enabled, input_cost, output_cost
+  const modelRows = db.prepare(`SELECT provider_name, model, manual, location, parameters, enabled,
+      inference_timeout_ms, input_cost, output_cost
     FROM provider_models ORDER BY provider_name, model`).all();
   const capabilityRows = db.prepare(`SELECT provider_name, model, capability, supported, enabled
     FROM provider_model_capabilities ORDER BY provider_name, model, capability`).all();
@@ -87,6 +89,11 @@ const nullableNumber = value => {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : null;
 };
+const nullableInteger = value => {
+  if (value == null || value === "") return null;
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : null;
+};
 
 export const replaceProviderSettings = settings => {
   if (!isObject(settings)) throw new Error("Provider settings must be an object");
@@ -111,8 +118,8 @@ export const replaceProviderSettings = settings => {
         name, adapter, base_url, credential_service, enabled, built_in, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
       const insertModel = db.prepare(`INSERT INTO provider_models (
-        provider_name, model, manual, location, parameters, enabled, input_cost, output_cost
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+        provider_name, model, manual, location, parameters, enabled, inference_timeout_ms, input_cost, output_cost
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
       const insertCapability = db.prepare(`INSERT INTO provider_model_capabilities (
         provider_name, model, capability, supported, enabled
       ) VALUES (?, ?, ?, ?, ?)`);
@@ -144,6 +151,7 @@ export const replaceProviderSettings = settings => {
             location,
             parameters == null ? null : Math.round(parameters),
             enabled,
+            nullableInteger(preference.inferenceTimeoutMs),
             nullableNumber(pricing.inputUsd),
             nullableNumber(pricing.outputUsd),
           );
