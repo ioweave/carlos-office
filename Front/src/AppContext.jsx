@@ -2,13 +2,12 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 
 import api, { endpoints } from "./api";
 
-const PAGES = new Set(["office", "chat", "processes", "operations", "terminal", "capabilities", "store", "providers"]);
+const PAGES = new Set(["office", "chat", "processes", "operations", "capabilities", "store", "providers"]);
 const ACTIVE_PAGE_STORAGE_KEY = "office-active-page-v1";
 const ACTIVE_CONVERSATION_STORAGE_KEY = "office-active-conversation-v2";
 const THEME_STORAGE_KEY = "office-theme";
 const WS_RECONNECT_MAX_MS = 15_000;
 const COMMAND_TIMEOUT_MS = 120_000;
-const MAX_TERMINAL_OUTPUT_CHARS = 750_000;
 
 const EMPTY_OFFICE_STATE = {
   nora: { provider: "", model: "", activeRequests: [] },
@@ -18,17 +17,6 @@ const EMPTY_OFFICE_STATE = {
   agents: [],
   skillsRevision: 0,
   conversations: [],
-};
-const EMPTY_TERMINAL = {
-  sessionId: "",
-  status: "closed",
-  output: "",
-  shell: "",
-  cwd: "",
-  username: "",
-  pid: null,
-  exitCode: null,
-  exitSignal: null,
 };
 
 const systemPrefersDark = () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
@@ -97,55 +85,6 @@ const mergeResources = (current, incoming) => {
   for (const item of incoming || []) if (item?.id) byId.set(item.id, item);
   return [...byId.values()];
 };
-const stripTerminalControls = value => {
-  const text = String(value || "");
-  let result = "";
-  for (let index = 0; index < text.length; index += 1) {
-    const code = text.charCodeAt(index);
-    if (code === 27) {
-      const kind = text[index + 1];
-      if (kind === "[") {
-        index += 2;
-        while (index < text.length) {
-          const finalCode = text.charCodeAt(index);
-          if (finalCode >= 64 && finalCode <= 126) break;
-          index += 1;
-        }
-        continue;
-      }
-      if (kind === "]") {
-        index += 2;
-        while (index < text.length) {
-          if (text.charCodeAt(index) === 7) break;
-          if (text.charCodeAt(index) === 27 && text[index + 1] === "\\") {
-            index += 1;
-            break;
-          }
-          index += 1;
-        }
-        continue;
-      }
-      index += 1;
-      continue;
-    }
-    if (code === 8) {
-      result = result.slice(0, -1);
-      continue;
-    }
-    if (code === 13) {
-      if (text.charCodeAt(index + 1) !== 10) result += "\n";
-      continue;
-    }
-    if (code === 0) continue;
-    result += text[index];
-  }
-  return result;
-};
-const appendTerminalOutput = (current, incoming) => {
-  const next = `${current}${stripTerminalControls(incoming)}`;
-  return next.length > MAX_TERMINAL_OUTPUT_CHARS ? next.slice(-MAX_TERMINAL_OUTPUT_CHARS) : next;
-};
-const isTerminalPasswordPrompt = output => /(?:password|passphrase)[^:\n]*:\s*$/i.test(String(output || "").slice(-240));
 
 const AppContext = createContext(null);
 
@@ -167,7 +106,6 @@ export const AppProvider = ({ children }) => {
   const [chatArtifacts, setChatArtifacts] = useState([]);
   const [chatSending, setChatSending] = useState(false);
   const [chatLocalRequestJob, setChatLocalRequestJob] = useState(null);
-  const [terminal, setTerminal] = useState(EMPTY_TERMINAL);
   const stateRef = useRef(EMPTY_OFFICE_STATE);
   const websocketRef = useRef(null);
   const commandRequestsRef = useRef(new Map());
@@ -193,7 +131,6 @@ export const AppProvider = ({ children }) => {
   const chatRequestJob = chatActiveRequest
     || (chatLocalRequestJob?.conversationId === activeConversationId ? chatLocalRequestJob : null);
   const chatWorking = chatSending || Boolean(chatRequestJob);
-  const terminalPasswordPrompt = useMemo(() => isTerminalPasswordPrompt(terminal.output), [terminal.output]);
 
   const applyStatePayload = useCallback(payload => {
     if (!payload || typeof payload.state !== "object" || Array.isArray(payload.state)) return false;
@@ -492,46 +429,6 @@ export const AppProvider = ({ children }) => {
     return true;
   }, [activeConversationId, chatRequestJob, sendCommand]);
 
-  const openTerminal = useCallback(async () => {
-    setTerminal(current => ({ ...current, status: "starting", exitCode: null, exitSignal: null }));
-    try {
-      const session = await sendCommand("terminal.open");
-      setTerminal(current => ({
-        ...current,
-        ...session,
-        output: current.sessionId && current.sessionId !== session.sessionId ? "" : current.output,
-        exitCode: null,
-        exitSignal: null,
-      }));
-      return session;
-    } catch (error) {
-      setTerminal(current => ({ ...current, status: "error" }));
-      throw error;
-    }
-  }, [sendCommand]);
-
-  const sendTerminalInput = useCallback(async data => {
-    if (!terminal.sessionId || terminal.status !== "open") throw new Error("Server Terminal is not active.");
-    return sendCommand("terminal.input", { sessionId: terminal.sessionId, data: String(data ?? "") });
-  }, [sendCommand, terminal.sessionId, terminal.status]);
-
-  const closeTerminal = useCallback(async () => {
-    if (!terminal.sessionId) return false;
-    setTerminal(current => ({ ...current, status: "closing" }));
-    try {
-      const result = await sendCommand("terminal.close", { sessionId: terminal.sessionId });
-      if (!result.closed) setTerminal(current => ({ ...current, status: "closed", sessionId: "" }));
-      return result.closed;
-    } catch (error) {
-      setTerminal(current => ({ ...current, status: "error" }));
-      throw error;
-    }
-  }, [sendCommand, terminal.sessionId]);
-
-  const clearTerminalOutput = useCallback(() => {
-    setTerminal(current => ({ ...current, output: "" }));
-  }, []);
-
   const openConversation = useCallback(conversationId => {
     openChatConversation(conversationId);
     setChatRequest({ conversationId, token: Date.now() });
@@ -668,27 +565,6 @@ export const AppProvider = ({ children }) => {
             applyStatePayload(payload);
             return;
           }
-          if (payload?.type === "terminal.output" && typeof payload.sessionId === "string" && typeof payload.data === "string") {
-            setTerminal(current => {
-              if (current.sessionId && current.sessionId !== payload.sessionId && current.status === "open") return current;
-              return {
-                ...current,
-                sessionId: payload.sessionId,
-                status: "open",
-                output: appendTerminalOutput(current.output, payload.data),
-              };
-            });
-            return;
-          }
-          if (payload?.type === "terminal.exit" && typeof payload.sessionId === "string") {
-            setTerminal(current => current.sessionId === payload.sessionId ? {
-              ...current,
-              status: "exited",
-              exitCode: Number.isInteger(payload.code) ? payload.code : null,
-              exitSignal: payload.signal || null,
-            } : current);
-            return;
-          }
           if (payload?.type !== "command-result" || typeof payload.id !== "string") return;
           const request = commandRequestsRef.current.get(payload.id);
           if (!request) return;
@@ -708,9 +584,6 @@ export const AppProvider = ({ children }) => {
         if (websocketRef.current === socket) websocketRef.current = null;
         if (stopped) return;
         setConnected(false);
-        setTerminal(current => ["open", "starting", "closing"].includes(current.status)
-          ? { ...current, status: "disconnected" }
-          : current);
         rejectPendingCommands("Carlos Office connection closed before the command completed.");
         scheduleReconnect();
       };
@@ -765,12 +638,6 @@ export const AppProvider = ({ children }) => {
       sendChatMessage,
       editChatMessage,
       cancelChatRequest,
-      terminal,
-      terminalPasswordPrompt,
-      openTerminal,
-      sendTerminalInput,
-      closeTerminal,
-      clearTerminalOutput,
     }}>
       {children}
     </AppContext.Provider>
