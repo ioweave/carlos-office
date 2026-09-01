@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 const HEARTBEAT_MS = 30_000;
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -164,6 +164,8 @@ export const attachAppSocket = ({ server, allowedOrigin, stateController, comman
 
     const client = createClient(socket);
     clients.add(client);
+    const connectionId = `socket-${randomUUID()}`;
+    const closeListeners = new Set();
     let cleaned = false;
     let sendQueue = Promise.resolve();
     let commandQueue = Promise.resolve();
@@ -172,6 +174,18 @@ export const attachAppSocket = ({ server, allowedOrigin, stateController, comman
       const next = sendQueue.catch(() => {}).then(operation);
       sendQueue = next;
       return next;
+    };
+
+    const context = {
+      connectionId,
+      origin: req.carlosOfficeOriginalOrigin ?? req.headers.origin ?? null,
+      host: req.headers.host ?? null,
+      send: value => enqueueSend(() => client.send(value)),
+      onClose(listener) {
+        if (typeof listener !== "function") throw new Error("Socket close listener must be a function");
+        closeListeners.add(listener);
+        return () => closeListeners.delete(listener);
+      },
     };
 
     const sendState = ({ changed, state, reset = false }) => enqueueSend(() => client.send({
@@ -194,6 +208,15 @@ export const attachAppSocket = ({ server, allowedOrigin, stateController, comman
       client.readyState = CLOSED;
       clients.delete(client);
       unsubscribe();
+      for (const listener of [...closeListeners]) {
+        try { listener(); } catch (error) {
+          console.error("[app-socket] Close listener failed.", {
+            connectionId,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      closeListeners.clear();
     };
 
     const sendCommandResult = (id, result) => enqueueSend(() => client.send({ type: "command-result", id, ...result }));
@@ -211,7 +234,7 @@ export const attachAppSocket = ({ server, allowedOrigin, stateController, comman
       try {
         const handler = commands[message.command];
         if (typeof handler !== "function") throw commandError(`Unknown app command: ${message.command}`, 404);
-        const data = await handler(message.payload);
+        const data = await handler(message.payload, context);
         await sendCommandResult(message.id, { ok: true, data });
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
