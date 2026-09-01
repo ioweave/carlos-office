@@ -14,6 +14,9 @@ export const MODEL_CAPABILITIES = Object.freeze(["thinking", "vision", "audio", 
 const CATALOG_TTL_MS = 5 * 60 * 1000;
 const MAX_JSON_BODY_BYTES = 1_000_000;
 const PROVIDER_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
+const CLOUD_INFERENCE_TIMEOUT_MS = 300_000;
+const LOCAL_INFERENCE_TIMEOUT_MS = 1_800_000;
+const MAX_INFERENCE_TIMEOUT_MS = 21_600_000;
 
 let preferences = {};
 let preferencesLoaded = false;
@@ -42,6 +45,17 @@ const nullableCost = value => {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : null;
 };
+
+const validateInferenceTimeout = value => {
+  if (value == null || value === "") return null;
+  const timeoutMs = Number(value);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || (timeoutMs > 0 && timeoutMs < 1_000) || timeoutMs > MAX_INFERENCE_TIMEOUT_MS) {
+    throw new Error(`Inference timeout must be 0 (no timeout), null (automatic), or 1000-${MAX_INFERENCE_TIMEOUT_MS} ms`);
+  }
+  return timeoutMs;
+};
+
+const defaultInferenceTimeout = location => location === "cloud" ? CLOUD_INFERENCE_TIMEOUT_MS : LOCAL_INFERENCE_TIMEOUT_MS;
 
 const normalizePricing = (raw, location) => {
   if (location === "local") return { inputUsd: 0, outputUsd: 0 };
@@ -75,6 +89,9 @@ const effectiveModel = (provider, raw) => {
   const name = clean(raw.name ?? raw.model);
   const preference = preferenceFor(provider, name);
   const location = raw.location === "cloud" || /(?:^|[-:])cloud$/i.test(name) ? "cloud" : "local";
+  const configuredTimeout = Number.isSafeInteger(preference.inferenceTimeoutMs) && preference.inferenceTimeoutMs >= 0
+    ? preference.inferenceTimeoutMs
+    : null;
   const support = capabilitySupport(raw);
   const capabilityPreferences = isObject(preference.capabilities) ? preference.capabilities : {};
   const discoveredPricing = normalizePricing(raw, location);
@@ -93,6 +110,8 @@ const effectiveModel = (provider, raw) => {
     location,
     parameters: parseParameterCount(raw.parameters ?? raw.parameterCount ?? raw.details?.parameter_size ?? raw.details?.parameterSize),
     capabilities,
+    inferenceTimeoutMs: configuredTimeout ?? defaultInferenceTimeout(location),
+    inferenceTimeoutConfigured: configuredTimeout !== null,
     costPerMillionTokens: {
       inputUsd: nullableCost(pricingPreference.inputUsd) ?? discoveredPricing.inputUsd,
       outputUsd: nullableCost(pricingPreference.outputUsd) ?? discoveredPricing.outputUsd,
@@ -348,6 +367,7 @@ export const addProviderModel = async (provider, definition) => {
   if (definition.parameters != null && definition.parameters !== "" && parameters == null) {
     throw new Error("Model parameters must be a non-negative number or a value such as 8B, 70B, or 1T");
   }
+  const inferenceTimeoutMs = validateInferenceTimeout(definition.inferenceTimeoutMs);
   const supportedCapabilities = Array.isArray(definition.supportedCapabilities)
     ? [...new Set(definition.supportedCapabilities.filter(item => MODEL_CAPABILITIES.includes(item)))]
     : [];
@@ -359,6 +379,7 @@ export const addProviderModel = async (provider, definition) => {
     manual: true,
     location,
     parameters,
+    ...(inferenceTimeoutMs === null ? {} : { inferenceTimeoutMs }),
     supportedCapabilities,
     enabled: definition.enabled !== false,
     capabilities: {
@@ -407,6 +428,19 @@ export const updateModelPreferences = async (provider, modelName, changes) => {
     }
     next.enabled = changes.enabled;
     updated.enabled = changes.enabled;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(changes, "inferenceTimeoutMs")) {
+    const inferenceTimeoutMs = validateInferenceTimeout(changes.inferenceTimeoutMs);
+    if (inferenceTimeoutMs === null) {
+      delete next.inferenceTimeoutMs;
+      updated.inferenceTimeoutMs = defaultInferenceTimeout(current.location);
+      updated.inferenceTimeoutConfigured = false;
+    } else {
+      next.inferenceTimeoutMs = inferenceTimeoutMs;
+      updated.inferenceTimeoutMs = inferenceTimeoutMs;
+      updated.inferenceTimeoutConfigured = true;
+    }
   }
 
   if (changes.capabilities != null) {
