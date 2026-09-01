@@ -16,6 +16,7 @@ import * as processes from "./src/controllers/ProcessController.mjs";
 import * as providers from "./src/controllers/ProviderController.mjs";
 import * as schedules from "./src/controllers/ScheduleController.mjs";
 import { createStateController } from "./src/controllers/StateController.mjs";
+import { createTerminalController } from "./src/controllers/TerminalController.mjs";
 import { createVariableController } from "./src/controllers/VariableController.mjs";
 import * as noraRegistry from "./src/registry/Nora.mjs";
 import * as skills from "./src/registry/Skills.mjs";
@@ -93,6 +94,7 @@ const rewriteCorsOrigin = (headers, actualOrigin) => {
 
 const normalizeAcceptedFrontendOrigin = (req, res = null) => {
   const actualOrigin = req.headers.origin ?? null;
+  req.carlosOfficeOriginalOrigin = actualOrigin;
   if (!actualOrigin || actualOrigin === config.frontendOrigin || !isLocalNetworkOrigin(actualOrigin)) return false;
 
   req.headers.origin = config.frontendOrigin;
@@ -166,6 +168,7 @@ const credentials = createCredentialController({
 });
 const knowledge = createKnowledgeController({ allowedOrigin: config.frontendOrigin });
 const variables = createVariableController({ allowedOrigin: config.frontendOrigin });
+const terminal = createTerminalController({ allowedOrigin: config.frontendOrigin });
 const stateController = createStateController({
   nora: { getNoraState: nora.getNoraState, listModels: listNoraModels },
   processes,
@@ -191,6 +194,9 @@ const commands = {
   "conversation.editMessage": chat.editMessage,
   "conversation.cancelRequest": chat.cancelRequest,
   "conversation.deleteAttachments": chat.deleteAttachments,
+  "terminal.open": terminal.open,
+  "terminal.input": terminal.input,
+  "terminal.close": terminal.close,
 };
 
 const server = createServer((req, res) => {
@@ -238,6 +244,7 @@ schedules.startScheduler(runScheduledWorkflow);
 
 const shutdown = () => {
   schedules.stopScheduler();
+  terminal.dispose();
   appSocket.close();
   stateController.dispose();
   engine.shutdownProcessEngine();
