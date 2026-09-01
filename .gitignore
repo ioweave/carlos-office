@@ -37,7 +37,7 @@ report.*.json
 # Local environment and credentials
 .env
 .env.*
-!.env.example
+!Front/.env
 Back/mcp.config.json
 Back/mcp.monitors.json
 Back/.google-workspace-mcp/
