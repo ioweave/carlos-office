@@ -16,7 +16,8 @@ import {
 const agentProgram = fileURLToPath(new URL("./AgentProcess.mjs", import.meta.url));
 const active = new Map();
 const activeInvocationKeys = new Map();
-const DEFAULT_TASK_TIMEOUT_MS = 300_000;
+const DEFAULT_TASK_INACTIVITY_TIMEOUT_MS = 35 * 60 * 1000;
+const DEFAULT_TASK_ABSOLUTE_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const MAX_DIAGNOSTIC_STRING_LENGTH = 1_000;
 const MAX_DIAGNOSTIC_ARRAY_LENGTH = 20;
 const MAX_DIAGNOSTIC_DEPTH = 5;
@@ -164,6 +165,7 @@ const runTool = async (entry, message) => {
   const { requestId, call } = message;
   const startedAt = new Date().toISOString();
   const diagnosticInput = sanitizeDiagnosticValue(call?.input ?? {});
+  entry.touchActivity?.();
   try {
     if (!entry.toolNames.has(call?.name)) {
       throw toolError(`Agent requested unavailable Tool: ${call?.name}`, "unavailable_tool", "Choose one of the Tools assigned to this Task.");
@@ -195,6 +197,7 @@ const runTool = async (entry, message) => {
           retryable: true,
           hint: "Wait for Carlos approval before retrying this Tool call.",
         });
+        entry.touchActivity?.();
         sendToolResult(child, requestId, {
           ok: false,
           blocked: true,
@@ -237,6 +240,7 @@ const runTool = async (entry, message) => {
       workflowId, taskId, invocationId, agentId: entry.id, tool: tool.name, sequence: trace.sequence,
       durationMs: trace.durationMs, provider: tool.provider ?? null, model: tool.model ?? null,
     });
+    entry.touchActivity?.();
     sendToolResult(child, requestId, { ok: true, result });
   } catch (error) {
     const code = typeof error?.code === "string" && error.code ? error.code : "tool_execution_failed";
@@ -265,6 +269,7 @@ const runTool = async (entry, message) => {
       code: failure.code, retryable: failure.retryable, durationMs: failure.durationMs,
       ...(failure.hint ? { hint: failure.hint } : {}),
     });
+    entry.touchActivity?.();
     sendToolResult(child, requestId, {
       ok: false, error: failure.error, code: failure.code, retryable: failure.retryable,
       ...(failure.hint ? { hint: failure.hint } : {}),
@@ -301,7 +306,11 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
 
     const controller = new AbortController();
     const id = `agent-${child.pid}`;
-    const timeoutMs = task.timeoutMs === null ? null : (task.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS);
+    const hasExplicitTimeout = Object.prototype.hasOwnProperty.call(task, "timeoutMs");
+    const inactivityTimeoutMs = hasExplicitTimeout ? null : DEFAULT_TASK_INACTIVITY_TIMEOUT_MS;
+    const absoluteTimeoutMs = task.timeoutMs === null
+      ? null
+      : hasExplicitTimeout ? task.timeoutMs : DEFAULT_TASK_ABSOLUTE_TIMEOUT_MS;
     const entry = {
       id,
       child,
@@ -321,20 +330,38 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
       toolCallCount: 0,
       toolFailureCount: 0,
       settled: false,
-      timeoutMs,
-      timeoutTimer: null,
+      inactivityTimeoutMs,
+      absoluteTimeoutMs,
+      inactivityTimer: null,
+      absoluteTimer: null,
+      touchActivity: null,
     };
     active.set(id, entry);
     activeInvocationKeys.set(key, id);
 
     recordAgentEvent("agent.started", {
-      workflowId, taskId, invocationId, agentId: id, pid: child.pid, provider, model, timeoutMs,
+      workflowId,
+      taskId,
+      invocationId,
+      agentId: id,
+      pid: child.pid,
+      provider,
+      model,
+      inactivityTimeoutMs,
+      absoluteTimeoutMs,
     });
+
+    const clearTimers = () => {
+      if (entry.inactivityTimer !== null) clearTimeout(entry.inactivityTimer);
+      if (entry.absoluteTimer !== null) clearTimeout(entry.absoluteTimer);
+      entry.inactivityTimer = null;
+      entry.absoluteTimer = null;
+    };
 
     const settle = async rawResult => {
       if (entry.settled) return;
       entry.settled = true;
-      if (entry.timeoutTimer !== null) clearTimeout(entry.timeoutTimer);
+      clearTimers();
       active.delete(id);
       if (activeInvocationKeys.get(key) === id) activeInvocationKeys.delete(key);
 
@@ -387,18 +414,35 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
       resolve({ ...result, agentId: id, pid: child.pid, invocationId });
     };
 
-    if (timeoutMs !== null) {
-      entry.timeoutTimer = setTimeout(() => {
-        if (entry.settled) return;
-        const seconds = Math.round(timeoutMs / 1000);
-        const error = `Task exceeded its ${seconds} second timeout`;
-        controller.abort(new Error(error));
-        child.kill("SIGTERM");
-        void settle({ status: "failed", error, diagnostics: { phase: "timeout", code: "task_timeout", message: error } });
-      }, timeoutMs);
+    const stopForTimeout = (code, timeoutMs, description) => {
+      if (entry.settled) return;
+      const seconds = Math.round(timeoutMs / 1000);
+      const error = `Task exceeded its ${seconds} second ${description}`;
+      controller.abort(new Error(error));
+      child.kill("SIGTERM");
+      void settle({ status: "failed", error, diagnostics: { phase: "timeout", code, message: error, timeoutMs } });
+    };
+
+    const touchActivity = () => {
+      if (entry.settled || inactivityTimeoutMs === null) return;
+      if (entry.inactivityTimer !== null) clearTimeout(entry.inactivityTimer);
+      entry.inactivityTimer = setTimeout(
+        () => stopForTimeout("task_inactivity_timeout", inactivityTimeoutMs, "inactivity timeout"),
+        inactivityTimeoutMs,
+      );
+    };
+    entry.touchActivity = touchActivity;
+    touchActivity();
+
+    if (absoluteTimeoutMs !== null) {
+      entry.absoluteTimer = setTimeout(
+        () => stopForTimeout("task_absolute_timeout", absoluteTimeoutMs, "absolute timeout"),
+        absoluteTimeoutMs,
+      );
     }
 
     child.on("message", message => {
+      touchActivity();
       if (message?.type === "tool") {
         void runTool(entry, message);
         return;
@@ -453,7 +497,9 @@ export const listActiveAgents = () => [...active.values()].map(entry => ({
   model: entry.model,
   tools: [...entry.tools],
   skills: [...entry.skills],
-  timeoutMs: entry.timeoutMs,
+  timeoutMs: entry.absoluteTimeoutMs,
+  inactivityTimeoutMs: entry.inactivityTimeoutMs,
+  absoluteTimeoutMs: entry.absoluteTimeoutMs,
   toolCallCount: entry.toolCallCount,
   toolFailureCount: entry.toolFailureCount,
   context: { workflowId: entry.workflowId },
