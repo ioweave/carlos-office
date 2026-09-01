@@ -12,36 +12,21 @@ const headers = apiKey => {
   return result;
 };
 
-const toJsonSchema = input => {
-  if (input && typeof input === "object" && input.type === "object") return input;
+const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    return { type: "object", properties: {} };
+const normalizeTools = (tools = []) => tools.map(tool => {
+  if (!isObject(tool?.input) || tool.input.type !== "object" || !isObject(tool.input.properties)) {
+    throw new Error(`Tool ${tool?.name || "unknown"} does not expose a canonical object input schema`);
   }
-
-  const properties = {};
-  for (const [name, definition] of Object.entries(input)) {
-    if (definition && typeof definition === "object") {
-      properties[name] = definition;
-      continue;
-    }
-
-    properties[name] = {
-      type: typeof definition === "string" ? definition : "string",
-    };
-  }
-
-  return { type: "object", properties };
-};
-
-const normalizeTools = (tools = []) => tools.map(tool => ({
-  type: "function",
-  function: {
-    name: tool.name,
-    description: tool.description ?? "",
-    parameters: toJsonSchema(tool.input),
-  },
-}));
+  return {
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description ?? "",
+      parameters: structuredClone(tool.input),
+    },
+  };
+});
 
 const normalizeMessages = (messages = []) => messages.map(message => {
   if (message.role === "tool") {
@@ -67,16 +52,24 @@ const normalizeMessages = (messages = []) => messages.map(message => {
     };
   }
 
-  return {
-    role: message.role,
-    content: message.content ?? "",
-  };
+  return { role: message.role, content: message.content ?? "" };
 });
 
+const normalizeToolArguments = value => {
+  if (isObject(value)) return value;
+  if (typeof value !== "string" || !value.trim()) return value ?? {};
+  try {
+    const parsed = JSON.parse(value);
+    return isObject(parsed) ? parsed : value;
+  } catch {
+    return value;
+  }
+};
+
 const normalizeToolCalls = (toolCalls = []) => toolCalls.map((call, index) => ({
-  id: `ollama-tool-${index}`,
-  name: call.function?.name,
-  input: call.function?.arguments ?? {},
+  id: call?.id || `ollama-tool-${index}`,
+  name: call?.function?.name,
+  input: normalizeToolArguments(call?.function?.arguments),
 }));
 
 const request = async (url, options, apiKey, timeoutMs = REQUEST_TIMEOUT_MS) => {
@@ -94,7 +87,10 @@ const request = async (url, options, apiKey, timeoutMs = REQUEST_TIMEOUT_MS) => 
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Ollama request failed (${response.status}): ${body || response.statusText}`);
+    const error = new Error(`Ollama request failed (${response.status}): ${body || response.statusText}`);
+    error.code = response.status === 429 || response.status >= 500 ? "provider_transient_error" : "provider_request_error";
+    error.retryable = response.status === 429 || response.status >= 500;
+    throw error;
   }
 
   return response.json();
@@ -174,11 +170,7 @@ export const createOllamaProvider = ({
 
       const result = await request(
         `${apiUrl}/chat`,
-        {
-          method: "POST",
-          body: JSON.stringify(body),
-          signal,
-        },
+        { method: "POST", body: JSON.stringify(body), signal },
         apiKey,
       );
 

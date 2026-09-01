@@ -56,6 +56,7 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
     setChatConversationModel,
     sendChatMessage,
     editChatMessage,
+    resendChatMessage,
     cancelChatRequest,
   } = useAppContext();
   const [selectedArtifact, setSelectedArtifact] = useState(null);
@@ -241,6 +242,24 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
       toast.success("Message committed. Later conversation history was replaced.");
     } catch (error) {
       toast.error(error.message || "Could not edit message.");
+    }
+  };
+
+  const resendMessage = async message => {
+    if (!conversation?.id || working || message.pending || message.actor !== "Carlos") return;
+    const messageIndex = conversation.messages.findIndex(item => item.id === message.id);
+    if (messageIndex < 0) return;
+    if (
+      messageIndex < conversation.messages.length - 1
+      && !window.confirm("Resend from this message? Later conversation history and downstream Workflows will be replaced.")
+    ) return;
+
+    cancelMessageEdit();
+    try {
+      await resendChatMessage(message.id);
+      toast.success("Message resent. Nora is replaying from this point.");
+    } catch (error) {
+      toast.error(error.message || "Could not resend message.");
     }
   };
 
@@ -531,6 +550,7 @@ export default function ChatPage({ openRequest, onOpenOperations }) {
           onBeginMessageEdit={beginMessageEdit}
           onCommitMessageEdit={finishMessageEdit}
           onCancelMessageEdit={cancelMessageEdit}
+          onResendMessage={resendMessage}
           onOpenAttachment={openAttachment}
           onOpenArtifact={openArtifact}
           onCopyMessage={copyMessage}

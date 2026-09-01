@@ -4,6 +4,7 @@ import {
   IconFile,
   IconPaperclip,
   IconPencil,
+  IconRefresh,
   IconShare,
   IconVolume,
 } from "@tabler/icons-react";
@@ -25,6 +26,7 @@ export default function ChatThread({
   onBeginMessageEdit,
   onCommitMessageEdit,
   onCancelMessageEdit,
+  onResendMessage,
   onOpenAttachment,
   onOpenArtifact,
   onCopyMessage,
@@ -134,15 +136,26 @@ export default function ChatThread({
                       <IconCopy size={14} />
                     </button>
                     {isCarlos ? (
-                      <button
-                        type="button"
-                        onClick={() => onBeginMessageEdit(message)}
-                        disabled={working}
-                        aria-label="Edit message"
-                        title="Edit"
-                      >
-                        <IconPencil size={14} />
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => onResendMessage(message)}
+                          disabled={working}
+                          aria-label="Resend message"
+                          title="Resend from here"
+                        >
+                          <IconRefresh size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onBeginMessageEdit(message)}
+                          disabled={working}
+                          aria-label="Edit message"
+                          title="Edit"
+                        >
+                          <IconPencil size={14} />
+                        </button>
+                      </>
                     ) : (
                       <>
                         <button type="button" onClick={() => void onShareMessage(message)} aria-label="Share Nora response" title="Share">

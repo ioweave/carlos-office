@@ -1,6 +1,35 @@
 import { parseProviderJSON } from "../lib.mjs";
 
+const MAX_REASONING_TURNS = 16;
+const MAX_TOOL_CALLS = 24;
+const MAX_PROVIDER_ATTEMPTS = 3;
+const MAX_SAFE_TOOL_ATTEMPTS = 3;
+const RETRY_BACKOFF_MS = [300, 900];
+const COMPLETION_SCHEMA = {
+  type: "object",
+  properties: {
+    output: { type: "string" },
+    data: {},
+    artifacts: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          name: { type: "string" },
+          type: { type: "string" },
+        },
+        required: ["path"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["output", "data", "artifacts"],
+  additionalProperties: false,
+};
+
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
+const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 const resultToText = result => {
   if (typeof result === "string") return result;
@@ -30,8 +59,30 @@ const classifyFailure = (error, phase, code) => {
   return error;
 };
 
+const getPath = (value, path) => {
+  const parts = String(path || "").split(".").map(part => part.trim()).filter(Boolean);
+  let current = value;
+  for (const part of parts) {
+    if (current == null || (typeof current !== "object" && !Array.isArray(current))) return undefined;
+    current = current[part];
+  }
+  return current;
+};
+
+const validateRequiredInputs = task => {
+  const requiredInputs = Array.isArray(task.requiredInputs) ? task.requiredInputs : [];
+  for (const path of requiredInputs) {
+    if (typeof path !== "string" || !path.trim()) {
+      throw failure("Task contains an invalid declared input", "setup", "task_input_invalid");
+    }
+    if (getPath(task.input ?? {}, path) === undefined) {
+      throw failure(`Task input "${path}" is unresolved`, "setup", "task_input_unresolved");
+    }
+  }
+};
+
 const normalizeArtifacts = value => {
-  if (!Array.isArray(value)) return [];
+  if (!Array.isArray(value)) throw failure("Agent completion artifacts must be an array", "completion", "invalid_completion");
   return value.map((artifact, index) => {
     if (!isObject(artifact) || typeof artifact.path !== "string" || !artifact.path.trim()) {
       throw failure(`Agent completion artifact ${index + 1} must include a path`, "completion", "invalid_artifact_declaration");
@@ -54,12 +105,17 @@ const normalizeCompletion = content => {
   let value;
   try {
     value = parseProviderJSON(content);
-  } catch {
-    return { output: String(content || "").trim(), data: null, artifacts: [] };
+  } catch (error) {
+    throw classifyFailure(error, "completion", "invalid_completion_json");
   }
-
   if (!isObject(value) || typeof value.output !== "string" || !value.output.trim()) {
     throw failure("Agent completion must include output", "completion", "invalid_completion");
+  }
+  if (!Object.prototype.hasOwnProperty.call(value, "data")) {
+    throw failure("Agent completion must include data", "completion", "invalid_completion");
+  }
+  if (!Object.prototype.hasOwnProperty.call(value, "artifacts")) {
+    throw failure("Agent completion must include artifacts", "completion", "invalid_completion");
   }
   return {
     output: value.output.trim(),
@@ -71,23 +127,50 @@ const normalizeCompletion = content => {
 const toolFailureDetails = error => ({
   message: error instanceof Error ? error.message : String(error),
   code: typeof error?.code === "string" && error.code ? error.code : "tool_execution_failed",
-  retryable: typeof error?.retryable === "boolean" ? error.retryable : true,
+  retryable: error?.retryable === true,
   ...(typeof error?.hint === "string" && error.hint.trim() ? { hint: error.hint.trim() } : {}),
 });
 
-const failureFingerprint = (toolName, details) => [
-  toolName,
+const stableValue = value => {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (!isObject(value)) return value;
+  return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableValue(value[key])]));
+};
+const callKey = call => `${call.name}|${JSON.stringify(stableValue(call.input ?? {}))}`;
+const failureFingerprint = (call, details) => [
+  callKey(call),
   details.code,
   details.message.replace(/\d+/g, "#").slice(0, 240),
 ].join("|");
+const canRetryToolError = (call, error) => (
+  call.name === "http"
+  && ["GET", "OPTIONS"].includes(String(call.input?.method || "GET").toUpperCase())
+  && error?.retryable === true
+  && error?.code === "http_timeout"
+);
 
 export class Agent {
-  constructor({ provider, model, tools = [], skills = [], invokeTool, maxNoProgressTurns = 3 }) {
+  constructor({
+    provider,
+    model,
+    tools = [],
+    skills = [],
+    invokeTool,
+    maxNoProgressTurns = 3,
+    maxReasoningTurns = MAX_REASONING_TURNS,
+    maxToolCalls = MAX_TOOL_CALLS,
+  }) {
     if (typeof provider?.generate !== "function") throw new Error("Agent requires a model provider");
     if (!model || typeof model !== "string") throw new Error("Agent requires a model");
     if (typeof invokeTool !== "function") throw new Error("Agent requires a Tool invoker");
     if (!Number.isSafeInteger(maxNoProgressTurns) || maxNoProgressTurns < 1) {
       throw new Error("Agent maxNoProgressTurns must be a positive integer");
+    }
+    if (!Number.isSafeInteger(maxReasoningTurns) || maxReasoningTurns < 1) {
+      throw new Error("Agent maxReasoningTurns must be a positive integer");
+    }
+    if (!Number.isSafeInteger(maxToolCalls) || maxToolCalls < 1) {
+      throw new Error("Agent maxToolCalls must be a positive integer");
     }
 
     this.provider = provider;
@@ -96,6 +179,8 @@ export class Agent {
     this.skills = structuredClone(skills);
     this.invokeTool = invokeTool;
     this.maxNoProgressTurns = maxNoProgressTurns;
+    this.maxReasoningTurns = maxReasoningTurns;
+    this.maxToolCalls = maxToolCalls;
   }
 
   buildMessages(task) {
@@ -139,20 +224,21 @@ export class Agent {
         `Workflow: ${task.workflowId}`,
         `Task: ${task.id}`,
         `Execution workspace: ${task.workspaceDir ?? "managed by Carlos Office"}`,
-        "Relative filesystem paths and the default PowerShell working directory resolve inside this private invocation workspace.",
+        "Relative filesystem paths and the default working directory resolve inside this private invocation workspace.",
         "Use relative paths for generated files, scratch files, downloaded working copies, and intermediate outputs.",
         "Do not use the Carlos Office Back directory as scratch storage. Use an absolute path only when the Task explicitly requires reading or modifying an existing external file/project at that exact location.",
         `Objective:\n${task.objective ?? ""}`,
         `Completion criteria:\n${task.completion ?? ""}`,
         `Resolved input:\n${JSON.stringify(task.input ?? {}, null, 2)}`,
+        "Tool schemas are authoritative. Send only declared properties and satisfy required fields and declared types exactly.",
         "When the Task is complete, return one JSON object with this exact shape:",
-        '{"output":"human-readable Task result","data":{"optional":"machine-readable JSON value"},"artifacts":[{"path":"absolute-or-workspace-relative-file-path","name":"optional-display-name","type":"optional-MIME-type"}]}',
+        '{"output":"human-readable Task result","data":null,"artifacts":[]}',
         "data may be any JSON value, including an array, object, scalar, or null. Use it when downstream Tasks would benefit from structured values.",
         "The artifacts array is ONLY for files intended as deliverables to Carlos.",
         "For deliverables generated in your workspace, use the path returned by the filesystem Tool or a workspace-relative path.",
         "Do not declare ordinary source files, configuration files, or project files merely because you edited them.",
         "If there are no deliverable files, return an empty artifacts array.",
-        "When a Tool fails, inspect its structured error and change strategy when appropriate. Do not blindly repeat the same failing Tool call.",
+        "When a Tool fails, inspect its structured error and change strategy. Never repeat the same failed Tool call unchanged.",
       ].join("\n\n"),
     });
     messages.push({
@@ -163,103 +249,165 @@ export class Agent {
     return messages;
   }
 
+  async generate(messages, tools = [], format = null) {
+    let lastError;
+    for (let attempt = 1; attempt <= MAX_PROVIDER_ATTEMPTS; attempt += 1) {
+      try {
+        return await this.provider.generate({ model: this.model, messages, tools, format });
+      } catch (error) {
+        lastError = error;
+        if (error?.retryable !== true || attempt >= MAX_PROVIDER_ATTEMPTS) break;
+        await sleep(RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)]);
+      }
+    }
+    throw classifyFailure(lastError, "model", "provider_error");
+  }
+
+  async repairCompletion(messages, content) {
+    const repairMessages = [
+      ...messages,
+      { role: "assistant", content },
+      {
+        role: "system",
+        content: [
+          "Your final Task completion was invalid.",
+          "Return only one valid completion object with output, data, and artifacts.",
+          "Do not call Tools. Do not add prose or Markdown outside the JSON object.",
+        ].join(" "),
+      },
+    ];
+    const response = await this.generate(repairMessages, [], COMPLETION_SCHEMA);
+    if (!isObject(response) || typeof response.content !== "string" || !response.content.trim()) {
+      throw failure("Agent completion repair returned no usable output", "completion", "invalid_completion_repair");
+    }
+    return normalizeCompletion(response.content);
+  }
+
   async run(task) {
     if (!isObject(task) || !task.id || !task.workflowId) {
       throw failure("Agent received an invalid Task", "setup", "invalid_task");
     }
+    validateRequiredInputs(task);
 
     const messages = this.buildMessages(task);
     const modelTools = describeTools(this.tools);
+    const failedCalls = new Map();
     let noProgressTurns = 0;
-    let previousFailureSignature = "";
+    let reasoningTurns = 0;
+    let toolExecutions = 0;
 
     while (true) {
-      let response;
-      try {
-        response = await this.provider.generate({
-          model: this.model,
-          messages,
-          tools: modelTools,
-        });
-      } catch (error) {
-        throw classifyFailure(error, "model", "provider_error");
+      reasoningTurns += 1;
+      if (reasoningTurns > this.maxReasoningTurns) {
+        throw failure(`Task exceeded ${this.maxReasoningTurns} reasoning turns`, "model", "reasoning_turn_limit");
       }
 
-      if (!isObject(response)) {
-        throw failure("Model provider returned an invalid response", "model", "invalid_provider_response");
-      }
+      const response = await this.generate(messages, modelTools);
+      if (!isObject(response)) throw failure("Model provider returned an invalid response", "model", "invalid_provider_response");
 
       const content = typeof response.content === "string" ? response.content : "";
       const toolCalls = Array.isArray(response.toolCalls) ? response.toolCalls : [];
 
       if (!toolCalls.length) {
-        if (!content.trim()) {
-          throw failure("Agent model returned no usable Task output", "model", "empty_model_output");
-        }
+        if (!content.trim()) throw failure("Agent model returned no usable Task output", "model", "empty_model_output");
         try {
           return normalizeCompletion(content);
-        } catch (error) {
-          throw classifyFailure(error, "completion", "invalid_completion");
+        } catch {
+          return this.repairCompletion(messages, content);
         }
       }
 
       messages.push({ role: "assistant", content, toolCalls: structuredClone(toolCalls) });
-
       let successfulTools = 0;
       let failedTools = 0;
       const failureFingerprints = [];
 
       for (const call of toolCalls) {
-        if (!call || typeof call.name !== "string") {
+        if (!call || typeof call.name !== "string" || !call.name) {
           throw failure("Model returned an invalid Tool call", "tool", "invalid_tool_call");
         }
-        if (call.input != null && !isObject(call.input)) {
-          throw failure(`Model returned invalid input for Tool: ${call.name}`, "tool", "invalid_tool_input");
-        }
-        if (!this.tools.some(tool => tool.name === call.name)) {
-          throw failure(`Agent requested unavailable Tool: ${call.name}`, "tool", "unavailable_tool");
+
+        const key = callKey(call);
+        const priorFailure = failedCalls.get(key);
+        if (priorFailure && !priorFailure.retryable) {
+          throw failure(
+            `Agent repeated the same deterministic failed Tool call: ${call.name}. ${priorFailure.message}`,
+            "tool",
+            "repeated_failed_tool_call",
+          );
         }
 
-        try {
-          const result = await this.invokeTool({
-            id: call.id ?? null,
-            name: call.name,
-            input: structuredClone(call.input ?? {}),
+        let error = null;
+        if (call.input != null && !isObject(call.input)) {
+          error = Object.assign(new Error(`Tool ${call.name} input must be one JSON object`), {
+            code: "invalid_tool_input",
+            retryable: false,
+            hint: "Regenerate the Tool call using the Tool's declared object input schema.",
           });
+        } else if (!this.tools.some(tool => tool.name === call.name)) {
+          error = Object.assign(new Error(`Agent requested unavailable Tool: ${call.name}`), {
+            code: "unavailable_tool",
+            retryable: false,
+            hint: "Choose one of the Tools exposed for this Task.",
+          });
+        }
+
+        let result;
+        if (!error) {
+          for (let attempt = 1; attempt <= MAX_SAFE_TOOL_ATTEMPTS; attempt += 1) {
+            toolExecutions += 1;
+            if (toolExecutions > this.maxToolCalls) {
+              throw failure(`Task exceeded ${this.maxToolCalls} Tool executions`, "tool", "tool_call_limit");
+            }
+            try {
+              result = await this.invokeTool({
+                id: call.id ?? null,
+                name: call.name,
+                input: structuredClone(call.input ?? {}),
+              });
+              error = null;
+              break;
+            } catch (caught) {
+              if (caught?.blocked) throw caught;
+              error = caught;
+              if (!canRetryToolError(call, caught) || attempt >= MAX_SAFE_TOOL_ATTEMPTS) break;
+              await sleep(RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)]);
+            }
+          }
+        }
+
+        if (!error) {
           successfulTools += 1;
+          failedCalls.delete(key);
           messages.push({
             role: "tool",
             toolCallId: call.id ?? null,
             name: call.name,
             content: resultToText(result),
           });
-        } catch (error) {
-          if (error?.blocked) throw error;
-
-          failedTools += 1;
-          const details = toolFailureDetails(error);
-          failureFingerprints.push(failureFingerprint(call.name, details));
-          messages.push({
-            role: "tool",
-            toolCallId: call.id ?? null,
-            name: call.name,
-            content: `Tool failed:\n${JSON.stringify(details, null, 2)}`,
-          });
+          continue;
         }
+
+        failedTools += 1;
+        const details = toolFailureDetails(error);
+        failedCalls.set(key, details);
+        failureFingerprints.push(failureFingerprint(call, details));
+        messages.push({
+          role: "tool",
+          toolCallId: call.id ?? null,
+          name: call.name,
+          content: `Tool failed:\n${JSON.stringify(details, null, 2)}`,
+        });
       }
 
       if (successfulTools > 0) {
         noProgressTurns = 0;
-        previousFailureSignature = "";
         continue;
       }
 
       if (failedTools > 0) {
         noProgressTurns += 1;
-        const failureSignature = [...new Set(failureFingerprints)].sort().join("\n");
-        const repeatedStrategy = Boolean(failureSignature && failureSignature === previousFailureSignature);
-        previousFailureSignature = failureSignature;
-
+        const uniqueFailures = [...new Set(failureFingerprints)];
         if (noProgressTurns >= this.maxNoProgressTurns) {
           throw failure(
             `Task made no Tool progress for ${this.maxNoProgressTurns} consecutive reasoning turns`,
@@ -273,9 +421,9 @@ export class Agent {
           content: [
             `The previous Tool turn made no progress: all ${failedTools} Tool call${failedTools === 1 ? "" : "s"} failed.`,
             `No-progress turn ${noProgressTurns} of ${this.maxNoProgressTurns}.`,
-            repeatedStrategy
-              ? "This failure pattern repeated. Change strategy now; do not repeat the same calls or parameters."
-              : "Inspect the Tool error codes and hints, then adjust parameters, choose another endpoint/resource, or use another available Tool.",
+            `Distinct failures: ${uniqueFailures.length}.`,
+            "Use the error codes and hints to change the Tool, arguments, endpoint, file path, or strategy.",
+            "Do not repeat an unchanged deterministic failure; Carlos Office will stop the Task if you do.",
           ].join(" "),
         });
       }

@@ -96,17 +96,14 @@ export const sendMessage = async payload => {
   return { action: "accepted", job, deduplicated: Boolean(running) };
 };
 
-export const editMessage = async payload => {
-  const conversationId = requireString(payload.conversationId, "Conversation ID");
-  const messageId = requireString(payload.messageId, "Message ID");
-  const content = requireString(payload.content, "Message content");
+const replayCarlosMessage = async ({ conversationId, messageId, content, eventType }) => {
   const conversation = await conversations.getConversation(conversationId);
   if (!conversation) throw requestError("Conversation not found", 404);
 
   const messageIndex = conversation.messages.findIndex(message => message.id === messageId);
   if (messageIndex === -1) throw requestError("Message not found", 404);
   const message = conversation.messages[messageIndex];
-  if (message.actor !== "Carlos") throw requestError("Only Carlos messages can be edited");
+  if (message.actor !== "Carlos") throw requestError("Only Carlos messages can be replayed");
 
   const messagePositions = new Map(conversation.messages.map((item, index) => [item.id, index]));
   const workflowEvents = events.listEvents({ type: "nora.workflow_started", conversationId });
@@ -133,14 +130,14 @@ export const editMessage = async payload => {
   const committed = await conversations.editCarlosMessage(conversationId, messageId, content, workflowIds);
   for (const workflowId of workflowIds) {
     const workflow = processes.getWorkflow(workflowId);
-    engine.cancelWorkflowExecution(workflowId, "Conversation history edited by Carlos");
+    engine.cancelWorkflowExecution(workflowId, "Conversation history replayed by Carlos");
     if (workflow && !["completed", "cancelled", "failed"].includes(workflow.status)) await processes.cancelWorkflow(workflowId);
     if (processes.getWorkflow(workflowId)) await processes.deleteWorkflow(workflowId);
     await cleanupWorkflowRuntime(workflowId);
   }
   await authorization.deleteApprovalsForWorkflows(workflowIds);
   await artifacts.deleteArtifacts(conversationId, artifactIds);
-  await events.recordEvent("conversation.message_edited", {
+  await events.recordEvent(eventType, {
     conversationId,
     messageId,
     removedMessages: conversation.messages.length - messageIndex - 1,
@@ -150,6 +147,29 @@ export const editMessage = async payload => {
 
   const job = nora.startCarlosRequest({ conversationId, messageId });
   return { conversation: committed, job };
+};
+
+export const editMessage = payload => replayCarlosMessage({
+  conversationId: requireString(payload.conversationId, "Conversation ID"),
+  messageId: requireString(payload.messageId, "Message ID"),
+  content: requireString(payload.content, "Message content"),
+  eventType: "conversation.message_edited",
+});
+
+export const resendMessage = async payload => {
+  const conversationId = requireString(payload.conversationId, "Conversation ID");
+  const messageId = requireString(payload.messageId, "Message ID");
+  const conversation = await conversations.getConversation(conversationId);
+  if (!conversation) throw requestError("Conversation not found", 404);
+  const message = conversation.messages.find(item => item.id === messageId);
+  if (!message) throw requestError("Message not found", 404);
+  if (message.actor !== "Carlos") throw requestError("Only Carlos messages can be resent");
+  return replayCarlosMessage({
+    conversationId,
+    messageId,
+    content: message.content,
+    eventType: "conversation.message_resent",
+  });
 };
 
 export const cancelRequest = async payload => {

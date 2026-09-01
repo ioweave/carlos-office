@@ -189,6 +189,7 @@ const commands = {
   "conversation.setModel": chat.setConversationModel,
   "conversation.send": chat.sendMessage,
   "conversation.editMessage": chat.editMessage,
+  "conversation.resendMessage": chat.resendMessage,
   "conversation.cancelRequest": chat.cancelRequest,
   "conversation.deleteAttachments": chat.deleteAttachments,
 };

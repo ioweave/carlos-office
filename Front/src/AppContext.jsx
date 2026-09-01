@@ -387,29 +387,30 @@ export const AppProvider = ({ children }) => {
     }
   }, [activeConversationId, chatConversation, chatWorking, markConversationRead, officeState.models, officeState.nora, sendCommand, setActiveConversationId]);
 
-  const editChatMessage = useCallback(async ({ messageId, content }) => {
-    if (!chatConversation?.id || chatWorking) throw new Error("Conversation is busy.");
-    const text = String(content || "").trim();
-    if (!text) throw new Error("Message cannot be empty.");
+  const replayChatMessage = useCallback(async ({ messageId, content = null, command }) => {
+    if (!chatConversation?.id || chatSendInFlightRef.current || chatWorking) throw new Error("Conversation is busy.");
     const messageIndex = chatConversation.messages.findIndex(message => message.id === messageId);
     if (messageIndex < 0) throw new Error("Message not found.");
+    const message = chatConversation.messages[messageIndex];
+    if (message.actor !== "Carlos") throw new Error("Only Carlos messages can be replayed.");
+    const text = content == null ? message.content : String(content || "").trim();
+    if (!text) throw new Error("Message cannot be empty.");
 
     const previous = chatConversation;
+    chatSendInFlightRef.current = true;
     setChatOptimisticConversation({
       ...previous,
-      messages: previous.messages.slice(0, messageIndex + 1).map(message => (
-        message.id === messageId ? { ...message, content: text, pending: true } : message
+      messages: previous.messages.slice(0, messageIndex + 1).map(item => (
+        item.id === messageId ? { ...item, content: text, pending: true } : item
       )),
       workflows: [],
     });
     setChatSending(true);
 
     try {
-      const result = await sendCommand("conversation.editMessage", {
-        conversationId: previous.id,
-        messageId,
-        content: text,
-      });
+      const payload = { conversationId: previous.id, messageId };
+      if (command === "conversation.editMessage") payload.content = text;
+      const result = await sendCommand(command, payload);
       setChatCanonicalConversation(result.conversation);
       setChatOptimisticConversation(null);
       setChatLocalRequestJob(result.job || null);
@@ -418,9 +419,21 @@ export const AppProvider = ({ children }) => {
       setChatOptimisticConversation(null);
       throw error;
     } finally {
+      chatSendInFlightRef.current = false;
       setChatSending(false);
     }
   }, [chatConversation, chatWorking, sendCommand]);
+
+  const editChatMessage = useCallback(({ messageId, content }) => replayChatMessage({
+    messageId,
+    content,
+    command: "conversation.editMessage",
+  }), [replayChatMessage]);
+
+  const resendChatMessage = useCallback(messageId => replayChatMessage({
+    messageId,
+    command: "conversation.resendMessage",
+  }), [replayChatMessage]);
 
   const cancelChatRequest = useCallback(async () => {
     chatUploadControllerRef.current?.abort();
@@ -641,6 +654,7 @@ export const AppProvider = ({ children }) => {
       setChatConversationModel,
       sendChatMessage,
       editChatMessage,
+      resendChatMessage,
       cancelChatRequest,
     }}>
       {children}

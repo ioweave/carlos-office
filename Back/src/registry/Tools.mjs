@@ -13,6 +13,17 @@ const tools = new Map();
 const CANDIDATE_PREFIX = ".candidate-";
 let registryRevision = 0;
 
+const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
+
+const normalizeInputSchema = input => {
+  if (!isObject(input)) return input;
+  const schema = structuredClone(input);
+  schema.required ??= [];
+  schema.properties ??= {};
+  schema.additionalProperties ??= false;
+  return schema;
+};
+
 const normalizeTool = (module, expectedName = null) => {
   let tool = module.default ?? module.tool ?? {};
   if (typeof tool === "function") tool = { execute: tool };
@@ -21,17 +32,32 @@ const normalizeTool = (module, expectedName = null) => {
   const { inputSchema, parameters, ...normalized } = tool;
   normalized.name ??= expectedName;
   normalized.execute ??= module.execute;
-  normalized.input = tool.input ?? inputSchema ?? parameters ?? {};
+  normalized.input = normalizeInputSchema(tool.input ?? inputSchema ?? parameters);
   return normalized;
 };
 
 const validateTool = (tool, filename, expectedName = null) => {
-  if (!tool || typeof tool !== "object") throw new Error(`Invalid tool: ${filename}`);
+  if (!tool || typeof tool !== "object") throw new Error(`Invalid Tool: ${filename}`);
   if (!tool.name || typeof tool.name !== "string") throw new Error(`Tool ${filename} must have a name`);
   if (expectedName && tool.name !== expectedName) throw new Error(`Tool source declares ${tool.name}, expected ${expectedName}`);
   if (typeof tool.execute !== "function") throw new Error(`Tool ${tool.name} must export an execute function`);
-  if (!tool.input || typeof tool.input !== "object" || Array.isArray(tool.input)) {
-    throw new Error(`Tool ${tool.name} input must be an object schema`);
+  if (!isObject(tool.input) || tool.input.type !== "object") {
+    throw new Error(`Tool ${tool.name} input must be a JSON Schema object with type "object"`);
+  }
+  if (!isObject(tool.input.properties)) throw new Error(`Tool ${tool.name} input.properties must be an object`);
+  if (!Array.isArray(tool.input.required) || tool.input.required.some(name => typeof name !== "string" || !name)) {
+    throw new Error(`Tool ${tool.name} input.required must be an array of property names`);
+  }
+  for (const name of tool.input.required) {
+    if (!Object.prototype.hasOwnProperty.call(tool.input.properties, name)) {
+      throw new Error(`Tool ${tool.name} requires undefined input property: ${name}`);
+    }
+  }
+  if (typeof tool.input.additionalProperties !== "boolean") {
+    throw new Error(`Tool ${tool.name} input.additionalProperties must be a boolean`);
+  }
+  for (const [name, property] of Object.entries(tool.input.properties)) {
+    if (!isObject(property)) throw new Error(`Tool ${tool.name} input property ${name} must be a schema object`);
   }
 };
 
@@ -72,7 +98,7 @@ export const loadTools = async () => {
     try {
       const expectedName = filename.slice(0, -4);
       const tool = await importTool(resolve(toolsDir, filename), filename, expectedName);
-      if (discovered.has(tool.name)) throw new Error(`Duplicate tool name: ${tool.name}`);
+      if (discovered.has(tool.name)) throw new Error(`Duplicate Tool name: ${tool.name}`);
       discovered.set(tool.name, tool);
     } catch (error) {
       await recordLoadFailure(filename, error);
@@ -90,7 +116,7 @@ export const listTools = () => [...tools.values()];
 export const getToolsRevision = () => registryRevision;
 
 export const saveTool = async (name, source) => {
-  if (!/^[a-zA-Z0-9_-]+$/.test(name)) throw new Error(`Invalid tool name: ${name}`);
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) throw new Error(`Invalid Tool name: ${name}`);
   if (typeof source !== "string" || !source.trim()) throw new Error("Tool source must be a non-empty string");
 
   await mkdir(toolsDir, { recursive: true });
@@ -129,7 +155,7 @@ export const saveTool = async (name, source) => {
 };
 
 export const deleteTool = async name => {
-  if (!/^[a-zA-Z0-9_-]+$/.test(name)) throw new Error(`Invalid tool name: ${name}`);
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) throw new Error(`Invalid Tool name: ${name}`);
   if (!tools.has(name)) return false;
   await rm(resolve(toolsDir, `${name}.mjs`), { force: true });
   tools.delete(name);
@@ -140,6 +166,6 @@ export const deleteTool = async name => {
 };
 
 export const readToolSource = async name => {
-  if (!/^[a-zA-Z0-9_-]+$/.test(name)) throw new Error(`Invalid tool name: ${name}`);
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) throw new Error(`Invalid Tool name: ${name}`);
   return readFile(resolve(toolsDir, `${name}.mjs`), "utf8");
 };

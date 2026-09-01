@@ -28,6 +28,13 @@ const isObject = value => value !== null && typeof value === "object" && !Array.
 const sameInput = (left, right) => {
   try { return JSON.stringify(left) === JSON.stringify(right); } catch { return false; }
 };
+const toolError = (message, code, hint = null) => {
+  const error = new Error(message);
+  error.code = code;
+  error.retryable = false;
+  if (hint) error.hint = hint;
+  return error;
+};
 
 const sanitizeDiagnosticValue = (value, depth = 0) => {
   if (depth >= MAX_DIAGNOSTIC_DEPTH) return "[truncated]";
@@ -99,11 +106,6 @@ const prepareToolInput = (toolName, input, workspaceDir) => {
   if (["write-file", "read-file"].includes(toolName) && typeof prepared.path === "string" && prepared.path.trim()) {
     prepared.path = resolveWorkspacePath(workspaceDir, prepared.path);
   }
-  if (toolName === "run-powershell") {
-    prepared.workingDirectory = typeof prepared.workingDirectory === "string" && prepared.workingDirectory.trim()
-      ? resolveWorkspacePath(workspaceDir, prepared.workingDirectory)
-      : workspaceDir;
-  }
   if (
     toolName === "play-audio"
     && typeof prepared.source === "string"
@@ -163,9 +165,11 @@ const runTool = async (entry, message) => {
   const startedAt = new Date().toISOString();
   const diagnosticInput = sanitizeDiagnosticValue(call?.input ?? {});
   try {
-    if (!entry.toolNames.has(call?.name)) throw new Error(`Agent requested unavailable Tool: ${call?.name}`);
+    if (!entry.toolNames.has(call?.name)) {
+      throw toolError(`Agent requested unavailable Tool: ${call?.name}`, "unavailable_tool", "Choose one of the Tools assigned to this Task.");
+    }
     const tool = getTool(call.name);
-    if (!tool) throw new Error(`Unknown Tool: ${call.name}`);
+    if (!tool) throw toolError(`Unknown Tool: ${call.name}`, "unknown_tool", "The Tool registry no longer contains this capability.");
     const input = call.input ?? {};
     if (tool.requiresApproval && !hasCarlosAuthority(workflowId)) {
       const approved = approvedToolAction({ workflowId, taskId, invocationId, toolName: tool.name, input });
@@ -236,7 +240,7 @@ const runTool = async (entry, message) => {
     sendToolResult(child, requestId, { ok: true, result });
   } catch (error) {
     const code = typeof error?.code === "string" && error.code ? error.code : "tool_execution_failed";
-    const retryable = typeof error?.retryable === "boolean" ? error.retryable : true;
+    const retryable = error?.retryable === true;
     const hint = typeof error?.hint === "string" && error.hint.trim() ? error.hint.trim() : null;
     const endedAt = new Date().toISOString();
     entry.toolFailureCount += 1;
@@ -430,6 +434,7 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
         objective: task.objective ?? "",
         completion: task.completion ?? "",
         input: structuredClone(task.input ?? {}),
+        requiredInputs: Array.isArray(task.inputs) ? [...task.inputs] : [],
         knowledge: getKnowledge(),
         workspaceDir,
       },
