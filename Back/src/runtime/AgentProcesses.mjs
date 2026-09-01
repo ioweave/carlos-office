@@ -20,7 +20,7 @@ const DEFAULT_TASK_TIMEOUT_MS = 300_000;
 const MAX_DIAGNOSTIC_STRING_LENGTH = 1_000;
 const MAX_DIAGNOSTIC_ARRAY_LENGTH = 20;
 const MAX_DIAGNOSTIC_DEPTH = 5;
-const MAX_RETAINED_TOOL_FAILURES = 100;
+const MAX_RETAINED_TOOL_CALLS = 100;
 const SENSITIVE_KEY_PATTERN = /(?:pass(?:word)?|token|secret|api[_-]?key|authorization|cookie|private[_-]?key|credential)/i;
 
 const invocationKey = (workflowId, taskId, invocationId) => `${workflowId}\u0000${taskId}\u0000${invocationId ?? "single"}`;
@@ -32,7 +32,9 @@ const sameInput = (left, right) => {
 const sanitizeDiagnosticValue = (value, depth = 0) => {
   if (depth >= MAX_DIAGNOSTIC_DEPTH) return "[truncated]";
   if (value == null || typeof value === "number" || typeof value === "boolean") return value;
-  if (typeof value === "string") return value.length > MAX_DIAGNOSTIC_STRING_LENGTH ? `${value.slice(0, MAX_DIAGNOSTIC_STRING_LENGTH)}…` : value;
+  if (typeof value === "string") {
+    return value.length > MAX_DIAGNOSTIC_STRING_LENGTH ? `${value.slice(0, MAX_DIAGNOSTIC_STRING_LENGTH)}…` : value;
+  }
   if (Buffer.isBuffer(value)) return `[Buffer ${value.length} bytes]`;
   if (Array.isArray(value)) {
     const items = value.slice(0, MAX_DIAGNOSTIC_ARRAY_LENGTH).map(item => sanitizeDiagnosticValue(item, depth + 1));
@@ -77,6 +79,20 @@ const recordAgentEvent = (type, context) => {
 const diagnosticInputText = input => {
   try { return JSON.stringify(input, null, 2); } catch { return String(input); }
 };
+const toolDuration = (startedAt, endedAt) => {
+  const started = Date.parse(startedAt);
+  const ended = Date.parse(endedAt);
+  return Number.isFinite(started) && Number.isFinite(ended) ? Math.max(0, ended - started) : null;
+};
+const recordToolCall = (entry, details) => {
+  entry.toolCallCount += 1;
+  const record = { sequence: entry.toolCallCount, ...details };
+  entry.toolCalls.push(record);
+  if (entry.toolCalls.length > MAX_RETAINED_TOOL_CALLS) {
+    entry.toolCalls.splice(0, entry.toolCalls.length - MAX_RETAINED_TOOL_CALLS);
+  }
+  return record;
+};
 
 const prepareToolInput = (toolName, input, workspaceDir) => {
   const prepared = structuredClone(input ?? {});
@@ -101,7 +117,8 @@ const prepareToolInput = (toolName, input, workspaceDir) => {
 
 const enrichFailedResult = (entry, result) => {
   const baseDiagnostics = isObject(result.diagnostics) ? structuredClone(result.diagnostics) : {};
-  const toolFailures = entry.toolFailures.map(failure => structuredClone(failure));
+  const toolCalls = entry.toolCalls.map(call => structuredClone(call));
+  const toolFailures = toolCalls.filter(call => call.status === "failed");
   const diagnostics = {
     phase: typeof baseDiagnostics.phase === "string" && baseDiagnostics.phase
       ? baseDiagnostics.phase
@@ -112,6 +129,11 @@ const enrichFailedResult = (entry, result) => {
     message: typeof baseDiagnostics.message === "string" && baseDiagnostics.message
       ? baseDiagnostics.message
       : result.error || "Agent process failed",
+    ...(entry.toolCallCount ? {
+      toolCallCount: entry.toolCallCount,
+      retainedToolCallCount: toolCalls.length,
+      toolCalls,
+    } : {}),
     ...(entry.toolFailureCount ? {
       toolFailureCount: entry.toolFailureCount,
       retainedToolFailureCount: toolFailures.length,
@@ -138,6 +160,8 @@ const enrichFailedResult = (entry, result) => {
 const runTool = async (entry, message) => {
   const { child, controller, workflowId, taskId, invocationId, workspaceDir } = entry;
   const { requestId, call } = message;
+  const startedAt = new Date().toISOString();
+  const diagnosticInput = sanitizeDiagnosticValue(call?.input ?? {});
   try {
     if (!entry.toolNames.has(call?.name)) throw new Error(`Agent requested unavailable Tool: ${call?.name}`);
     const tool = getTool(call.name);
@@ -153,6 +177,20 @@ const runTool = async (entry, message) => {
           context: { workflowId, taskId, invocationId, agentId: entry.id, tool: tool.name, input: structuredClone(input) },
         });
         entry.status = "blocked";
+        const endedAt = new Date().toISOString();
+        recordToolCall(entry, {
+          tool: tool.name,
+          status: "blocked",
+          startedAt,
+          endedAt,
+          durationMs: toolDuration(startedAt, endedAt),
+          input: diagnosticInput,
+          output: null,
+          error: `Carlos approval required for Tool: ${tool.name}`,
+          code: "tool_approval_required",
+          retryable: true,
+          hint: "Wait for Carlos approval before retrying this Tool call.",
+        });
         sendToolResult(child, requestId, {
           ok: false,
           blocked: true,
@@ -178,34 +216,49 @@ const runTool = async (entry, message) => {
       model: tool.model ?? null,
       signal: controller.signal,
     });
+    const endedAt = new Date().toISOString();
+    const trace = recordToolCall(entry, {
+      tool: tool.name,
+      status: "completed",
+      startedAt,
+      endedAt,
+      durationMs: toolDuration(startedAt, endedAt),
+      input: diagnosticInput,
+      output: sanitizeDiagnosticValue(result),
+      error: null,
+      code: null,
+      retryable: false,
+    });
     await recordEvent("tool.executed", {
-      workflowId, taskId, invocationId, agentId: entry.id, tool: tool.name,
-      provider: tool.provider ?? null, model: tool.model ?? null,
+      workflowId, taskId, invocationId, agentId: entry.id, tool: tool.name, sequence: trace.sequence,
+      durationMs: trace.durationMs, provider: tool.provider ?? null, model: tool.model ?? null,
     });
     sendToolResult(child, requestId, { ok: true, result });
   } catch (error) {
     const code = typeof error?.code === "string" && error.code ? error.code : "tool_execution_failed";
     const retryable = typeof error?.retryable === "boolean" ? error.retryable : true;
     const hint = typeof error?.hint === "string" && error.hint.trim() ? error.hint.trim() : null;
+    const endedAt = new Date().toISOString();
     entry.toolFailureCount += 1;
-    const failure = {
-      sequence: entry.toolFailureCount,
+    const failure = recordToolCall(entry, {
+      failureSequence: entry.toolFailureCount,
       tool: typeof call?.name === "string" ? call.name : "unknown-tool",
-      input: sanitizeDiagnosticValue(call?.input ?? {}),
+      status: "failed",
+      startedAt,
+      endedAt,
+      durationMs: toolDuration(startedAt, endedAt),
+      input: diagnosticInput,
+      output: null,
       error: error instanceof Error ? error.message : String(error),
       code,
       retryable,
       ...(hint ? { hint } : {}),
-      at: new Date().toISOString(),
-    };
-    entry.toolFailures.push(failure);
-    if (entry.toolFailures.length > MAX_RETAINED_TOOL_FAILURES) {
-      entry.toolFailures.splice(0, entry.toolFailures.length - MAX_RETAINED_TOOL_FAILURES);
-    }
+    });
 
     recordAgentEvent("tool.failed", {
       workflowId, taskId, invocationId, agentId: entry.id, tool: failure.tool, sequence: failure.sequence,
-      input: structuredClone(failure.input), error: failure.error, code: failure.code, retryable: failure.retryable,
+      failureSequence: failure.failureSequence, input: structuredClone(failure.input), error: failure.error,
+      code: failure.code, retryable: failure.retryable, durationMs: failure.durationMs,
       ...(failure.hint ? { hint: failure.hint } : {}),
     });
     sendToolResult(child, requestId, {
@@ -260,7 +313,8 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
       skills: skills.map(skill => skill.name),
       status: "working",
       toolNames: new Set(tools.map(tool => tool.name)),
-      toolFailures: [],
+      toolCalls: [],
+      toolCallCount: 0,
       toolFailureCount: 0,
       settled: false,
       timeoutMs,
@@ -280,7 +334,7 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
       active.delete(id);
       if (activeInvocationKeys.get(key) === id) activeInvocationKeys.delete(key);
 
-      let result = rawResult.status === "failed" ? enrichFailedResult(entry, rawResult) : rawResult;
+      let result = rawResult;
       if (result.status === "completed") {
         try {
           const completion = await stageInvocationCompletion({
@@ -316,8 +370,14 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
         });
       }
 
+      if (result.status === "failed") result = enrichFailedResult(entry, result);
+      const toolCalls = entry.toolCalls.map(call => structuredClone(call));
+      result = { ...result, toolCalls };
+
       recordAgentEvent("agent.stopped", {
         workflowId, taskId, invocationId, agentId: id, pid: child.pid, status: result.status,
+        toolCallCount: entry.toolCallCount,
+        toolFailureCount: entry.toolFailureCount,
         ...(result.status === "failed" ? { error: result.error, diagnostics: result.diagnostics } : {}),
       });
       resolve({ ...result, agentId: id, pid: child.pid, invocationId });
@@ -341,7 +401,9 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
       }
       if (message?.type === "completed") void settle({ status: "completed", completion: message.completion });
       if (message?.type === "blocked") void settle({ status: "blocked", error: message.error, approvalId: message.approvalId ?? null });
-      if (message?.type === "failed") void settle({ status: "failed", error: message.error, diagnostics: isObject(message.diagnostics) ? message.diagnostics : null });
+      if (message?.type === "failed") {
+        void settle({ status: "failed", error: message.error, diagnostics: isObject(message.diagnostics) ? message.diagnostics : null });
+      }
     });
     child.on("error", error => {
       const message = error instanceof Error ? error.message : String(error);
@@ -387,6 +449,7 @@ export const listActiveAgents = () => [...active.values()].map(entry => ({
   tools: [...entry.tools],
   skills: [...entry.skills],
   timeoutMs: entry.timeoutMs,
+  toolCallCount: entry.toolCallCount,
   toolFailureCount: entry.toolFailureCount,
   context: { workflowId: entry.workflowId },
 }));
