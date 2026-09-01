@@ -9,17 +9,41 @@ const commandError = (message, code, hint = null) => {
   return error;
 };
 
+const shouldUseShell = (command, args) => {
+  if (/\s|[|&;<>()$`]/.test(command)) return true;
+  if (args.length !== 1) return false;
+
+  const argument = args[0].trim();
+  const executable = command.split("/").at(-1);
+  return argument.startsWith(`${command} `)
+    || argument.startsWith(`${executable} `)
+    || /\s|[|&;<>()$`]/.test(argument);
+};
+
+const shellCommand = (command, args) => {
+  if (/\s|[|&;<>()$`]/.test(command)) return command;
+  const argument = args[0]?.trim() ?? "";
+  const executable = command.split("/").at(-1);
+  if (argument.startsWith(`${command} `) || argument.startsWith(`${executable} `)) return argument;
+  return `${command}${argument ? ` ${argument}` : ""}`;
+};
+
 const tool = {
   name: "run-command",
-  description: "Runs one local executable directly on the Carlos Office host without shell interpretation. Use it for Ubuntu system inspection and command-line utilities such as ls, find, ps, ss, systemctl, git, or python when filesystem and HTTP Tools are insufficient. Arguments must be provided separately. Relative working directories resolve inside the Agent workspace; absolute working directories are allowed when the Task explicitly requires inspecting an existing host path.",
+  description: "Runs a Linux command on the Carlos Office host. Prefer command as the executable plus tokenized args. For resilience, Carlos Office also accepts common shell-style model output such as one full command line in command or one full command line packed into a single args item; those forms are normalized through /bin/bash -lc so quoting, redirection, pipes, and environment variables work as expected. Relative working directories resolve inside the Agent workspace; absolute working directories are allowed when the Task explicitly requires inspecting an existing host path.",
   requiresApproval: true,
   provider: null,
   model: null,
   input: {
     type: "object",
     properties: {
-      command: { type: "string", description: "Executable name available on PATH or an absolute executable path." },
-      args: { type: "array", items: { type: "string" }, description: "Arguments passed directly to the executable. Shell metacharacters are not interpreted.", default: [] },
+      command: { type: "string", description: "Executable name or a complete Linux shell command line." },
+      args: {
+        type: "array",
+        items: { type: "string" },
+        description: "Preferred: one array element per executable argument. A single full shell-style command line is also accepted and normalized automatically.",
+        default: [],
+      },
       cwd: { type: "string", description: "Optional working directory. Relative paths resolve inside the Agent workspace." },
       stdin: { type: ["string", "null"], description: "Optional UTF-8 text written to the command standard input.", default: null },
       timeoutMs: { type: "number", description: "Maximum runtime in milliseconds.", default: 300000 },
@@ -32,6 +56,7 @@ const tool = {
     properties: {
       command: { type: "string" },
       args: { type: "array", items: { type: "string" } },
+      mode: { type: "string", enum: ["direct", "shell"] },
       cwd: { type: ["string", "null"] },
       stdout: { type: "string" },
       stderr: { type: "string" },
@@ -53,27 +78,37 @@ const tool = {
     const cwd = inputs.cwd
       ? resolveWorkspacePath(context.workspaceDir, inputs.cwd)
       : (context.workspaceDir ?? null);
+    const useShell = shouldUseShell(command, args);
+    const executedCommand = useShell ? "/bin/bash" : command;
+    const executedArgs = useShell ? ["-lc", shellCommand(command, args)] : args;
 
     try {
       const result = await runExternalCommand({
-        command,
-        args,
+        command: executedCommand,
+        args: executedArgs,
         cwd,
         input: inputs.stdin ?? null,
         timeoutMs,
         signal: context.signal,
       });
-      return { command, args: [...args], cwd, stdout: result.stdout, stderr: result.stderr };
+      return {
+        command,
+        args: [...args],
+        mode: useShell ? "shell" : "direct",
+        cwd,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      };
     } catch (error) {
       if (error?.code === "ENOENT") {
         throw commandError(
-          `executable not found: ${command}`,
+          `executable not found: ${useShell ? "/bin/bash" : command}`,
           "command_not_found",
           "Choose an executable installed on this host or provide its absolute path.",
         );
       }
       if (error?.code === "external_command_failed" && !error.hint) {
-        error.hint = "Inspect the command error and change the executable, arguments, working directory, or strategy before retrying.";
+        error.hint = "Inspect stderr and change the command, arguments, working directory, or strategy before retrying.";
       }
       throw error;
     }
