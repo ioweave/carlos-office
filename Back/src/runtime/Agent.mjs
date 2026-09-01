@@ -27,6 +27,7 @@ const COMPLETION_SCHEMA = {
   required: ["output", "data", "artifacts"],
   additionalProperties: false,
 };
+const COMPLETION_SCHEMA_TEXT = JSON.stringify(COMPLETION_SCHEMA);
 
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -266,21 +267,42 @@ export class Agent {
   async repairCompletion(messages, content) {
     const repairMessages = [
       ...messages,
-      { role: "assistant", content },
+      ...(typeof content === "string" && content.trim() ? [{ role: "assistant", content }] : []),
       {
         role: "system",
         content: [
-          "Your final Task completion was invalid.",
+          "Your final Task completion was invalid or empty.",
           "Return only one valid completion object with output, data, and artifacts.",
           "Do not call Tools. Do not add prose or Markdown outside the JSON object.",
-        ].join(" "),
+          `Required JSON schema: ${COMPLETION_SCHEMA_TEXT}`,
+        ].join("\n"),
       },
     ];
-    const response = await this.generate(repairMessages, [], COMPLETION_SCHEMA);
-    if (!isObject(response) || typeof response.content !== "string" || !response.content.trim()) {
-      throw failure("Agent completion repair returned no usable output", "completion", "invalid_completion_repair");
+    let lastError = failure("Agent completion repair returned no usable output", "completion", "invalid_completion_repair");
+
+    for (const format of [COMPLETION_SCHEMA, null]) {
+      const response = await this.generate(repairMessages, [], format);
+      const candidate = typeof response?.content === "string" ? response.content : "";
+      if (!candidate.trim()) {
+        lastError = failure("Agent completion repair returned no usable output", "completion", "invalid_completion_repair");
+        continue;
+      }
+
+      try {
+        return normalizeCompletion(candidate);
+      } catch (error) {
+        lastError = classifyFailure(error, "completion", "invalid_completion_repair");
+        repairMessages.push(
+          { role: "assistant", content: candidate },
+          {
+            role: "system",
+            content: "That repair was still invalid. Correct it and return only one complete JSON object matching the required schema.",
+          },
+        );
+      }
     }
-    return normalizeCompletion(response.content);
+
+    throw lastError;
   }
 
   async run(task) {
@@ -309,12 +331,14 @@ export class Agent {
       const toolCalls = Array.isArray(response.toolCalls) ? response.toolCalls : [];
 
       if (!toolCalls.length) {
-        if (!content.trim()) throw failure("Agent model returned no usable Task output", "model", "empty_model_output");
-        try {
-          return normalizeCompletion(content);
-        } catch {
-          return this.repairCompletion(messages, content);
+        if (content.trim()) {
+          try {
+            return normalizeCompletion(content);
+          } catch {
+            // Repair below with Tools disabled and the full completion schema grounded in the prompt.
+          }
         }
+        return this.repairCompletion(messages, content);
       }
 
       messages.push({ role: "assistant", content, toolCalls: structuredClone(toolCalls) });
