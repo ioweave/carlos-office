@@ -1,13 +1,36 @@
 import axios from "axios";
 
 const configuredApiUrl = import.meta.env.VITE_API_URL?.trim();
-const defaultApiUrl = `http://${window.location.hostname}:3002`;
-const apiBaseUrl = configuredApiUrl === "http://localhost:3002"
-  ? defaultApiUrl
-  : configuredApiUrl || defaultApiUrl;
+const localBackendHost = hostname => {
+  const value = String(hostname || "").toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+  return value === "localhost"
+    || value === "0.0.0.0"
+    || value === "::"
+    || value === "::1"
+    || value.startsWith("127.");
+};
+const defaultApiUrl = () => {
+  const url = new URL(window.location.origin);
+  url.port = "3002";
+  return url.origin;
+};
+const resolveApiUrl = () => {
+  if (!configuredApiUrl) return defaultApiUrl();
+  try {
+    const url = new URL(configuredApiUrl, window.location.href);
+    if (localBackendHost(url.hostname)) url.hostname = new URL(window.location.href).hostname;
+    return url.toString().replace(/\/$/, "");
+  } catch (error) {
+    console.error("[api] Ignoring invalid VITE_API_URL.", {
+      value: configuredApiUrl,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return defaultApiUrl();
+  }
+};
 
 const api = axios.create({
-  baseURL: apiBaseUrl,
+  baseURL: resolveApiUrl(),
   timeout: 2700000,
 });
 
