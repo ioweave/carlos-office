@@ -248,13 +248,17 @@ export const AppProvider = ({ children }) => {
 
   const openChatConversation = useCallback(conversationId => {
     if (!conversationId) return;
+    if (activeConversationIdRef.current === conversationId) {
+      markConversationRead(conversationId);
+      return;
+    }
     setActiveConversationId(conversationId);
     setChatCanonicalConversation(null);
     setChatOptimisticConversation(null);
     setChatAttachments([]);
     setChatArtifacts([]);
     setChatLocalRequestJob(null);
-  }, [setActiveConversationId]);
+  }, [markConversationRead, setActiveConversationId]);
 
   const startNewChat = useCallback(() => {
     setActiveConversationId("");
