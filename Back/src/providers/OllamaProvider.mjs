@@ -72,6 +72,38 @@ const normalizeToolCalls = (toolCalls = []) => toolCalls.map((call, index) => ({
   input: normalizeToolArguments(call?.function?.arguments),
 }));
 
+const normalizeContent = value => {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+const formatInstruction = format => {
+  if (!format) return null;
+  if (format === "json") {
+    return [
+      "Return only valid JSON for this response.",
+      "Do not use Markdown, code fences, comments, or prose outside the JSON value.",
+    ].join(" ");
+  }
+
+  return [
+    "Return only JSON matching this schema exactly.",
+    "Do not use Markdown, code fences, comments, or prose outside the JSON value.",
+    "JSON schema:",
+    JSON.stringify(format),
+  ].join("\n");
+};
+
+const requestMessages = (messages, format) => {
+  const instruction = formatInstruction(format);
+  return instruction ? [...messages, { role: "system", content: instruction }] : messages;
+};
+
 const request = async (url, options, apiKey, timeoutMs = REQUEST_TIMEOUT_MS) => {
   const { signal: providedSignal = null, ...requestOptions } = options;
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
@@ -161,12 +193,13 @@ export const createOllamaProvider = ({
 
       const body = {
         model,
-        messages: normalizeMessages(messages),
+        messages: normalizeMessages(requestMessages(messages, format)),
         stream: false,
       };
 
       if (tools.length) body.tools = normalizeTools(tools);
-      if (format) body.format = format;
+      // Ollama Cloud currently does not enforce structured outputs. Ground the schema in the prompt there instead.
+      if (format && !endpointIsCloud) body.format = format;
 
       const result = await request(
         `${apiUrl}/chat`,
@@ -175,7 +208,7 @@ export const createOllamaProvider = ({
       );
 
       return {
-        content: result.message?.content ?? "",
+        content: normalizeContent(result.message?.content),
         toolCalls: normalizeToolCalls(result.message?.tool_calls),
         usage: {
           inputTokens: result.prompt_eval_count ?? 0,
