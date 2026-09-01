@@ -78,11 +78,17 @@ const ensureProviderSchema = db => {
     location TEXT CHECK (location IN ('local', 'cloud') OR location IS NULL),
     parameters INTEGER,
     enabled INTEGER CHECK (enabled IN (0, 1) OR enabled IS NULL),
+    inference_timeout_ms INTEGER CHECK (inference_timeout_ms >= 0 OR inference_timeout_ms IS NULL),
     input_cost REAL,
     output_cost REAL,
     PRIMARY KEY (provider_name, model),
     FOREIGN KEY (provider_name) REFERENCES providers(name) ON DELETE CASCADE
   )`);
+
+  const modelColumns = new Set(db.prepare("PRAGMA table_info(provider_models)").all().map(column => column.name));
+  if (!modelColumns.has("inference_timeout_ms")) {
+    db.exec("ALTER TABLE provider_models ADD COLUMN inference_timeout_ms INTEGER CHECK (inference_timeout_ms >= 0 OR inference_timeout_ms IS NULL)");
+  }
 
   db.exec(`CREATE TABLE IF NOT EXISTS provider_model_capabilities (
     provider_name TEXT NOT NULL,
@@ -164,21 +170,25 @@ const insertModelPreference = (db, providerName, modelName, preference = {}) => 
     ? Math.round(Number(preference.parameters))
     : null;
   const enabled = typeof preference.enabled === "boolean" ? (preference.enabled ? 1 : 0) : null;
+  const inferenceTimeoutMs = Number.isSafeInteger(Number(preference.inferenceTimeoutMs)) && Number(preference.inferenceTimeoutMs) >= 0
+    ? Number(preference.inferenceTimeoutMs)
+    : null;
   const pricing = isObject(preference.costPerMillionTokens) ? preference.costPerMillionTokens : {};
   const inputCost = Number.isFinite(Number(pricing.inputUsd)) && Number(pricing.inputUsd) >= 0 ? Number(pricing.inputUsd) : null;
   const outputCost = Number.isFinite(Number(pricing.outputUsd)) && Number(pricing.outputUsd) >= 0 ? Number(pricing.outputUsd) : null;
 
   db.prepare(`INSERT INTO provider_models (
-    provider_name, model, manual, location, parameters, enabled, input_cost, output_cost
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    provider_name, model, manual, location, parameters, enabled, inference_timeout_ms, input_cost, output_cost
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(provider_name, model) DO UPDATE SET
     manual = excluded.manual,
     location = COALESCE(excluded.location, provider_models.location),
     parameters = COALESCE(excluded.parameters, provider_models.parameters),
     enabled = COALESCE(excluded.enabled, provider_models.enabled),
+    inference_timeout_ms = COALESCE(excluded.inference_timeout_ms, provider_models.inference_timeout_ms),
     input_cost = COALESCE(excluded.input_cost, provider_models.input_cost),
     output_cost = COALESCE(excluded.output_cost, provider_models.output_cost)`)
-    .run(providerName, modelName, preference.manual ? 1 : 0, location, parameters, enabled, inputCost, outputCost);
+    .run(providerName, modelName, preference.manual ? 1 : 0, location, parameters, enabled, inferenceTimeoutMs, inputCost, outputCost);
 
   const supported = new Set(Array.isArray(preference.supportedCapabilities) ? preference.supportedCapabilities : []);
   const enabledCapabilities = isObject(preference.capabilities) ? preference.capabilities : {};
@@ -302,7 +312,7 @@ export const initializeDatabase = () => withDatabase(db => {
     migrateLegacyCredentials(db);
     migrateLegacyProviders(db);
     ensureBuiltInOllama(db);
-    setMeta(db, "schema.version", "1");
+    setMeta(db, "schema.version", "2");
     db.exec("COMMIT");
   } catch (error) {
     try { db.exec("ROLLBACK"); } catch (rollbackError) {
@@ -313,7 +323,7 @@ export const initializeDatabase = () => withDatabase(db => {
     throw error;
   }
 
-  return { path: DATABASE_PATH, schemaVersion: 1 };
+  return { path: DATABASE_PATH, schemaVersion: 2 };
 }, { initialize: true });
 
 export const databaseInfo = () => ({ path: DATABASE_PATH, ignoredDirectory: resolve(BACK_ROOT, ".carlos-office") });
