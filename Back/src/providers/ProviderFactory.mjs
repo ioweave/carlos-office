@@ -14,6 +14,7 @@ export const providerDefinitionsFromSettings = settings => Object.entries(settin
     credentialService: clean(stored.credentialService),
     enabled: stored.enabled !== false,
     builtIn: stored.builtIn === true || name === "ollama",
+    models: isObject(stored.models) ? stored.models : {},
   }))
   .filter(definition => definition.name && definition.baseUrl && definition.type === "ollama");
 
@@ -27,6 +28,7 @@ export const createProviderFromDefinition = definition => {
     name: definition.name,
     baseUrl: definition.baseUrl,
     apiKey,
+    modelSettings: isObject(definition.models) ? definition.models : {},
   });
 };
 
