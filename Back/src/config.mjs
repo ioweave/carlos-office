@@ -10,13 +10,11 @@ try {
   if (error.code !== "ENOENT") throw error;
 }
 
-const port = Number(process.env.LOCAL_PORT);
+const host = "0.0.0.0";
+const port = Number(process.env.LOCAL_PORT || 3002);
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error(`Invalid LOCAL_PORT: ${process.env.LOCAL_PORT}`);
 }
-
-const host = process.env.LOCAL_HOST?.trim();
-if (!host) throw new Error("LOCAL_HOST must be configured");
 
 const frontendOriginValue = process.env.FRONTEND_ORIGIN?.trim() || "http://localhost:3003";
 let frontendOrigin;
