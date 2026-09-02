@@ -9,7 +9,7 @@ const INLINE_TEXT_CHARS = 80_000;
 
 const tool = {
   name: "document-parser",
-  description: "Converts a PDF in the Agent workspace into readable UTF-8 text. Use it for downloaded/local PDFs before asking the model to reason over binary bytes. Text is returned inline only when small; larger extracted text is written to the workspace for narrow read-file access. Scanned/image-only PDFs report requiresOcr=true so the Agent can use Unlimited OCR when available.",
+  description: "Converts a PDF in the Agent workspace into readable UTF-8 text through the document extraction boundary. When the document-extractor Plugin is installed it is preferred; Carlos Office falls back to native pdftotext extraction and reports when OCR is still required. Large extracted text is written to the workspace for narrow read-file access.",
   requiresApproval: false,
   provider: null,
   model: null,

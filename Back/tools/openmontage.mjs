@@ -1,11 +1,8 @@
-import { delimiter, dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { delimiter } from "node:path";
 
-import { getVariable } from "../src/services/VariableService.mjs";
 import { runExternalCommand } from "../src/services/ExternalCommandService.mjs";
+import { resolvePlugin, resolvePluginExecutable } from "../src/services/PluginService.mjs";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const defaultHome = resolve(here, "../.carlos-office/integrations/OpenMontage");
 const marker = "__CARLOS_OFFICE_JSON__";
 const bridge = [
   "import dataclasses, json, sys",
@@ -28,7 +25,7 @@ const bridge = [
 
 const tool = {
   name: "openmontage",
-  description: "Bridges Carlos Office to an external OpenMontage checkout without copying its orchestration into Carlos Office. It can inspect OpenMontage's capability catalog or invoke one registered OpenMontage Tool. Direct Carlos-requested use is authorized by the Workflow authority model; autonomous use remains approval-gated because OpenMontage tools may spend money or publish content.",
+  description: "Exposes the installed OpenMontage Plugin through a narrow Agent Tool without copying OpenMontage orchestration into Carlos Office. It can inspect the capability catalog or invoke one registered OpenMontage Tool. Autonomous use remains approval-gated because OpenMontage actions may spend money or publish content.",
   requiresApproval: true,
   provider: null,
   model: null,
@@ -55,22 +52,36 @@ const tool = {
     const timeoutMs = inputs.timeoutMs ?? 1_800_000;
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("openmontage: timeoutMs must be positive");
 
-    const home = getVariable("integration.openMontagePath")?.value || process.env.OPENMONTAGE_HOME || defaultHome;
-    const python = getVariable("integration.pythonCommand")?.value || process.env.PYTHON_COMMAND || "python";
+    const plugin = await resolvePlugin("openmontage", {
+      legacyNames: ["OpenMontage"],
+      legacyPathVariable: "integration.openMontagePath",
+      envPathVariable: "OPENMONTAGE_HOME",
+    });
+    const python = resolvePluginExecutable(plugin, {
+      sharedVariableKey: "plugin.pythonCommand",
+      legacyVariableKey: "integration.pythonCommand",
+      envVariable: "PYTHON_COMMAND",
+      fallback: "python",
+    });
     const args = ["-c", bridge, action];
     if (inputs.tool) args.push(inputs.tool.trim());
     const result = await runExternalCommand({
       command: python,
       args,
-      cwd: context.workspaceDir || home,
+      cwd: plugin.home,
       input: JSON.stringify(inputs.inputs ?? {}),
-      env: { PYTHONPATH: [home, process.env.PYTHONPATH].filter(Boolean).join(delimiter) },
+      env: { PYTHONPATH: [plugin.home, process.env.PYTHONPATH].filter(Boolean).join(delimiter) },
       timeoutMs,
       signal: context.signal,
     });
     const line = result.stdout.split(/\r?\n/).findLast(value => value.startsWith(marker));
     if (!line) throw new Error("openmontage: bridge did not return a structured result");
-    return { action, result: JSON.parse(line.slice(marker.length)) };
+    return {
+      plugin: plugin.name,
+      pluginVersion: plugin.manifest.version,
+      action,
+      result: JSON.parse(line.slice(marker.length)),
+    };
   },
 };
 

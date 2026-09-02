@@ -82,12 +82,17 @@ The graph guides execution and supports branching/fan-out and joins. A Workflow 
 - **Task** — one executable graph node.
 - **Attempt** — one durable execution record for a Task.
 - **Agent Instance** — one temporary Node process executing one Task.
-- **Tool** — executable `.mjs` capability. Nora may create or update Tools locally.
+- **Provider** — AI inference backend only; Providers expose models to Nora and temporary Agents.
+- **Plugin** — installed executable software kept outside the Carlos Office source tree and invoked through a process boundary.
+- **Tool** — Agent-callable executable capability with a declared contract and authorization policy. A Tool may wrap a Plugin, call an external API, or use native Platform code.
 - **Skill** — reusable Markdown operating guidance.
+- **Integration** — connection to another product/service; an Integration may use Credentials and Tools without requiring a local Plugin.
 - **Authorization** — Carlos's durable approval decision for a Tool action that requires it.
 - **Schedule** — a UTC timer that starts a Process.
 - **Event** — append-only local diagnostic history.
 - **Artifact** — a file attached to or produced for a Conversation.
+
+Providers remain intentionally separate from Plugins: Provider means AI inference, while Plugin means installed executable software such as document extraction, OCR, media processing, or a third-party CLI/project.
 
 ## Product surfaces
 
@@ -102,6 +107,18 @@ Carlos Office has seven product surfaces:
 7. **Store** — Credentials, non-secret Workspace Variables, and persistent Knowledge.
 
 There is no separate Settings, Tools, Skills, Agents, or Knowledge page. Knowledge is managed within Store.
+
+## Plugins
+
+Plugins are not loaded into the Carlos Office Node process. They live outside the repository, normally under:
+
+```text
+~/.carlos-office/plugins/
+```
+
+A Plugin may contain a Python virtual environment, model weights, a third-party checkout, a compiled binary, or another independently managed runtime. Tools remain the Agent-facing security and schema boundary.
+
+The optional `plugin.json` manifest is deliberately small and supports command-style Plugins only. See `PLUGINS.md` for the contract, location overrides, compatibility behavior, and current Plugin-backed Tools.
 
 ## Knowledge
 
@@ -145,9 +162,12 @@ Back/ObsidianVault/System/Events/               private event history
 Back/ObsidianVault/System/Runtime/              private runtime state
 Back/tools/                                     executable Tools
 Back/skills/                                    Markdown Skills
+~/.carlos-office/plugins/                       external executable Plugins
 ```
 
-Private runtime data is ignored by Git. Nora's definition, Tools, Skills, application code, and product specifications remain source-controlled. On startup, Carlos Office migrates existing `30-Conversations` and `90-System` contents into the non-prefixed directories and removes obsolete legacy vault folders.
+Private runtime data is ignored by Git. Nora's definition, Tools, Skills, application code, and product specifications remain source-controlled. Plugins and their Python/CUDA/model dependencies are separately managed outside the application checkout.
+
+On startup, Carlos Office migrates existing `30-Conversations` and `90-System` contents into the non-prefixed directories and removes obsolete legacy vault folders.
 
 ## Run locally
 
@@ -190,4 +210,4 @@ npm run build
 
 CI runs those checks on pushes and pull requests. Tests are added when explicitly required.
 
-See `PROJECT_FUNCTIONAL_SPECIFICATION.md` for the functional contract and `MANDATORY_CODING_STANDARD.md` for implementation rules.
+See `PROJECT_FUNCTIONAL_SPECIFICATION.md` for the functional contract, `PLUGINS.md` for the Plugin boundary, and `MANDATORY_CODING_STANDARD.md` for implementation rules.

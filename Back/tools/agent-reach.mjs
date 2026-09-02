@@ -1,10 +1,10 @@
-import { getVariable } from "../src/services/VariableService.mjs";
 import { runExternalCommand } from "../src/services/ExternalCommandService.mjs";
 import { resolveWorkspacePath } from "../src/services/ExecutionWorkspaceService.mjs";
+import { resolvePlugin, resolvePluginEntrypoint, resolvePluginExecutable } from "../src/services/PluginService.mjs";
 
 const tool = {
   name: "agent-reach",
-  description: "Uses the installed Agent Reach package for health checks, version/update checks, safe installation diagnostics, and media transcription. Internet reading/search commands selected by Agent Reach are documented in the agent-reach Skill and run through existing Carlos Office Tools rather than an unrestricted wrapper.",
+  description: "Uses the installed Agent Reach command Plugin for health checks, version/update checks, safe installation diagnostics, and media transcription. Internet reading/search commands selected by Agent Reach remain documented in the agent-reach Skill and run through existing Carlos Office Tools rather than an unrestricted wrapper.",
   requiresApproval: false,
   provider: null,
   model: null,
@@ -24,7 +24,12 @@ const tool = {
   output: { type: "object" },
   async execute(inputs = {}, context = {}) {
     const action = inputs.action;
-    const command = getVariable("integration.agentReachCommand")?.value || process.env.AGENT_REACH_COMMAND || "agent-reach";
+    const plugin = await resolvePlugin("agent-reach", { required: false });
+    const command = resolvePluginExecutable(plugin || "agent-reach", {
+      legacyVariableKey: "integration.agentReachCommand",
+      envVariable: "AGENT_REACH_COMMAND",
+      fallback: "agent-reach",
+    });
     const timeoutMs = inputs.timeoutMs ?? 300_000;
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("agent-reach: timeoutMs must be positive");
 
@@ -43,15 +48,23 @@ const tool = {
       throw new Error(`agent-reach: unknown action ${action}`);
     }
 
-    const result = await runExternalCommand({ command, args, cwd: context.workspaceDir, timeoutMs, signal: context.signal });
+    const entrypoint = plugin ? resolvePluginEntrypoint(plugin) : null;
+    if (entrypoint) args.unshift(entrypoint);
+    const result = await runExternalCommand({
+      command,
+      args,
+      cwd: plugin?.home || context.workspaceDir,
+      timeoutMs,
+      signal: context.signal,
+    });
     if (action === "doctor") {
-      try { return { action, result: JSON.parse(result.stdout) }; } catch (error) {
+      try { return { action, plugin: plugin?.name ?? "agent-reach", result: JSON.parse(result.stdout) }; } catch (error) {
         throw new Error(`agent-reach: doctor did not return valid JSON: ${error.message}`);
       }
     }
     return inputs.output && action === "transcribe"
-      ? { action, output: resolveWorkspacePath(context.workspaceDir, inputs.output), log: result.stdout }
-      : { action, result: result.stdout };
+      ? { action, plugin: plugin?.name ?? "agent-reach", output: resolveWorkspacePath(context.workspaceDir, inputs.output), log: result.stdout }
+      : { action, plugin: plugin?.name ?? "agent-reach", result: result.stdout };
   },
 };
 

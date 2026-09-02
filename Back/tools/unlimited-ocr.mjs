@@ -1,19 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readdir, rm, stat } from "node:fs/promises";
-import { dirname, extname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { extname, resolve } from "node:path";
 
-import { getVariable } from "../src/services/VariableService.mjs";
 import { runExternalCommand } from "../src/services/ExternalCommandService.mjs";
 import { resolveWorkspacePath } from "../src/services/ExecutionWorkspaceService.mjs";
+import { resolvePlugin, resolvePluginEntrypoint, resolvePluginExecutable } from "../src/services/PluginService.mjs";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const defaultHome = resolve(here, "../.carlos-office/integrations/Unlimited-OCR");
 const imageExtensions = new Set([".png", ".jpg", ".jpeg", ".webp", ".bmp"]);
 
 const tool = {
   name: "unlimited-ocr",
-  description: "Runs Baidu Unlimited-OCR against a PDF, image, or image directory. The upstream repository is kept outside Carlos Office source and is invoked through its infer.py entry point. Results are written as Markdown files in the Agent workspace so they can be consumed or declared as Artifacts.",
+  description: "Runs the installed Unlimited-OCR Plugin against a PDF, image, or image directory. The Plugin lives outside Carlos Office source and is exposed to Agents only through this Tool boundary. Results are written as Markdown files in the Agent workspace so they can be consumed or declared as Artifacts.",
   requiresApproval: false,
   provider: null,
   model: null,
@@ -41,14 +38,22 @@ const tool = {
     const timeoutMs = inputs.timeoutMs ?? 1_800_000;
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("unlimited-ocr: timeoutMs must be positive");
 
-    const home = getVariable("integration.unlimitedOcrPath")?.value
-      || process.env.UNLIMITED_OCR_HOME
-      || defaultHome;
-    const python = getVariable("integration.pythonCommand")?.value || process.env.PYTHON_COMMAND || "python";
+    const plugin = await resolvePlugin("unlimited-ocr", {
+      legacyNames: ["Unlimited-OCR"],
+      legacyPathVariable: "integration.unlimitedOcrPath",
+      envPathVariable: "UNLIMITED_OCR_HOME",
+    });
+    const python = resolvePluginExecutable(plugin, {
+      sharedVariableKey: "plugin.pythonCommand",
+      legacyVariableKey: "integration.pythonCommand",
+      envVariable: "PYTHON_COMMAND",
+      fallback: "python",
+    });
+    const entrypoint = resolvePluginEntrypoint(plugin, "infer.py");
     const source = resolveWorkspacePath(context.workspaceDir, inputs.source);
     const outputDirectory = resolveWorkspacePath(context.workspaceDir, inputs.outputDirectory || "unlimited-ocr-output");
     const sourceInfo = await stat(source);
-    const args = [resolve(home, "infer.py"), "--output_dir", outputDirectory, "--concurrency", String(concurrency)];
+    const args = [entrypoint, "--output_dir", outputDirectory, "--concurrency", String(concurrency)];
     args.push("--gpu", inputs.gpu || "0", "--model_dir", inputs.model || "baidu/Unlimited-OCR");
     args.push("--image_mode", inputs.imageMode || "gundam", "--server_log", resolve(outputDirectory, "sglang-server.log"));
 
@@ -71,14 +76,20 @@ const tool = {
       const result = await runExternalCommand({
         command: python,
         args,
-        cwd: home,
+        cwd: plugin.home,
         timeoutMs,
         signal: context.signal,
       });
       const files = (await readdir(outputDirectory, { withFileTypes: true }))
         .filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith(".md"))
         .map(entry => resolve(outputDirectory, entry.name));
-      return { outputDirectory, files, log: result.stdout };
+      return {
+        plugin: plugin.name,
+        pluginVersion: plugin.manifest.version,
+        outputDirectory,
+        files,
+        log: result.stdout,
+      };
     } finally {
       if (temporaryInput) await rm(temporaryInput, { recursive: true, force: true });
     }
