@@ -22,6 +22,8 @@ const DEFAULT_TASK_ABSOLUTE_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const STANDARD_EXECUTION_POLICY = Object.freeze({ maxReasoningTurns: 16, maxToolCalls: 24, maxNoProgressTurns: 3 });
 const WEB_RESEARCH_EXECUTION_POLICY = Object.freeze({ maxReasoningTurns: 24, maxToolCalls: 36, maxNoProgressTurns: 4 });
 const DOCUMENT_RESEARCH_EXECUTION_POLICY = Object.freeze({ maxReasoningTurns: 40, maxToolCalls: 64, maxNoProgressTurns: 4 });
+const MAX_IMPLICIT_WORKFLOW_INPUT_CHARS = 8_000;
+const MAX_IMPLICIT_WORKFLOW_VALUE_CHARS = 2_000;
 const MAX_DIAGNOSTIC_STRING_LENGTH = 1_000;
 const MAX_DIAGNOSTIC_ARRAY_LENGTH = 20;
 const MAX_DIAGNOSTIC_DEPTH = 5;
@@ -44,20 +46,65 @@ const directPredecessorTaskIds = (workflow, taskId) => (workflow.edges ?? [])
 const taskRelaysDownstream = (workflow, taskId) => (workflow.edges ?? []).some(
   ([from, to]) => from === taskId && workflow.tasks?.[to]?.type === "task",
 );
-const compactAgentInput = (workflow, taskId, input, requiredInputs) => {
-  if (Array.isArray(requiredInputs) && requiredInputs.length) return structuredClone(input ?? {});
-  if (!workflow || !isObject(input)) return structuredClone(input ?? {});
+const taskReferencesWorkflowInput = task => /(?:^|\W)workflow\.[A-Za-z0-9_-]+/.test(
+  `${task.objective ?? ""}\n${task.completion ?? ""}`,
+);
+const compactWorkflowInput = value => {
+  if (!isObject(value)) return { value: structuredClone(value), omitted: [] };
+  let serialized = "";
+  try { serialized = JSON.stringify(value); } catch { return { value: structuredClone(value), omitted: [] }; }
+  if (serialized.length <= MAX_IMPLICIT_WORKFLOW_INPUT_CHARS) {
+    return { value: structuredClone(value), omitted: [] };
+  }
 
   const compact = {};
-  if (Object.prototype.hasOwnProperty.call(input, "workflow")) compact.workflow = structuredClone(input.workflow);
+  const omitted = [];
+  let retainedChars = 2;
+  for (const [name, item] of Object.entries(value)) {
+    let itemText = "";
+    try { itemText = JSON.stringify(item); } catch { itemText = ""; }
+    const itemChars = name.length + itemText.length + 4;
+    if (
+      itemText
+      && itemText.length <= MAX_IMPLICIT_WORKFLOW_VALUE_CHARS
+      && retainedChars + itemChars <= MAX_IMPLICIT_WORKFLOW_INPUT_CHARS
+    ) {
+      compact[name] = structuredClone(item);
+      retainedChars += itemChars;
+    } else {
+      omitted.push(name);
+    }
+  }
+  return { value: compact, omitted };
+};
+const compactAgentInput = (workflow, taskId, task) => {
+  const input = task.input ?? {};
+  if (Array.isArray(task.inputs) && task.inputs.length) return structuredClone(input);
+  if (!workflow || !isObject(input)) return structuredClone(input);
 
+  const producerIds = directPredecessorTaskIds(workflow, taskId);
+  const compact = {};
   const sourceUpstream = isObject(input.upstream) ? input.upstream : {};
   const upstream = {};
-  for (const producerId of directPredecessorTaskIds(workflow, taskId)) {
+  for (const producerId of producerIds) {
     if (!Object.prototype.hasOwnProperty.call(sourceUpstream, producerId)) continue;
     upstream[producerId] = structuredClone(sourceUpstream[producerId]);
   }
   if (Object.keys(upstream).length) compact.upstream = upstream;
+
+  if (Object.prototype.hasOwnProperty.call(input, "workflow")) {
+    if (!producerIds.length || taskReferencesWorkflowInput(task)) {
+      compact.workflow = structuredClone(input.workflow);
+    } else {
+      const workflowContext = compactWorkflowInput(input.workflow);
+      if (isObject(workflowContext.value) && Object.keys(workflowContext.value).length) {
+        compact.workflow = workflowContext.value;
+      }
+      if (workflowContext.omitted.length) {
+        compact.runtime = { omittedLargeWorkflowInputs: workflowContext.omitted };
+      }
+    }
+  }
 
   const preservedNames = new Set(["__mapExecution", "__loopReview"]);
   for (const group of getTaskExecutionGroups(workflow, taskId)) {
@@ -342,7 +389,7 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
   const execution = executionPolicyFor(task, tools);
   const workflow = getWorkflow(workflowId);
   const relayMode = workflow ? taskRelaysDownstream(workflow, taskId) : false;
-  const agentInput = compactAgentInput(workflow, taskId, task.input ?? {}, task.inputs);
+  const agentInput = compactAgentInput(workflow, taskId, task);
 
   return new Promise((resolve, reject) => {
     let child;
