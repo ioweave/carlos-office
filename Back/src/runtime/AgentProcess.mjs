@@ -61,12 +61,16 @@ process.on("message", message => {
         error.code = "unknown_provider";
         throw error;
       }
+      const execution = message.execution ?? {};
       const agent = new Agent({
         provider,
         model: message.model,
         tools: message.tools ?? [],
         skills: message.skills ?? [],
         invokeTool,
+        maxNoProgressTurns: execution.maxNoProgressTurns,
+        maxReasoningTurns: execution.maxReasoningTurns,
+        maxToolCalls: execution.maxToolCalls,
       });
       const completion = await agent.run(message.task);
       finish({ type: "completed", completion });

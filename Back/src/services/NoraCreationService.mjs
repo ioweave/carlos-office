@@ -110,6 +110,8 @@ const validateProcessDependencies = (
 const workflowShape = '{"start":"start","end":"end","tasks":{"start":{"type":"start"},"inspect":{"type":"task","name":"Inspect files","objective":"Inspect the relevant files and report findings","tools":["read-file"]},"end":{"type":"end"}},"edges":[["start","inspect"],["inspect","end"]],"groups":[]}';
 const mapExample = '{"id":"map-items","type":"map","name":"Map items","members":["inspect"],"source":"upstream.list_items","itemAs":"item","indexAs":"index","concurrency":4,"throttle":{"requests":20,"windowMs":60000}}';
 const loopExample = '{"id":"loop-qc","type":"loop","name":"Quality control","members":["inspect"],"maxIterations":3,"minimumScore":0.85,"criteria":"The result must be complete, accurate, and satisfy the Task completion criteria."}';
+const researchExecutionExample = '{"maxReasoningTurns":24,"maxToolCalls":36,"maxNoProgressTurns":4}';
+const deepResearchExecutionExample = '{"maxReasoningTurns":40,"maxToolCalls":64,"maxNoProgressTurns":4}';
 
 const graphRules = [
   'Graph nodes are only type "start", "task", or "end". Map and Loop are execution Groups, not graph nodes.',
@@ -118,6 +120,12 @@ const graphRules = [
   "Every executable Task uses type task, a concise 2-5 word name (maximum 50 characters), and a non-empty objective.",
   "Task objective contains detailed execution instructions; completion contains acceptance criteria.",
   "Use Task data output when downstream execution needs machine-readable arrays or objects.",
+  "Task execution is optional and may contain only maxReasoningTurns (1-64), maxToolCalls (1-128), and maxNoProgressTurns (1-8). Omit it for ordinary work.",
+  `For web research requiring several external sources, prefer execution ${researchExecutionExample}. For deep or large-document research, especially when http-content is needed, prefer ${deepResearchExecutionExample}.`,
+  "Split broad research into independent source-domain Tasks that can run in parallel, followed by a downstream synthesis Task over their structured data. Do not make one Task perform discovery, acquisition, extraction, and cross-domain synthesis when the work can be decomposed.",
+  "Research Tasks should prefer authoritative primary sources and stop source discovery once sufficient authoritative sources satisfy the objective.",
+  "When http returns a stored content reference, use http-content search/read against that stored body instead of re-fetching it or loading the entire large document into model context.",
+  "Synthesis Tasks should normally consume upstream structured data without web Tools unless a specific missing fact genuinely requires new research.",
   "groups is optional and contains Map or Loop execution scopes. A Task or nested Group may directly belong to at most one Group.",
   "Start and end cannot be Group members. Group nesting must not contain cycles.",
   `Map Group shape: ${mapExample}`,
@@ -159,7 +167,7 @@ export const getNoraRequestDecisionInstruction = () => [
   "Never claim a notification or alarm capability exists unless it is available or created in the plan.",
   ...graphRules,
   `Valid minimal Workflow graph: ${workflowShape}`,
-  "Tasks do not name persistent specialist Agents. A Task may constrain provider/model, Tools, and Skills; otherwise Nora selects them at runtime.",
+  "Tasks do not name persistent specialist Agents. A Task may constrain provider/model, Tools, Skills, and execution budget; otherwise Nora selects resources at runtime and Carlos Office applies bounded defaults.",
   "Use Maps only for real collection fan-out with a resolvable array source. Do not use Maps as generic containers. Use Loop only when independent Nora QC/retry materially improves a Task.",
   "For a Tool, return complete valid ESM source with no Markdown fences.",
   "A Tool must export its Tool object as default or as `tool` and use only available Node APIs or dependencies.",
@@ -204,6 +212,7 @@ export const ensureValidGeneratedGraph = async ({
         "- start has no incoming edges and end has no outgoing edges;",
         "- Task inputs, tools, and skills are arrays of names when present;",
         "- Task provider and model are configured together when present;",
+        "- Task execution fields, when present, remain inside their validated numeric ranges;",
         "- Task definitions do not contain persistent Agent identities.",
         "",
         `Preserve the requested semantics. Return only a graph shaped like: ${workflowShape}`,

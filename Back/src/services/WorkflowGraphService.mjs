@@ -2,6 +2,11 @@ const NODE_TYPES = new Set(["start", "task", "end"]);
 const GROUP_TYPES = new Set(["map", "loop"]);
 const MAX_TASK_NAME_LENGTH = 50;
 const MAX_GROUP_NAME_LENGTH = 60;
+const TASK_EXECUTION_LIMITS = Object.freeze({
+  maxReasoningTurns: { min: 1, max: 64 },
+  maxToolCalls: { min: 1, max: 128 },
+  maxNoProgressTurns: { min: 1, max: 8 },
+});
 
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 
@@ -12,6 +17,25 @@ const validateStringList = (value, label) => {
   if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
   if (value.some(item => typeof item !== "string" || !item.trim())) {
     throw new Error(`${label} must contain non-empty strings`);
+  }
+};
+
+const validateTaskExecution = (taskId, execution) => {
+  if (execution == null) return;
+  if (!isObject(execution)) throw new Error(`Task ${taskId} execution must be an object`);
+
+  for (const key of Object.keys(execution)) {
+    if (!Object.prototype.hasOwnProperty.call(TASK_EXECUTION_LIMITS, key)) {
+      throw new Error(`Task ${taskId} execution contains unsupported field: ${key}`);
+    }
+  }
+
+  for (const [key, { min, max }] of Object.entries(TASK_EXECUTION_LIMITS)) {
+    const value = execution[key];
+    if (value == null) continue;
+    if (!Number.isSafeInteger(value) || value < min || value > max) {
+      throw new Error(`Task ${taskId} execution.${key} must be an integer from ${min} to ${max}`);
+    }
   }
 };
 
@@ -115,6 +139,7 @@ const validateTaskDefinition = (taskId, task) => {
   ) {
     throw new Error(`Task ${taskId} timeoutMs must be null or an integer from 1000 to 3600000`);
   }
+  validateTaskExecution(taskId, task.execution);
 
   validateStringList(task.inputs, `Task ${taskId} inputs`);
   validateStringList(task.tools, `Task ${taskId} tools`);

@@ -18,6 +18,9 @@ const active = new Map();
 const activeInvocationKeys = new Map();
 const DEFAULT_TASK_INACTIVITY_TIMEOUT_MS = 35 * 60 * 1000;
 const DEFAULT_TASK_ABSOLUTE_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+const STANDARD_EXECUTION_POLICY = Object.freeze({ maxReasoningTurns: 16, maxToolCalls: 24, maxNoProgressTurns: 3 });
+const WEB_RESEARCH_EXECUTION_POLICY = Object.freeze({ maxReasoningTurns: 24, maxToolCalls: 36, maxNoProgressTurns: 4 });
+const DOCUMENT_RESEARCH_EXECUTION_POLICY = Object.freeze({ maxReasoningTurns: 40, maxToolCalls: 64, maxNoProgressTurns: 4 });
 const MAX_DIAGNOSTIC_STRING_LENGTH = 1_000;
 const MAX_DIAGNOSTIC_ARRAY_LENGTH = 20;
 const MAX_DIAGNOSTIC_DEPTH = 5;
@@ -26,6 +29,13 @@ const SENSITIVE_KEY_PATTERN = /(?:pass(?:word)?|token|secret|api[_-]?key|authori
 
 const invocationKey = (workflowId, taskId, invocationId) => `${workflowId}\u0000${taskId}\u0000${invocationId ?? "single"}`;
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
+const executionPolicyFor = (task, tools) => {
+  const toolNames = new Set(tools.map(tool => tool.name));
+  const defaults = toolNames.has("http-content")
+    ? DOCUMENT_RESEARCH_EXECUTION_POLICY
+    : toolNames.has("http") ? WEB_RESEARCH_EXECUTION_POLICY : STANDARD_EXECUTION_POLICY;
+  return { ...defaults, ...(isObject(task.execution) ? task.execution : {}) };
+};
 const sameInput = (left, right) => {
   try { return JSON.stringify(left) === JSON.stringify(right); } catch { return false; }
 };
@@ -132,6 +142,7 @@ const enrichFailedResult = (entry, result) => {
     message: typeof baseDiagnostics.message === "string" && baseDiagnostics.message
       ? baseDiagnostics.message
       : result.error || "Agent process failed",
+    execution: structuredClone(entry.execution),
     ...(entry.toolCallCount ? {
       toolCallCount: entry.toolCallCount,
       retainedToolCallCount: toolCalls.length,
@@ -292,6 +303,7 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
     activeInvocationKeys.delete(key);
     throw error;
   }
+  const execution = executionPolicyFor(task, tools);
 
   return new Promise((resolve, reject) => {
     let child;
@@ -324,6 +336,7 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
       model,
       tools: tools.map(tool => tool.name),
       skills: skills.map(skill => skill.name),
+      execution,
       status: "working",
       toolNames: new Set(tools.map(tool => tool.name)),
       toolCalls: [],
@@ -347,6 +360,7 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
       pid: child.pid,
       provider,
       model,
+      execution: structuredClone(execution),
       inactivityTimeoutMs,
       absoluteTimeoutMs,
     });
@@ -409,6 +423,7 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
         workflowId, taskId, invocationId, agentId: id, pid: child.pid, status: result.status,
         toolCallCount: entry.toolCallCount,
         toolFailureCount: entry.toolFailureCount,
+        execution: structuredClone(execution),
         ...(result.status === "failed" ? { error: result.error, diagnostics: result.diagnostics } : {}),
       });
       resolve({ ...result, agentId: id, pid: child.pid, invocationId });
@@ -472,6 +487,7 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
       model,
       tools: tools.map(toolMetadata),
       skills: structuredClone(skills),
+      execution: structuredClone(execution),
       task: {
         id: taskId,
         workflowId,
@@ -497,6 +513,7 @@ export const listActiveAgents = () => [...active.values()].map(entry => ({
   model: entry.model,
   tools: [...entry.tools],
   skills: [...entry.skills],
+  execution: structuredClone(entry.execution),
   timeoutMs: entry.absoluteTimeoutMs,
   inactivityTimeoutMs: entry.inactivityTimeoutMs,
   absoluteTimeoutMs: entry.absoluteTimeoutMs,
