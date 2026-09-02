@@ -4,9 +4,11 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const contentDir = resolve(here, "../.runtime/http-content");
-const MAX_READ_BYTES = 4_000_000;
+const MAX_READ_BYTES = 512_000;
+const DEFAULT_READ_BYTES = 80_000;
 const SEARCH_CHUNK_BYTES = 1_000_000;
 const SEARCH_OVERLAP_BYTES = 8_192;
+const UTF8_BOUNDARY_BYTES = 3;
 
 const validId = value => (
   typeof value === "string"
@@ -19,6 +21,20 @@ const pathFor = id => {
   return resolve(contentDir, id);
 };
 
+const utf8Start = (buffer, index) => {
+  let value = Math.max(0, Math.min(index, buffer.length));
+  while (value > 0 && value < buffer.length && (buffer[value] & 0xc0) === 0x80) value -= 1;
+  return value;
+};
+const utf8End = (buffer, index) => {
+  let value = Math.max(0, Math.min(index, buffer.length));
+  while (value < buffer.length && (buffer[value] & 0xc0) === 0x80) value += 1;
+  return value;
+};
+const utf8Text = (buffer, start = 0, end = buffer.length) => (
+  buffer.subarray(utf8Start(buffer, start), utf8End(buffer, end)).toString("utf8")
+);
+
 const readRange = async (id, start, length) => {
   const path = pathFor(id);
   const info = await stat(path);
@@ -26,16 +42,26 @@ const readRange = async (id, start, length) => {
   const bytes = Math.min(length, info.size - offset);
   if (bytes <= 0) return { start: offset, end: offset, bytes: 0, text: "", eof: true, totalBytes: info.size };
 
+  const expandedStart = Math.max(0, offset - UTF8_BOUNDARY_BYTES);
+  const expandedEnd = Math.min(info.size, offset + bytes + UTF8_BOUNDARY_BYTES);
+  const requested = expandedEnd - expandedStart;
   const handle = await open(path, "r");
   try {
-    const buffer = Buffer.allocUnsafe(bytes);
-    const { bytesRead } = await handle.read(buffer, 0, bytes, offset);
+    const buffer = Buffer.allocUnsafe(requested);
+    const { bytesRead } = await handle.read(buffer, 0, requested, expandedStart);
+    const actual = buffer.subarray(0, bytesRead);
+    const localStart = offset - expandedStart;
+    const localEnd = Math.min(actual.length, localStart + bytes);
+    const alignedStart = utf8Start(actual, localStart);
+    const alignedEnd = utf8End(actual, localEnd);
+    const absoluteStart = expandedStart + alignedStart;
+    const absoluteEnd = expandedStart + alignedEnd;
     return {
-      start: offset,
-      end: offset + bytesRead,
-      bytes: bytesRead,
-      text: buffer.subarray(0, bytesRead).toString("utf8"),
-      eof: offset + bytesRead >= info.size,
+      start: absoluteStart,
+      end: absoluteEnd,
+      bytes: absoluteEnd - absoluteStart,
+      text: actual.subarray(alignedStart, alignedEnd).toString("utf8"),
+      eof: absoluteEnd >= info.size,
       totalBytes: info.size,
     };
   } finally {
@@ -73,7 +99,7 @@ const searchContent = async (id, query, maxMatches) => {
         const after = Math.min(current.length, index + needle.length + 240);
         matches.push({
           offset: absolute,
-          snippet: current.subarray(before, after).toString("utf8"),
+          snippet: utf8Text(current, before, after),
         });
         from = index + Math.max(1, needle.length);
       }
@@ -90,7 +116,7 @@ const searchContent = async (id, query, maxMatches) => {
 
 const tool = {
   name: "http-content",
-  description: "Reads or searches complete large HTTP response bodies previously captured by the http Tool. Use this instead of asking the model to ingest a multi-megabyte response at once.",
+  description: "Reads or searches complete readable HTTP response bodies previously captured by the http Tool. Use search first, then narrow reads around useful byte offsets. Reads are bounded and aligned to UTF-8 character boundaries so large documents do not flood or corrupt model context.",
   requiresApproval: false,
   provider: null,
   model: null,
@@ -100,7 +126,7 @@ const tool = {
       id: { type: "string", description: "Content id returned by the http Tool." },
       action: { type: "string", enum: ["stat", "read", "search"], default: "stat" },
       start: { type: "number", description: "Byte offset for read. Defaults to 0.", default: 0 },
-      length: { type: "number", description: `Bytes to read, maximum ${MAX_READ_BYTES}.`, default: 200000 },
+      length: { type: "number", description: `Bytes to read, maximum ${MAX_READ_BYTES}.`, default: DEFAULT_READ_BYTES },
       query: { type: "string", description: "Literal UTF-8 string to find for search." },
       maxMatches: { type: "number", description: "Maximum search matches, 1-50.", default: 10 },
     },
@@ -117,7 +143,7 @@ const tool = {
     }
     if (action === "read") {
       const start = inputs.start ?? 0;
-      const length = inputs.length ?? 200_000;
+      const length = inputs.length ?? DEFAULT_READ_BYTES;
       if (!Number.isSafeInteger(start) || start < 0) throw new Error("http-content: start must be a non-negative integer");
       if (!Number.isSafeInteger(length) || length < 1 || length > MAX_READ_BYTES) {
         throw new Error(`http-content: length must be an integer from 1 to ${MAX_READ_BYTES}`);
