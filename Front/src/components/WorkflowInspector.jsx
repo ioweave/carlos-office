@@ -1,5 +1,4 @@
 import {
-  IconAlertTriangle,
   IconPlayerPlay,
   IconPlayerSkipForward,
   IconSparkles,
@@ -30,8 +29,6 @@ const errorText = value => {
   if (value == null) return "";
   try { return JSON.stringify(value, null, 2); } catch { return String(value); }
 };
-const errorHeadline = value => errorText(value).split(/\r?\n/).find(line => line.trim())?.trim() || "Task failed";
-const latestFailedAttempt = task => [...(task?.attempts || [])].reverse().find(attempt => attempt.status === "failed") || null;
 
 export default function WorkflowInspector({
   workflow,
@@ -57,9 +54,8 @@ export default function WorkflowInspector({
   onSkipTask,
   onFailureDetails,
 }) {
-  if (!selectedTask && !selectedEdge && !selectedGroup) return null;
+  if ((!selectedTask && !selectedEdge && !selectedGroup) || selectedTask?.status === "failed") return null;
   const attempts = selectedTask?.attempts || [];
-  const failedAttempt = selectedTask?.status === "failed" ? latestFailedAttempt(selectedTask) : null;
   const taskAgents = workflowAgents.filter(agent => agent.taskId === selectedTaskId);
 
   return (
@@ -117,17 +113,6 @@ export default function WorkflowInspector({
 
           {mode === "runs" && (
             <div className="workflow-run-inspector">
-              {failedAttempt && (
-                <section className="task-failure-insight">
-                  <div className="task-failure-insight__heading"><IconAlertTriangle size={15} /><div><span>Latest failure</span><strong>{errorHeadline(failedAttempt.error)}</strong></div></div>
-                  <div className="task-failure-insight__meta">
-                    <span>{failedAttempt.diagnostics?.phase || "execution"}</span>
-                    {failedAttempt.diagnostics?.code && <code>{failedAttempt.diagnostics.code}</code>}
-                  </div>
-                  <button type="button" className="button button--danger" onClick={() => onFailureDetails(failedAttempt)}>View failure details</button>
-                </section>
-              )}
-
               <div className="definition-list">
                 {selectedTask.type === "task" && <div><span>Objective</span><strong>{selectedTask.objective || "—"}</strong></div>}
                 {selectedTask.type === "task" && <div><span>Model</span><strong>{selectedTask.provider && selectedTask.model ? `${selectedTask.provider} · ${selectedTask.model}` : "Nora selects"}</strong></div>}
