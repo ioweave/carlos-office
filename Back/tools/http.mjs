@@ -4,9 +4,12 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { applyCredential } from "../src/services/CredentialService.mjs";
+import { parseHttpDocument } from "../src/services/DocumentParserService.mjs";
+import { resolveWorkspacePath } from "../src/services/ExecutionWorkspaceService.mjs";
 
 const MAX_RESPONSE_BYTES = 500_000_000;
 const INLINE_RESPONSE_BYTES = 1_000_000;
+const TEXT_SAMPLE_BYTES = 8_192;
 const here = dirname(fileURLToPath(import.meta.url));
 const contentDir = resolve(here, "../.runtime/http-content");
 
@@ -64,13 +67,55 @@ const storeLargeBody = async (text, bodyBytes, metadata = {}) => {
     bodyBytes,
     storedBytes: Buffer.byteLength(text, "utf8"),
     ...metadata,
-    instruction: "The complete response is stored locally. Use the http-content Tool to stat, search, or read byte ranges; do not request the whole body into model context at once.",
+    instruction: "The complete readable response is stored locally. Use the http-content Tool to stat, search, or read byte ranges; do not request the whole body into model context at once.",
   };
 };
 
+const preserveBinaryBody = async (body, context, extension = ".bin") => {
+  if (!context?.workspaceDir) return null;
+  const relativePath = `http-downloads/http-${randomUUID()}${extension}`;
+  const path = resolveWorkspacePath(context.workspaceDir, relativePath);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, body);
+  return relativePath;
+};
+
+const textualContentType = contentType => {
+  const value = String(contentType || "").toLowerCase();
+  return value.startsWith("text/")
+    || value.includes("json")
+    || value.includes("xml")
+    || value.includes("javascript")
+    || value.includes("x-www-form-urlencoded")
+    || value.includes("svg+xml");
+};
+
+const likelyTextBody = (body, contentType) => {
+  if (!body.length || textualContentType(contentType)) return true;
+  const sample = body.subarray(0, Math.min(TEXT_SAMPLE_BYTES, body.length));
+  if (sample.includes(0)) return false;
+  const text = sample.toString("utf8");
+  const replacements = [...text].filter(character => character === "\uFFFD").length;
+  return replacements <= Math.max(2, Math.floor(text.length * 0.01));
+};
+
+const responseBase = ({ response, method, contentType, rawBody, responseHeaders, allow, corsHeaders }) => ({
+  ok: true,
+  httpOk: response.ok,
+  status: response.status,
+  statusText: response.statusText,
+  url: response.url,
+  method,
+  contentType,
+  bodyBytes: rawBody.length,
+  headers: responseHeaders,
+  allow,
+  corsHeaders,
+});
+
 const tool = {
   name: "http",
-  description: "Issues HTTP requests with optional credentials injected locally by service name. Carlos Office always receives the complete response up to a fixed 500 MB body limit. Responses up to 1 MB are returned inline; larger complete bodies are preserved locally and returned as an http-content handle so the Agent can search/read only the relevant ranges without flooding model context. Credential secrets never enter Agent or model context and may only be sent to hosts allowed by that credential profile. Google Workspace service-account credentials mint short-lived delegated OAuth tokens server-side and may only access approved Workspace API routes.",
+  description: "Issues HTTP requests with optional credentials injected locally by service name. Any received HTTP response, including 4xx and 5xx, is a successful Tool observation: ok reports transport/tool success while httpOk reports the remote HTTP success flag and status/statusText preserve the actual response. PDFs are detected by MIME type or file signature and automatically converted to readable text with the local document parser; scanned/image-only PDFs are preserved in the Agent workspace with an OCR hint instead of being decoded as UTF-8 garbage. Large readable bodies are preserved through http-content handles. Credential secrets never enter Agent or model context and may only be sent to hosts allowed by that credential profile.",
   requiresApproval: false,
   provider: null,
   model: null,
@@ -110,7 +155,7 @@ const tool = {
       responseType: {
         type: "string",
         enum: ["auto", "text", "json"],
-        description: "Response parser. Defaults to auto. Complete bodies over 1 MB are returned through an http-content handle rather than injected wholesale into model context.",
+        description: "Response parser hint. Defaults to auto. Invalid JSON is returned as text with parseError rather than failing the Tool. PDFs are auto-detected and parsed independently of this setting.",
         default: "auto",
       },
       auth: {
@@ -133,6 +178,7 @@ const tool = {
     type: "object",
     properties: {
       ok: { type: "boolean" },
+      httpOk: { type: "boolean" },
       status: { type: "number" },
       statusText: { type: "string" },
       url: { type: "string" },
@@ -141,12 +187,15 @@ const tool = {
       bodyBytes: { type: "number" },
       body: { type: ["object", "array", "string", "number", "boolean", "null"] },
       content: { type: ["object", "null"] },
+      document: { type: ["object", "null"] },
+      binary: { type: ["object", "null"] },
+      parseError: { type: ["object", "null"] },
       headers: { type: "object" },
       allow: { type: "string" },
       corsHeaders: { type: "object" },
     },
   },
-  async execute(inputs = {}) {
+  async execute(inputs = {}, context = {}) {
     const url = typeof inputs.url === "string" ? inputs.url.trim() : "";
     if (!url) throw httpError('"url" is required and must be a non-empty string.', "http_invalid_url");
 
@@ -211,66 +260,95 @@ const tool = {
 
       const contentType = response.headers.get("content-type") || "";
       const rawBody = await readCompleteBody(response);
-      const rawText = rawBody.toString("utf8");
-      const text = redact(rawText, sensitiveValues);
       const responseHeaders = sanitizeResponseHeaders(Object.fromEntries(response.headers.entries()), sensitiveValues);
       const allow = response.headers.get("allow") || "";
       const corsHeaders = {};
       for (const [key, value] of Object.entries(responseHeaders)) {
         if (key.startsWith("access-control-")) corsHeaders[key] = value;
       }
+      const base = responseBase({ response, method, contentType, rawBody, responseHeaders, allow, corsHeaders });
 
+      const parsedDocument = await parseHttpDocument({
+        body: rawBody,
+        contentType,
+        signal: context.signal ?? null,
+      });
+      if (parsedDocument.detected) {
+        const { text: documentText, ...document } = parsedDocument;
+        if (parsedDocument.parsed) {
+          const text = redact(documentText, sensitiveValues);
+          if (Buffer.byteLength(text, "utf8") > INLINE_RESPONSE_BYTES) {
+            const content = await storeLargeBody(text, rawBody.length, {
+              contentType: "text/plain; charset=utf-8",
+              sourceContentType: contentType,
+              sourceUrl: response.url,
+              parser: parsedDocument.parser,
+            });
+            return { ...base, body: null, content, document, binary: null, parseError: null };
+          }
+          return { ...base, body: text, content: null, document, binary: null, parseError: null };
+        }
+
+        const source = await preserveBinaryBody(rawBody, context, ".pdf");
+        return {
+          ...base,
+          body: null,
+          content: null,
+          document: {
+            ...document,
+            source,
+            instruction: source
+              ? `The PDF is preserved at ${source}. Use Unlimited OCR when available if text extraction is required.`
+              : document.hint,
+          },
+          binary: { preserved: Boolean(source), source, type: "pdf" },
+          parseError: null,
+        };
+      }
+
+      if (!likelyTextBody(rawBody, contentType)) {
+        const source = await preserveBinaryBody(rawBody, context);
+        return {
+          ...base,
+          body: null,
+          content: null,
+          document: null,
+          binary: {
+            preserved: Boolean(source),
+            source,
+            type: contentType || "application/octet-stream",
+            instruction: "The endpoint returned binary content, so Carlos Office preserved it instead of corrupting it with UTF-8 decoding.",
+          },
+          parseError: null,
+        };
+      }
+
+      const rawText = rawBody.toString("utf8");
+      const text = redact(rawText, sensitiveValues);
       if (rawBody.length > INLINE_RESPONSE_BYTES) {
         const content = await storeLargeBody(text, rawBody.length, {
           contentType,
           sourceUrl: response.url,
         });
-        return {
-          ok: response.ok,
-          status: response.status,
-          statusText: response.statusText,
-          url: response.url,
-          method,
-          contentType,
-          bodyBytes: rawBody.length,
-          body: null,
-          content,
-          headers: responseHeaders,
-          allow,
-          corsHeaders,
-        };
+        return { ...base, body: null, content, document: null, binary: null, parseError: null };
       }
 
       const wantsJson = responseType === "json" || (responseType === "auto" && contentType.includes("application/json"));
       let responseBody = text;
+      let parseError = null;
       if (wantsJson) {
         try {
           responseBody = JSON.parse(text);
-        } catch (parseError) {
-          if (responseType === "json") {
-            throw httpError(
-              `response could not be parsed as JSON: ${parseError.message}`,
-              "http_invalid_json_response",
-              { retryable: true, hint: "Retry with responseType=\"text\" if the endpoint does not return valid JSON." },
-            );
-          }
+        } catch (error) {
+          parseError = {
+            code: "http_invalid_json_response",
+            message: `Response could not be parsed as JSON: ${error.message}`,
+            hint: "Treat body as text or change endpoint/responseType. The HTTP observation itself succeeded.",
+          };
         }
       }
 
-      return {
-        ok: response.ok,
-        status: response.status,
-        statusText: response.statusText,
-        url: response.url,
-        method,
-        contentType,
-        bodyBytes: rawBody.length,
-        body: responseBody,
-        content: null,
-        headers: responseHeaders,
-        allow,
-        corsHeaders,
-      };
+      return { ...base, body: responseBody, content: null, document: null, binary: null, parseError };
     } catch (error) {
       if (error?.name === "AbortError") {
         throw httpError(
