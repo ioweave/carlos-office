@@ -4,11 +4,16 @@ const MAX_REASONING_TURNS = 16;
 const MAX_TOOL_CALLS = 24;
 const MAX_PROVIDER_ATTEMPTS = 3;
 const MAX_SAFE_TOOL_ATTEMPTS = 3;
-const MAX_TOOL_RESULT_CHARS = 120_000;
-const MAX_ACTIVE_TOOL_CONTEXT_CHARS = 360_000;
+const MAX_TOOL_RESULT_CHARS = 60_000;
+const MAX_ACTIVE_TOOL_CONTEXT_CHARS = 180_000;
+const MAX_COMPLETION_EVIDENCE_CHARS = 80_000;
+const MAX_COMPLETION_TOOL_CHARS = 20_000;
+const MAX_HTTP_BODY_CONTEXT_CHARS = 12_000;
 const MAX_RELAY_OUTPUT_CHARS = 600;
+const RESEARCH_CONVERGENCE_TOOL_CALLS = 24;
 const FAILED_CALL_MEMORY_TURNS = 4;
 const RETRY_BACKOFF_MS = [300, 900];
+const CACHEABLE_TOOLS = new Set(["http-content", "read-file", "workspace-variables"]);
 const COMPLETION_SCHEMA = {
   type: "object",
   properties: {
@@ -42,10 +47,10 @@ const RELAY_COMPLETION_SCHEMA = {
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
-const cappedText = text => {
-  if (text.length <= MAX_TOOL_RESULT_CHARS) return text;
-  const tailChars = Math.min(20_000, Math.floor(MAX_TOOL_RESULT_CHARS / 4));
-  const headChars = MAX_TOOL_RESULT_CHARS - tailChars;
+const cappedText = (text, limit = MAX_TOOL_RESULT_CHARS) => {
+  if (text.length <= limit) return text;
+  const tailChars = Math.min(8_000, Math.floor(limit / 4));
+  const headChars = limit - tailChars;
   return [
     text.slice(0, headChars),
     `\n\n[Tool result truncated for model context: ${text.length} characters total.`,
@@ -54,26 +59,49 @@ const cappedText = text => {
   ].join("");
 };
 
-const resultToText = result => {
+const compactHttpResult = result => {
+  if (!isObject(result)) return result;
+  const compact = structuredClone(result);
+  if (isObject(compact.headers)) {
+    const usefulHeaders = new Set([
+      "content-type", "content-length", "content-disposition", "location", "last-modified", "etag",
+      "cache-control", "expires", "retry-after", "allow", "www-authenticate",
+    ]);
+    compact.headers = Object.fromEntries(Object.entries(compact.headers).filter(([name]) => (
+      usefulHeaders.has(name.toLowerCase()) || name.toLowerCase().startsWith("access-control-")
+    )));
+  }
+  if (typeof compact.body === "string" && compact.body.length > MAX_HTTP_BODY_CONTEXT_CHARS) {
+    compact.body = `${compact.body.slice(0, MAX_HTTP_BODY_CONTEXT_CHARS)}\n[HTTP body omitted; use the returned content handle or a narrower request.]`;
+  }
+  return compact;
+};
+
+const resultToText = (result, toolName = null) => {
+  const value = toolName === "http" ? compactHttpResult(result) : result;
   let text;
-  if (typeof result === "string") text = result;
-  else if (Buffer.isBuffer(result)) text = result.toString("utf8");
-  else if (result === undefined) text = "";
-  else text = JSON.stringify(result);
+  if (typeof value === "string") text = value;
+  else if (Buffer.isBuffer(value)) text = value.toString("utf8");
+  else if (value === undefined) text = "";
+  else text = JSON.stringify(value);
   return cappedText(text);
 };
 
 const compactMessages = messages => {
   const compacted = structuredClone(messages);
-  let retainedToolChars = 0;
-  for (let index = compacted.length - 1; index >= 0; index -= 1) {
-    const message = compacted[index];
-    if (message?.role !== "tool" || typeof message.content !== "string") continue;
-    if (retainedToolChars + message.content.length <= MAX_ACTIVE_TOOL_CONTEXT_CHARS) {
-      retainedToolChars += message.content.length;
-      continue;
-    }
-    message.content = "[Older Tool result omitted from active model context. Re-run a narrow read/search if it is still needed.]";
+  const toolMessages = compacted
+    .map((message, index) => ({ message, index }))
+    .filter(({ message }) => message?.role === "tool" && typeof message.content === "string");
+  let retainedToolChars = toolMessages.reduce((total, { message }) => total + message.content.length, 0);
+  if (retainedToolChars <= MAX_ACTIVE_TOOL_CONTEXT_CHARS) return compacted;
+
+  const omission = "[Tool result omitted from active model context. Re-run a narrow read/search if it is still needed.]";
+  toolMessages.sort((left, right) => right.message.content.length - left.message.content.length || left.index - right.index);
+  for (const { message } of toolMessages) {
+    if (retainedToolChars <= MAX_ACTIVE_TOOL_CONTEXT_CHARS) break;
+    const previousLength = message.content.length;
+    message.content = omission;
+    retainedToolChars -= Math.max(0, previousLength - omission.length);
   }
   return compacted;
 };
@@ -142,6 +170,12 @@ const normalizeArtifacts = value => {
   });
 };
 
+const preserveVerboseRelayOutput = (data, output) => {
+  if (data == null) return { relayText: output };
+  if (isObject(data) && !Object.prototype.hasOwnProperty.call(data, "relayText")) return { ...data, relayText: output };
+  return { value: data, relayText: output };
+};
+
 const normalizeCompletion = (content, relayMode = false) => {
   let value;
   try {
@@ -149,28 +183,25 @@ const normalizeCompletion = (content, relayMode = false) => {
   } catch (error) {
     throw classifyFailure(error, "completion", "invalid_completion_json");
   }
-  if (!isObject(value) || typeof value.output !== "string" || !value.output.trim()) {
+  if (!isObject(value)) throw failure("Agent completion must be one JSON object", "completion", "invalid_completion");
+
+  const hasData = Object.prototype.hasOwnProperty.call(value, "data");
+  let data = hasData && value.data !== undefined ? structuredClone(value.data) : null;
+  let output = typeof value.output === "string" ? value.output.trim() : "";
+  if (!output && !(relayMode && hasData && data != null)) {
     throw failure("Agent completion must include output", "completion", "invalid_completion");
   }
-  if (!Object.prototype.hasOwnProperty.call(value, "data")) {
-    throw failure("Agent completion must include data", "completion", "invalid_completion");
-  }
-  if (!Object.prototype.hasOwnProperty.call(value, "artifacts")) {
-    throw failure("Agent completion must include artifacts", "completion", "invalid_completion");
+  if (!output) output = "Completed.";
+
+  if (relayMode && output.length > MAX_RELAY_OUTPUT_CHARS) {
+    data = preserveVerboseRelayOutput(data, output);
+    output = `${output.slice(0, MAX_RELAY_OUTPUT_CHARS - 1)}…`;
   }
 
-  const output = value.output.trim();
-  if (relayMode && output.length > MAX_RELAY_OUTPUT_CHARS) {
-    throw failure(
-      `Relay output exceeds ${MAX_RELAY_OUTPUT_CHARS} characters; move substantive handoff content into compact data`,
-      "completion",
-      "relay_output_too_verbose",
-    );
-  }
   return {
     output,
-    data: value.data === undefined ? null : structuredClone(value.data),
-    artifacts: normalizeArtifacts(value.artifacts),
+    data,
+    artifacts: value.artifacts == null ? [] : normalizeArtifacts(value.artifacts),
   };
 };
 
@@ -198,6 +229,10 @@ const canRetryToolError = (call, error) => (
   && error?.retryable === true
   && error?.code === "http_timeout"
 );
+const cacheableToolCall = call => (
+  CACHEABLE_TOOLS.has(call.name)
+  || (call.name === "http" && ["GET", "OPTIONS"].includes(String(call.input?.method || "GET").toUpperCase()))
+);
 const unsuccessfulToolResult = result => isObject(result) && result.ok === false;
 const unsuccessfulToolDetails = (call, result) => ({
   message: Number.isInteger(result.status)
@@ -206,6 +241,65 @@ const unsuccessfulToolDetails = (call, result) => ({
   code: Number.isInteger(result.status) ? `${call.name}_status_${result.status}` : `${call.name}_unsuccessful_result`,
   retryable: false,
   hint: "Inspect the returned status/body and change the endpoint, command, arguments, or strategy before retrying.",
+});
+
+const evidencePriority = name => {
+  if (name === "http-content" || name === "read-file") return 4;
+  if (name === "document-parser" || name === "unlimited-ocr") return 3;
+  if (name === "http") return 2;
+  return 1;
+};
+const completionEvidence = messages => {
+  const candidates = messages
+    .map((message, index) => ({ message, index }))
+    .filter(({ message }) => message?.role === "tool" && typeof message.content === "string")
+    .map(({ message, index }) => {
+      const content = cappedText(message.content, MAX_COMPLETION_TOOL_CHARS);
+      let result = content;
+      try { result = JSON.parse(content); } catch { /* Keep compact text. */ }
+      return {
+        index,
+        priority: evidencePriority(message.name),
+        record: { tool: message.name || "tool", result },
+      };
+    });
+
+  const selected = [];
+  let chars = 0;
+  for (const candidate of candidates.sort((left, right) => right.priority - left.priority || right.index - left.index)) {
+    const size = JSON.stringify(candidate.record).length;
+    if (chars + size > MAX_COMPLETION_EVIDENCE_CHARS) continue;
+    selected.push(candidate);
+    chars += size;
+  }
+  return selected.sort((left, right) => left.index - right.index).map(item => item.record);
+};
+const completionGrounding = (messages, evidence) => {
+  const grounding = [];
+  for (const message of messages) {
+    if (message?.role === "assistant" || message?.role === "tool") break;
+    if (["system", "user"].includes(message?.role)) grounding.push(structuredClone(message));
+  }
+  if (evidence.length) {
+    grounding.push({
+      role: "system",
+      content: [
+        "Compacted Tool evidence collected during this Task follows. Use it as authoritative working evidence.",
+        "Do not re-run research merely because the original Tool transcript was compacted.",
+        JSON.stringify(evidence),
+      ].join("\n\n"),
+    });
+  }
+  return grounding;
+};
+const fallbackRelayCompletion = evidence => ({
+  output: "Research evidence collected; model finalization was unavailable. Preserve this evidence for downstream synthesis.",
+  data: {
+    _carlosOfficeRecovery: "completion-evidence-fallback",
+    incompleteSynthesis: true,
+    evidence: structuredClone(evidence),
+  },
+  artifacts: [],
 });
 
 export class Agent {
@@ -329,6 +423,9 @@ export class Agent {
       `Resolved input (compact JSON):\n${JSON.stringify(task.input ?? {})}`,
       "Tool schemas are authoritative. Send only declared properties and satisfy required fields and declared types exactly.",
       "Prefer narrow reads/searches and stored-content handles over loading large files or HTTP bodies into model context.",
+      "For web research, use search pages only for discovery. Once an authoritative primary source is found, work from it instead of repeating broad searches.",
+      "Do not fetch the same URL or repeat the same read-only Tool call twice. Reuse prior evidence and converge on the Task result.",
+      "When HTTP returns a content handle, use http-content search/read instead of downloading the same resource again.",
     ];
 
     if (task.relayMode) {
@@ -379,19 +476,23 @@ export class Agent {
     throw classifyFailure(lastError, "model", "provider_error");
   }
 
-  async repairCompletion(messages, content, relayMode = false) {
+  async repairCompletion(messages, content, relayMode = false, reason = "The final Task completion was invalid or empty.") {
     const schema = relayMode ? RELAY_COMPLETION_SCHEMA : COMPLETION_SCHEMA;
+    const evidence = completionEvidence(messages);
     const repairMessages = [
-      ...messages,
-      ...(typeof content === "string" && content.trim() ? [{ role: "assistant", content }] : []),
+      ...completionGrounding(messages, evidence),
+      ...(typeof content === "string" && content.trim()
+        ? [{ role: "assistant", content: cappedText(content, MAX_COMPLETION_TOOL_CHARS) }]
+        : []),
       {
         role: "system",
         content: [
-          "Your final Task completion was invalid or empty.",
+          reason,
+          "Synthesize from the compacted evidence already provided. Do not perform more research.",
           "Return only one valid completion object with output, data, and artifacts.",
           "Do not call Tools. Do not add prose or Markdown outside the JSON object.",
           ...(relayMode ? [
-            `This is RELAY MODE: output must stay under ${MAX_RELAY_OUTPUT_CHARS} characters and substantive handoff content belongs in compact data.`,
+            `This is RELAY MODE: output should stay under ${MAX_RELAY_OUTPUT_CHARS} characters and substantive handoff content belongs in compact data.`,
             "Preserve all downstream-relevant facts while removing explanatory prose and repetition.",
           ] : []),
           `Required JSON schema: ${JSON.stringify(schema)}`,
@@ -400,7 +501,7 @@ export class Agent {
     ];
     let lastError = failure("Agent completion repair returned no usable output", "completion", "invalid_completion_repair");
 
-    for (const format of [schema, null]) {
+    for (const format of [schema, "json", null]) {
       const response = await this.generate(repairMessages, [], format);
       const candidate = typeof response?.content === "string" ? response.content : "";
       if (!candidate.trim()) {
@@ -413,14 +514,22 @@ export class Agent {
       } catch (error) {
         lastError = classifyFailure(error, "completion", "invalid_completion_repair");
         repairMessages.push(
-          { role: "assistant", content: candidate },
+          { role: "assistant", content: cappedText(candidate, MAX_COMPLETION_TOOL_CHARS) },
           {
             role: "system",
-            content: "That repair was still invalid. Correct it and return only one complete JSON object matching the required schema.",
+            content: "That repair was still invalid. Correct only the JSON envelope; preserve the evidence and return one complete object.",
           },
         );
       }
     }
+
+    if (typeof content === "string" && content.trim()) {
+      const text = content.trim();
+      return relayMode
+        ? normalizeCompletion(JSON.stringify({ output: text, data: null, artifacts: [] }), true)
+        : { output: text, data: null, artifacts: [] };
+    }
+    if (relayMode && evidence.length) return fallbackRelayCompletion(evidence);
     throw lastError;
   }
 
@@ -433,6 +542,13 @@ export class Agent {
     const messages = this.buildMessages(task);
     const modelTools = describeTools(this.tools);
     const failedCalls = new Map();
+    const successfulCalls = new Map();
+    const researchMode = this.tools.some(tool => ["http", "http-content", "document-parser", "unlimited-ocr"].includes(tool.name));
+    const convergenceAt = Math.min(
+      RESEARCH_CONVERGENCE_TOOL_CALLS,
+      Math.max(16, Math.floor(this.maxToolCalls * 0.6)),
+    );
+    let convergencePrompted = false;
     let noProgressTurns = 0;
     let reasoningTurns = 0;
     let toolExecutions = 0;
@@ -440,6 +556,16 @@ export class Agent {
     while (true) {
       reasoningTurns += 1;
       if (reasoningTurns > this.maxReasoningTurns) {
+        const evidence = completionEvidence(messages);
+        if (evidence.length) {
+          const completion = await this.repairCompletion(
+            messages,
+            "",
+            Boolean(task.relayMode),
+            `The reasoning budget of ${this.maxReasoningTurns} turns is exhausted. Finalize now from existing evidence.`,
+          );
+          return this.withUsage(completion, task.relayMode);
+        }
         throw failure(`Task exceeded ${this.maxReasoningTurns} reasoning turns`, "model", "reasoning_turn_limit");
       }
 
@@ -454,7 +580,7 @@ export class Agent {
           try {
             return this.withUsage(normalizeCompletion(content, Boolean(task.relayMode)), task.relayMode);
           } catch {
-            // Repair below with Tools disabled and the full completion schema grounded in the prompt.
+            // Repair below with Tools disabled and a compact evidence transcript.
           }
         }
         const completion = await this.repairCompletion(messages, content, Boolean(task.relayMode));
@@ -463,6 +589,7 @@ export class Agent {
 
       messages.push({ role: "assistant", content, toolCalls: structuredClone(toolCalls) });
       let successfulTools = 0;
+      let reusedTools = 0;
       let failedTools = 0;
       const failureFingerprints = [];
 
@@ -497,7 +624,11 @@ export class Agent {
         }
 
         let result;
-        if (!error) {
+        let reused = false;
+        if (!error && cacheableToolCall(call) && successfulCalls.has(key)) {
+          result = structuredClone(successfulCalls.get(key));
+          reused = true;
+        } else if (!error) {
           for (let attempt = 1; attempt <= MAX_SAFE_TOOL_ATTEMPTS; attempt += 1) {
             toolExecutions += 1;
             if (toolExecutions > this.maxToolCalls) {
@@ -525,12 +656,16 @@ export class Agent {
             role: "tool",
             toolCallId: call.id ?? null,
             name: call.name,
-            content: resultToText(result),
+            content: reused
+              ? `Cached exact read-only result; no new request was executed.\n${resultToText(result, call.name)}`
+              : resultToText(result, call.name),
           });
 
           if (!unsuccessfulToolResult(result)) {
-            successfulTools += 1;
             failedCalls.delete(key);
+            if (cacheableToolCall(call) && !reused) successfulCalls.set(key, structuredClone(result));
+            if (reused) reusedTools += 1;
+            else successfulTools += 1;
             continue;
           }
 
@@ -553,8 +688,43 @@ export class Agent {
         });
       }
 
+      if (researchMode && !convergencePrompted && toolExecutions >= convergenceAt) {
+        convergencePrompted = true;
+        messages.push({
+          role: "system",
+          content: [
+            `Research has used ${toolExecutions} Tool executions and already has substantial evidence.`,
+            "Converge now unless one explicit completion criterion remains materially unverified.",
+            "Do not broaden the search, switch search engines, or re-fetch authoritative sources already acquired.",
+            "Prefer final synthesis from stored/searchable evidence over additional discovery.",
+          ].join(" "),
+        });
+      }
+
       if (successfulTools > 0) {
         noProgressTurns = 0;
+        continue;
+      }
+
+      if (reusedTools > 0 && failedTools === 0) {
+        noProgressTurns += 1;
+        if (noProgressTurns >= this.maxNoProgressTurns) {
+          const completion = await this.repairCompletion(
+            messages,
+            "",
+            Boolean(task.relayMode),
+            "The Agent is repeating already-completed read-only calls. Stop Tool use and finalize from existing evidence.",
+          );
+          return this.withUsage(completion, task.relayMode);
+        }
+        messages.push({
+          role: "system",
+          content: [
+            `The previous turn repeated ${reusedTools} read-only Tool call${reusedTools === 1 ? "" : "s"} and produced no new evidence.`,
+            `No-progress turn ${noProgressTurns} of ${this.maxNoProgressTurns}.`,
+            "Do not request the same resources again. Synthesize now or make one materially different call that closes a named evidence gap.",
+          ].join(" "),
+        });
         continue;
       }
 
@@ -562,6 +732,16 @@ export class Agent {
         noProgressTurns += 1;
         const uniqueFailures = [...new Set(failureFingerprints)];
         if (noProgressTurns >= this.maxNoProgressTurns) {
+          const evidence = completionEvidence(messages);
+          if (evidence.length) {
+            const completion = await this.repairCompletion(
+              messages,
+              "",
+              Boolean(task.relayMode),
+              "Recent Tool strategies stopped making progress. Finalize from the useful evidence already collected.",
+            );
+            return this.withUsage(completion, task.relayMode);
+          }
           throw failure(
             `Task made no Tool progress for ${this.maxNoProgressTurns} consecutive reasoning turns`,
             "tool",
