@@ -294,12 +294,11 @@
 }
 
 .operations-studio__tasks .comfy-graph__controls {
-  right: 12px;
+  right: auto;
   bottom: 12px;
-  left: auto;
+  left: 12px;
 }
 
 .operations-studio__tasks .comfy-graph__minimap {
-  right: 12px;
-  bottom: 52px;
+  display: none;
 }
