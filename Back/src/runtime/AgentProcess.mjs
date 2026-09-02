@@ -85,6 +85,7 @@ process.on("message", message => {
   heartbeat.unref?.();
 
   void (async () => {
+    let agent = null;
     try {
       const provider = providers.get(message.provider);
       if (!provider) {
@@ -94,7 +95,7 @@ process.on("message", message => {
         throw error;
       }
       const execution = message.execution ?? {};
-      const agent = new Agent({
+      agent = new Agent({
         provider,
         model: message.model,
         tools: message.tools ?? [],
@@ -105,13 +106,15 @@ process.on("message", message => {
         maxToolCalls: execution.maxToolCalls,
       });
       const completion = await agent.run(message.task);
-      await finish({ type: "completed", completion });
+      await finish({ type: "completed", completion, usage: agent.getUsage() });
     } catch (error) {
+      const usage = agent?.getUsage() ?? null;
       if (error?.blocked) {
         await finish({
           type: "blocked",
           error: error.message,
           approvalId: error.approvalId ?? null,
+          usage,
         });
         return;
       }
@@ -119,6 +122,7 @@ process.on("message", message => {
         type: "failed",
         error: error instanceof Error ? error.message : String(error),
         diagnostics: failureDiagnostics(error),
+        usage,
       });
     }
   })();
