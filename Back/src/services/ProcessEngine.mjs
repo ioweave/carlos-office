@@ -30,6 +30,17 @@ const activeRuns = new Map();
 const workflowTransitions = new Map();
 const ORPHANED_ATTEMPT_REASON = "Previous Agent process is no longer active";
 const RESERVED_INPUT_NAMES = new Set(["workflow", "upstream", "runtime"]);
+const DEFAULT_MAX_ATTEMPTS = 2;
+const RECOVERABLE_FAILURE_CODES = new Set([
+  "provider_error",
+  "provider_transient_error",
+  "provider_inference_timeout",
+  "invalid_completion_repair",
+  "agent_process_error",
+  "agent_process_exit",
+  "task_inactivity_timeout",
+]);
+const READ_ONLY_TOOLS = new Set(["read-file", "http-content", "workspace-variables"]);
 
 const errorMessage = error => error instanceof Error ? error.message : String(error);
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -40,6 +51,7 @@ const failureDiagnostics = (error, phase = "process", code = "execution_failure"
       phase: typeof error.phase === "string" && error.phase ? error.phase : phase,
       code: typeof error.code === "string" && error.code ? error.code : code,
       message: typeof error.message === "string" && error.message ? error.message : errorMessage(error),
+      ...(typeof error.retryable === "boolean" ? { retryable: error.retryable } : {}),
       ...(Array.isArray(error.toolFailures) ? { toolFailures: structuredClone(error.toolFailures) } : {}),
     };
   }
@@ -65,10 +77,22 @@ const selectionFrom = (value, validateModelSelection, models = []) => {
   }
 };
 
-const upstreamTaskIds = (workflow, taskId) => workflow.edges
-  .filter(([, to]) => to === taskId)
-  .map(([from]) => from)
-  .filter(id => workflow.tasks[id]?.type === "task");
+const ancestorTaskIds = (workflow, taskId) => {
+  const reverse = new Map(Object.keys(workflow.tasks ?? {}).map(id => [id, []]));
+  for (const [from, to] of workflow.edges ?? []) {
+    if (!reverse.has(to)) reverse.set(to, []);
+    reverse.get(to).push(from);
+  }
+  const result = new Set();
+  const pending = [...(reverse.get(taskId) ?? [])];
+  while (pending.length) {
+    const id = pending.pop();
+    if (result.has(id)) continue;
+    result.add(id);
+    for (const parent of reverse.get(id) ?? []) pending.push(parent);
+  }
+  return [...result].filter(id => workflow.tasks[id]?.type === "task");
+};
 const latestCompletedAttempt = task => [...(task.attempts ?? [])].reverse().find(attempt => attempt.status === "completed") ?? null;
 const attemptValue = attempt => attempt?.data != null ? attempt.data : attempt?.output;
 
@@ -100,17 +124,13 @@ const resolveTaskInput = (workflow, taskId, task) => {
   );
   const workflowInput = materializeMapData(structuredClone(workflow.inputs ?? {}), retainedMapIds);
   const upstream = {};
-  const available = {
-    workflow: structuredClone(workflowInput),
-    upstream,
-    runtime: {},
-  };
+  const available = { workflow: structuredClone(workflowInput), upstream, runtime: {} };
   for (const [name, value] of Object.entries(workflowInput)) {
     if (!RESERVED_INPUT_NAMES.has(name)) available[name] = structuredClone(value);
   }
 
   const collisions = new Set();
-  for (const upstreamId of upstreamTaskIds(workflow, taskId)) {
+  for (const upstreamId of ancestorTaskIds(workflow, taskId)) {
     const upstreamTask = workflow.tasks[upstreamId];
     const attempt = latestCompletedAttempt(upstreamTask);
     if (!attempt) continue;
@@ -134,7 +154,8 @@ const resolveTaskInput = (workflow, taskId, task) => {
       throw new Error(`Task input "${name}" is ambiguous. Use workflow.${name} or upstream.${name}.`);
     }
     const value = getPath(available, name);
-    if (value !== undefined) setPath(selected, name, value);
+    if (value === undefined) throw new Error(`Task input "${name}" could not be resolved before execution`);
+    setPath(selected, name, value);
   }
   return selected;
 };
@@ -149,14 +170,13 @@ const loadSkills = names => names.map(name => {
   if (!skill) throw new Error(`Unknown Skill: ${name}`);
   return skill;
 });
+const skillDescription = content => String(content ?? "")
+  .split(/\r?\n/)
+  .map(line => line.trim())
+  .find(Boolean)
+  ?.replace(/^#+\s*/, "") ?? "";
 
-const finishAttempt = async (workflowId, taskId, attemptId, changes) => {
-  const result = await updateTaskAttempt(
-    workflowId,
-    taskId,
-    attemptId,
-    { ...changes, endedAt: new Date().toISOString() },
-  );
+const clearAttemptJournal = async (workflowId, taskId, attemptId) => {
   try { await clearInvocationJournal(workflowId, taskId, attemptId); } catch (error) {
     console.warn("[invocations] Could not clear completed Attempt journal.", {
       workflowId,
@@ -165,7 +185,29 @@ const finishAttempt = async (workflowId, taskId, attemptId, changes) => {
       message: errorMessage(error),
     });
   }
+};
+
+const finishAttempt = async (workflowId, taskId, attemptId, changes) => {
+  const result = await updateTaskAttempt(
+    workflowId,
+    taskId,
+    attemptId,
+    { ...changes, endedAt: new Date().toISOString() },
+  );
+  await clearAttemptJournal(workflowId, taskId, attemptId);
   return result;
+};
+
+const settleAttemptAndTask = async (workflowId, taskId, attemptId, changes, taskStatus) => {
+  const updated = updateTaskAttemptRuntime(
+    workflowId,
+    taskId,
+    attemptId,
+    { ...changes, endedAt: new Date().toISOString() },
+  );
+  await setTaskStatus(workflowId, taskId, taskStatus);
+  await clearAttemptJournal(workflowId, taskId, attemptId);
+  return updated;
 };
 
 const liveAgentForTask = (workflowId, taskId) => listActiveAgents().find(
@@ -246,8 +288,12 @@ export const selectTaskExecution = async ({
   if (!task || task.type !== "task") throw new Error(`Unknown executable Task: ${taskId}`);
 
   const availableModels = models.map(entry => ({ provider: entry.provider, models: Array.isArray(entry.models) ? [...entry.models] : [] }));
-  const availableTools = listTools().map(tool => ({ name: tool.name, description: tool.description ?? "", requiresApproval: Boolean(tool.requiresApproval) }));
-  const availableSkills = listSkills().map(({ name, content }) => ({ name, content }));
+  const availableTools = listTools().map(tool => ({
+    name: tool.name,
+    description: tool.description ?? "",
+    requiresApproval: Boolean(tool.requiresApproval),
+  }));
+  const availableSkills = listSkills().map(({ name, content }) => ({ name, description: skillDescription(content) }));
   const toolNames = new Set(availableTools.map(tool => tool.name));
   const skillNames = new Set(availableSkills.map(skill => skill.name));
   const fixedModel = selectionFrom(task, validateModelSelection, availableModels);
@@ -296,7 +342,9 @@ const importDeclaredArtifacts = async (workflow, completion) => {
   if (!conversationId) return { output: completion.output, data: completion.data ?? null, artifacts: [] };
   const artifactIds = [];
   for (const declaration of declarations) {
-    if (!isObject(declaration) || typeof declaration.path !== "string" || !declaration.path.trim()) throw new Error("Agent declared an invalid Artifact path");
+    if (!isObject(declaration) || typeof declaration.path !== "string" || !declaration.path.trim()) {
+      throw new Error("Agent declared an invalid Artifact path");
+    }
     const artifact = await importArtifact({
       conversationId,
       sourcePath: declaration.path,
@@ -319,6 +367,20 @@ const appendInvocation = (workflowId, taskId, attemptId, invocation) => withWork
     return updateTaskAttemptRuntime(workflowId, taskId, attemptId, { invocations });
   },
 );
+
+const toolCallIsSafeToReplay = call => {
+  if (!call || typeof call.tool !== "string") return false;
+  if (READ_ONLY_TOOLS.has(call.tool)) return true;
+  if (call.tool !== "http") return false;
+  return ["GET", "OPTIONS"].includes(String(call.input?.method || "GET").toUpperCase());
+};
+const resultCanRetrySafely = result => {
+  if (result?.status !== "failed") return false;
+  const diagnostics = result.diagnostics ?? {};
+  if (diagnostics.retryable !== true && !RECOVERABLE_FAILURE_CODES.has(diagnostics.code)) return false;
+  const calls = Array.isArray(result.toolCalls) ? result.toolCalls : [];
+  return calls.every(toolCallIsSafeToReplay);
+};
 
 const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSelection }) => {
   if (runState?.cancelled) return null;
@@ -358,6 +420,7 @@ const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSe
       input: structuredClone(input),
       tools: [...execution.tools],
       skills: [...execution.skills],
+      execution: structuredClone(latestTask.execution ?? {}),
       executionGroups: getTaskExecutionGroups(latestWorkflow, taskId),
       startedAt: new Date().toISOString(),
       endedAt: null,
@@ -411,10 +474,12 @@ const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSe
       input,
       checkpointInvocations: checkpointAttempt?.invocations ?? [],
       isCancelled: () => Boolean(runState?.cancelled || getWorkflow(workflowId)?.status === "paused"),
+      canRetryInvocation: resultCanRetrySafely,
       recordInvocation: invocation => appendInvocation(workflowId, taskId, attempt.id, invocation),
       runAgent: ({ invocationId, input: invocationInput }) => runAgentProcess({
         workflowId,
         taskId,
+        attemptId: attempt.id,
         invocationId,
         task: { ...task, input: invocationInput },
         provider: execution.provider,
@@ -488,42 +553,78 @@ const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSe
       };
     }
     if (result.status === "completed") {
-      const completed = await finishAttempt(workflowId, taskId, attempt.id, {
-        ...runtime,
-        status: "completed",
-        output: completion.output,
-        data: completion.data,
-        artifacts: completion.artifacts,
-        error: null,
-        diagnostics: null,
-        blockedReason: null,
-      });
-      if (currentTask.status === "running" && current.status === "running") await setTaskStatus(workflowId, taskId, "completed");
+      const completed = currentTask.status === "running" && current.status === "running"
+        ? await settleAttemptAndTask(workflowId, taskId, attempt.id, {
+          ...runtime,
+          status: "completed",
+          output: completion.output,
+          data: completion.data,
+          artifacts: completion.artifacts,
+          error: null,
+          diagnostics: null,
+          blockedReason: null,
+        }, "completed")
+        : await finishAttempt(workflowId, taskId, attempt.id, {
+          ...runtime,
+          status: "completed",
+          output: completion.output,
+          data: completion.data,
+          artifacts: completion.artifacts,
+          error: null,
+          diagnostics: null,
+          blockedReason: null,
+        });
       return { event: "attempt.completed", attempt: completed };
     }
     if (result.status === "blocked") {
       const reason = result.error || "Carlos approval required";
-      const blocked = await finishAttempt(workflowId, taskId, attempt.id, {
-        ...runtime,
-        status: "blocked",
-        error: null,
-        diagnostics: null,
-        blockedReason: reason,
-        approvalId: result.approvalId ?? null,
-      });
-      if (currentTask.status === "running" && current.status === "running") await setTaskStatus(workflowId, taskId, "blocked");
+      const blocked = currentTask.status === "running" && current.status === "running"
+        ? await settleAttemptAndTask(workflowId, taskId, attempt.id, {
+          ...runtime,
+          status: "blocked",
+          error: null,
+          diagnostics: null,
+          blockedReason: reason,
+          approvalId: result.approvalId ?? null,
+        }, "blocked")
+        : await finishAttempt(workflowId, taskId, attempt.id, {
+          ...runtime,
+          status: "blocked",
+          error: null,
+          diagnostics: null,
+          blockedReason: reason,
+          approvalId: result.approvalId ?? null,
+        });
       return { event: "attempt.blocked", attempt: blocked, approvalId: result.approvalId ?? null };
     }
 
     const message = result.error || "Agent process failed";
     const diagnostics = failureDiagnostics({ ...result, message, diagnostics: result.diagnostics }, "process", "agent_process_failure");
-    const failed = await finishAttempt(workflowId, taskId, attempt.id, {
-      ...runtime,
-      status: "failed",
-      error: message,
-      diagnostics,
-    });
-    if (currentTask.status === "running" && current.status === "running") await setTaskStatus(workflowId, taskId, "failed");
+    const maxAttempts = task.execution?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+    const canRetry = attempt.attempt < maxAttempts && resultCanRetrySafely({ ...result, diagnostics });
+    if (canRetry && currentTask.status === "running" && current.status === "running") {
+      const failed = await settleAttemptAndTask(workflowId, taskId, attempt.id, {
+        ...runtime,
+        status: "failed",
+        error: message,
+        diagnostics: { ...diagnostics, recovery: "automatic_retry" },
+      }, "pending");
+      return { event: "attempt.retry_scheduled", attempt: failed, retry: true, error: message, diagnostics };
+    }
+
+    const failed = currentTask.status === "running" && current.status === "running"
+      ? await settleAttemptAndTask(workflowId, taskId, attempt.id, {
+        ...runtime,
+        status: "failed",
+        error: message,
+        diagnostics,
+      }, "failed")
+      : await finishAttempt(workflowId, taskId, attempt.id, {
+        ...runtime,
+        status: "failed",
+        error: message,
+        diagnostics,
+      });
     return { event: "attempt.failed", attempt: failed, error: message, diagnostics };
   });
 
@@ -533,6 +634,7 @@ const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSe
     attemptId: attempt.id,
     agentId: runtime.agentId,
     artifacts: outcome.attempt?.artifacts ?? [],
+    ...(outcome.retry ? { retry: true } : {}),
     ...(outcome.approvalId ? { approvalId: outcome.approvalId } : {}),
     ...(outcome.error ? { error: outcome.error } : {}),
     ...(outcome.diagnostics ? { diagnostics: outcome.diagnostics } : {}),
@@ -566,14 +668,18 @@ const runWorkflowInternal = async ({
       try {
         const currentWorkflow = getWorkflow(workflowId);
         const noraSelection = getNoraSelection(currentWorkflow);
-        const execution = await selectTaskExecution({
-          workflowId,
-          taskId: task.id,
-          decide,
-          noraSelection,
-          models,
-          validateModelSelection,
-        });
+        let execution = runState.executionByTask.get(task.id) ?? null;
+        if (!execution) {
+          execution = await selectTaskExecution({
+            workflowId,
+            taskId: task.id,
+            decide,
+            noraSelection,
+            models,
+            validateModelSelection,
+          });
+          runState.executionByTask.set(task.id, structuredClone(execution));
+        }
         const latest = getWorkflow(workflowId);
         if (runState.cancelled || latest?.status !== "running" || latest.tasks?.[task.id]?.status !== "ready") continue;
         assignments.push({ taskId: task.id, execution, noraSelection });
@@ -597,7 +703,7 @@ export const runWorkflow = options => {
     if (!existing.cancelled) return existing.promise;
     return existing.promise.then(() => runWorkflow(options));
   }
-  const runState = { cancelled: false, promise: null };
+  const runState = { cancelled: false, promise: null, executionByTask: new Map() };
   const promise = runWorkflowInternal({ ...options, runState }).finally(() => {
     if (activeRuns.get(options.workflowId) === runState) activeRuns.delete(options.workflowId);
   });

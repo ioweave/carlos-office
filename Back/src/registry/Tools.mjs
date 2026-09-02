@@ -88,6 +88,48 @@ const publishRegistry = discovered => {
   notifyOfficeStateChanged("toolsRevision");
 };
 
+const inputError = (toolName, message) => {
+  const error = new Error(`Tool ${toolName} input invalid: ${message}`);
+  error.code = "tool_input_invalid";
+  error.retryable = false;
+  error.hint = "Regenerate the Tool call using only the declared properties and required top-level types/enums.";
+  return error;
+};
+const matchesType = (value, type) => {
+  if (type === "null") return value === null;
+  if (type === "array") return Array.isArray(value);
+  if (type === "object") return isObject(value);
+  if (type === "integer") return Number.isSafeInteger(value);
+  if (type === "number") return typeof value === "number" && Number.isFinite(value);
+  return typeof value === type;
+};
+
+export const validateToolInput = (tool, input) => {
+  if (!tool || typeof tool !== "object") throw new Error("Tool definition is required");
+  if (!isObject(input)) throw inputError(tool.name, "input must be one JSON object");
+  const schema = tool.input;
+  for (const required of schema.required ?? []) {
+    if (!Object.prototype.hasOwnProperty.call(input, required)) throw inputError(tool.name, `missing required property ${required}`);
+  }
+  if (schema.additionalProperties === false) {
+    for (const name of Object.keys(input)) {
+      if (!Object.prototype.hasOwnProperty.call(schema.properties, name)) throw inputError(tool.name, `unknown property ${name}`);
+    }
+  }
+  for (const [name, value] of Object.entries(input)) {
+    const property = schema.properties?.[name];
+    if (!property) continue;
+    const types = Array.isArray(property.type) ? property.type : property.type ? [property.type] : [];
+    if (types.length && !types.some(type => matchesType(value, type))) {
+      throw inputError(tool.name, `property ${name} must match type ${types.join(" or ")}`);
+    }
+    if (Array.isArray(property.enum) && !property.enum.some(candidate => Object.is(candidate, value))) {
+      throw inputError(tool.name, `property ${name} must be one of the declared enum values`);
+    }
+  }
+  return structuredClone(input);
+};
+
 export const loadTools = async () => {
   await mkdir(toolsDir, { recursive: true });
   const files = await readdir(toolsDir);
@@ -105,7 +147,6 @@ export const loadTools = async () => {
     }
   }
 
-  // Never destroy a healthy live registry because a reload pass produced nothing.
   if (discovered.size || !tools.size || !filenames.length) publishRegistry(discovered);
   else console.error("[tools] Reload produced no valid Tools; preserving the previous registry.");
   return tools;

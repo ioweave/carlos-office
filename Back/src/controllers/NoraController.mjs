@@ -27,7 +27,7 @@ import {
 } from "./ProcessController.mjs";
 import { getNora } from "../registry/Nora.mjs";
 import { listSkills } from "../registry/Skills.mjs";
-import { listTools, readToolSource } from "../registry/Tools.mjs";
+import { listTools } from "../registry/Tools.mjs";
 import { cleanupWorkflowRuntime } from "../services/ExecutionWorkspaceService.mjs";
 import {
   createOrUpdateSkill as saveNoraSkill,
@@ -56,6 +56,9 @@ const state = {
 };
 const workflowReports = new Map();
 const requestJobs = new Map();
+const MAX_DECISION_MESSAGES = 24;
+const MAX_DECISION_MESSAGE_CHARS = 12_000;
+const MAX_ATTACHMENT_TEXT_CHARS = 200_000;
 const WORKFLOW_SUMMARY_SCHEMA = Object.freeze({
   type: "object",
   properties: { summary: { type: "string" } },
@@ -84,6 +87,11 @@ const isCancelledError = (error, signal = null) => Boolean(
   || error?.name === "AbortError"
   || error?.code === "nora_request_cancelled"
 );
+const cappedText = (value, maxChars) => {
+  const text = String(value ?? "");
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n\n[Context truncated by Carlos Office; use a Workflow/Tool to inspect the complete source if needed.]`;
+};
 
 const publicRequestJob = job => ({
   id: job.id,
@@ -194,7 +202,7 @@ export const setConversationModel = async (conversationId, selection) => {
 
   for (const workflowId of conversation.workflows) {
     const workflow = getWorkflow(workflowId);
-    if (!workflow || ["completed", "cancelled", "failed"].includes(workflow.status)) continue;
+    if (!workflow || ["running", "completed", "cancelled", "failed"].includes(workflow.status)) continue;
     await setWorkflowConfig(workflowId, { ...(workflow.config ?? {}), nora: structuredClone(selected) });
   }
 
@@ -215,15 +223,14 @@ const summarizeProcesses = () => listProcesses().map(({ name, purpose = "", inpu
   inputs,
 }));
 
-const summarizeTools = async () => Promise.all(listTools().map(async tool => ({
+const summarizeTools = () => listTools().map(tool => ({
   name: tool.name,
   description: tool.description ?? "",
   requiresApproval: Boolean(tool.requiresApproval),
   provider: tool.provider ?? null,
   model: tool.model ?? null,
   input: structuredClone(tool.input ?? {}),
-  source: await readToolSource(tool.name),
-})));
+}));
 
 const skillDescription = content => String(content ?? "")
   .split(/\r?\n/)
@@ -236,12 +243,14 @@ const summarizeSkills = () => listSkills().map(({ name, content }) => ({
   description: skillDescription(content),
 }));
 
-const conversationForModel = conversation => conversation.messages.map(({
-  actor,
-  content,
-  attachments = [],
-  artifacts = [],
-}) => ({ actor, content, attachments, artifacts }));
+const conversationForModel = conversation => conversation.messages
+  .slice(-MAX_DECISION_MESSAGES)
+  .map(({ actor, content, attachments = [], artifacts = [] }) => ({
+    actor,
+    content: cappedText(content, MAX_DECISION_MESSAGE_CHARS),
+    attachments,
+    artifacts,
+  }));
 
 const isTextAttachment = attachment => {
   const type = String(attachment.type ?? "").toLowerCase();
@@ -259,7 +268,7 @@ const loadRequestAttachments = async (conversationId, attachmentIds) => Promise.
     let content = null;
     if (isTextAttachment(attachment)) {
       const bytes = await readAttachment(conversationId, attachmentId);
-      content = bytes?.toString("utf8") ?? "";
+      content = cappedText(bytes?.toString("utf8") ?? "", MAX_ATTACHMENT_TEXT_CHARS);
     }
 
     return { id: attachment.id, name: attachment.name, type: attachment.type, content };
@@ -434,7 +443,7 @@ const finishConversationWorkflow = async ({ conversationId, workflowId, action }
     const response = finalWorkflow.status === "blocked"
       ? `Workflow ${workflowId} is blocked and requires attention.`
       : finalWorkflow.status === "failed"
-        ? `Workflow ${workflowId} stopped because a Task failed.`
+        ? `Workflow ${workflowId} stopped because a Task failed after bounded recovery.`
         : finalWorkflow.status === "paused"
           ? `Workflow ${workflowId} was stopped and can be edited or resumed.`
           : finalWorkflow.status === "stalled"
@@ -535,7 +544,7 @@ export const handleCarlosRequest = async ({
         conversation: conversationForModel(conversation),
         requestAttachments,
         availableProcesses: summarizeProcesses(),
-        availableTools: await summarizeTools(),
+        availableTools: summarizeTools(),
         availableSkills: summarizeSkills(),
       },
       noraSelection,
@@ -543,9 +552,7 @@ export const handleCarlosRequest = async ({
     ensureNotCancelled();
 
     if (!isObject(decision)) throw new Error("Nora decision must be an object");
-    if (typeof decision.action !== "string" || !decision.action.trim()) {
-      throw new Error("Nora decision must include an action");
-    }
+    if (typeof decision.action !== "string" || !decision.action.trim()) throw new Error("Nora decision must include an action");
     if (decision.response != null && typeof decision.response !== "string") {
       throw new Error("Nora decision response must be a string when present");
     }
@@ -833,8 +840,9 @@ export const reviewFailedTask = async (workflowId, taskId) => {
 
   const decision = await askNoraForJson(
     [
-      "Review this failed Task.",
-      "Retry only if the problem is operational, safe to recover, and does not require new human authority.",
+      "Review this failed Task after Carlos Office exhausted its bounded automatic recovery.",
+      "Retry only if the remaining problem is operational, safe to recover, and does not require new human authority.",
+      "Do not recommend repeating an unchanged deterministic Tool failure.",
       "Return one of:",
       '{"action":"retry","reason":"...","taskChanges":{}}',
       '{"action":"escalate","reason":"..."}',

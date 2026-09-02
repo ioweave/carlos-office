@@ -478,7 +478,7 @@ export const setWorkflowDesign = async (workflowId, { layout, groups }) => {
 export const setWorkflowLayout = async (workflowId, layout) => setWorkflowDesign(workflowId, { layout });
 export const setWorkflowInputs = async (workflowId, inputs) => {
   if (!isObject(inputs)) throw new Error("Workflow inputs must be an object");
-  const draft = structuredClone(requireWorkflow(workflowId));
+  const draft = structuredClone(requireEditableWorkflow(workflowId));
   draft.inputs = structuredClone(inputs);
   await commitWorkflow(draft);
   await recordEvent("workflow.inputs_changed", { workflowId });
@@ -486,11 +486,10 @@ export const setWorkflowInputs = async (workflowId, inputs) => {
 };
 export const setWorkflowConfig = async (workflowId, config) => {
   if (!isObject(config)) throw new Error("Workflow config must be an object");
-  const draft = structuredClone(requireWorkflow(workflowId));
+  const draft = structuredClone(requireEditableWorkflow(workflowId));
   const storedConfig = structuredClone(config);
   const legacyLayout = storedConfig?._ui?.layout;
   if (legacyLayout != null) {
-    if (draft.status === "running") throw new Error(`Workflow ${workflowId} is running and its layout is locked`);
     draft.layout = normalizeLayout(draft, legacyLayout);
     delete storedConfig._ui.layout;
   }

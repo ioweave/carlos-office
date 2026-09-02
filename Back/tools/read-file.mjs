@@ -1,5 +1,8 @@
-import { readFile, stat } from "node:fs/promises";
+import { open, stat } from "node:fs/promises";
 import { resolve } from "node:path";
+
+const DEFAULT_READ_BYTES = 100_000;
+const MAX_READ_BYTES = 1_000_000;
 
 const fileError = (message, code, hint = null) => {
   const error = new Error(`read-file: ${message}`);
@@ -11,19 +14,24 @@ const fileError = (message, code, hint = null) => {
 
 const tool = {
   name: "read-file",
-  description: "Reads one regular file from the local filesystem and returns its text content with metadata. This Tool does not list directories; use an appropriate discovery or command Tool to locate files before reading them.",
+  description: "Reads a byte range from one regular local file. This Tool does not list directories. Reads are intentionally bounded so large files do not flood model context; use start/length to inspect additional ranges after discovery.",
   requiresApproval: false,
   input: {
     type: "object",
     properties: {
       path: { type: "string", description: "Absolute or relative path to the regular file to read." },
-      encoding: { type: "string", description: "Text encoding to use when decoding the file.", default: "utf8" },
-      maxBytes: { type: "number", description: "Maximum file size in bytes allowed to be read.", default: 5242880 },
+      encoding: { type: "string", description: "Text encoding used to decode returned bytes.", default: "utf8" },
+      start: { type: "number", description: "Zero-based byte offset. Defaults to 0.", default: 0 },
+      length: { type: "number", description: `Bytes to read, maximum ${MAX_READ_BYTES}.`, default: DEFAULT_READ_BYTES },
+      maxBytes: {
+        type: "number",
+        description: "Legacy alias for length when length is omitted. Kept for compatibility with older Tasks.",
+      },
     },
     required: ["path"],
     additionalProperties: false,
   },
-  async execute({ path, encoding = "utf8", maxBytes = 5242880 } = {}) {
+  async execute({ path, encoding = "utf8", start = 0, length = null, maxBytes = null } = {}) {
     if (typeof path !== "string" || path.length === 0) {
       throw fileError(
         '"path" is required and must be a non-empty string.',
@@ -31,8 +39,11 @@ const tool = {
         "Provide the path property exactly as declared by the read-file Tool schema.",
       );
     }
-    if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
-      throw fileError('"maxBytes" must be a positive number.', "tool_invalid_input");
+    if (!Number.isSafeInteger(start) || start < 0) throw fileError('"start" must be a non-negative integer.', "tool_invalid_input");
+
+    const requested = length ?? maxBytes ?? DEFAULT_READ_BYTES;
+    if (!Number.isSafeInteger(requested) || requested < 1 || requested > MAX_READ_BYTES) {
+      throw fileError(`"length" must be an integer from 1 to ${MAX_READ_BYTES}.`, "tool_invalid_input");
     }
 
     const abs = resolve(path);
@@ -64,16 +75,33 @@ const tool = {
         "Do not use read-file to inspect directories. Locate a regular file first or use a discovery/command Tool.",
       );
     }
-    if (info.size > maxBytes) {
-      throw fileError(
-        `file too large (${info.size} bytes > ${maxBytes} limit).`,
-        "file_too_large",
-        "Increase maxBytes deliberately or read a smaller file.",
-      );
+
+    const offset = Math.min(start, info.size);
+    const bytes = Math.min(requested, info.size - offset);
+    if (bytes <= 0) {
+      return { path: abs, start: offset, end: offset, bytes: 0, totalBytes: info.size, eof: true, encoding, content: "" };
     }
 
-    const content = await readFile(abs, { encoding });
-    return { path: abs, bytes: info.size, encoding, content };
+    const handle = await open(abs, "r");
+    try {
+      const buffer = Buffer.allocUnsafe(bytes);
+      const { bytesRead } = await handle.read(buffer, 0, bytes, offset);
+      return {
+        path: abs,
+        start: offset,
+        end: offset + bytesRead,
+        bytes: bytesRead,
+        totalBytes: info.size,
+        eof: offset + bytesRead >= info.size,
+        encoding,
+        content: buffer.subarray(0, bytesRead).toString(encoding),
+        instruction: offset + bytesRead < info.size
+          ? `File continues. Read the next range with start=${offset + bytesRead}; keep reads narrow.`
+          : "End of file reached.",
+      };
+    } finally {
+      await handle.close();
+    }
   },
 };
 

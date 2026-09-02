@@ -10,6 +10,7 @@ export const runExternalCommand = ({
   env = {},
   timeoutMs = 300_000,
   signal = null,
+  rejectOnNonZero = true,
 }) => new Promise((resolve, reject) => {
   if (typeof command !== "string" || !command.trim()) throw new Error("External command must be a non-empty string");
   if (!Array.isArray(args) || args.some(arg => typeof arg !== "string")) throw new Error("External command args must be strings");
@@ -35,10 +36,11 @@ export const runExternalCommand = ({
     if (error) reject(error);
     else resolve(result);
   };
-  const fail = (message, code, retryable = false) => {
+  const fail = (message, code, retryable = false, details = {}) => {
     const error = new Error(message);
     error.code = code;
     error.retryable = retryable;
+    Object.assign(error, details);
     return error;
   };
   const collect = target => chunk => {
@@ -66,12 +68,13 @@ export const runExternalCommand = ({
   child.on("error", error => finish(error));
   child.on("close", code => {
     if (settled) return;
-    if (code !== 0) {
-      const detail = stderr.trim() || stdout.trim() || `exit code ${code}`;
-      finish(fail(`External command failed: ${detail}`, "external_command_failed"));
+    const result = { exitCode: code ?? -1, stdout: stdout.trim(), stderr: stderr.trim() };
+    if (code !== 0 && rejectOnNonZero) {
+      const detail = result.stderr || result.stdout || `exit code ${code}`;
+      finish(fail(`External command failed: ${detail}`, "external_command_failed", false, result));
       return;
     }
-    finish(null, { stdout: stdout.trim(), stderr: stderr.trim() });
+    finish(null, result);
   });
 
   if (signal?.aborted) {

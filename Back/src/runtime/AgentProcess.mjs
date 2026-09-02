@@ -5,27 +5,57 @@ import { Agent } from "./Agent.mjs";
 
 const { providers } = await createConfiguredProviders();
 const pendingTools = new Map();
+const HEARTBEAT_MS = 15_000;
+const IPC_FLUSH_TIMEOUT_MS = 2_000;
 let running = false;
+let heartbeat = null;
 
-const send = message => {
-  if (process.connected) process.send(message);
+const send = (message, callback = null) => {
+  if (!process.connected) {
+    callback?.(new Error("Agent IPC channel is closed"));
+    return false;
+  }
+  process.send(message, callback ?? undefined);
+  return true;
 };
 
 const invokeTool = call => new Promise((resolve, reject) => {
   const requestId = randomUUID();
   pendingTools.set(requestId, { resolve, reject });
-  send({ type: "tool", requestId, call: structuredClone(call) });
+  send({ type: "tool", requestId, call: structuredClone(call) }, error => {
+    if (!error) return;
+    pendingTools.delete(requestId);
+    reject(error);
+  });
 });
 
-const finish = message => {
-  send(message);
-  setImmediate(() => process.exit(0));
-};
+const finish = message => new Promise(resolve => {
+  if (heartbeat) clearInterval(heartbeat);
+  heartbeat = null;
+
+  let settled = false;
+  const done = () => {
+    if (settled) return;
+    settled = true;
+    resolve();
+  };
+  const timer = setTimeout(done, IPC_FLUSH_TIMEOUT_MS);
+  timer.unref?.();
+
+  if (!send(message, () => {
+    clearTimeout(timer);
+    done();
+  })) {
+    clearTimeout(timer);
+    done();
+  }
+}).finally(() => process.exit(0));
 
 const failureDiagnostics = error => ({
   phase: typeof error?.phase === "string" && error.phase ? error.phase : "agent",
   code: typeof error?.code === "string" && error.code ? error.code : "agent_failure",
   message: error instanceof Error ? error.message : String(error),
+  ...(typeof error?.retryable === "boolean" ? { retryable: error.retryable } : {}),
 });
 
 process.on("message", message => {
@@ -51,6 +81,8 @@ process.on("message", message => {
 
   if (message?.type !== "run" || running) return;
   running = true;
+  heartbeat = setInterval(() => send({ type: "heartbeat" }), HEARTBEAT_MS);
+  heartbeat.unref?.();
 
   void (async () => {
     try {
@@ -73,17 +105,17 @@ process.on("message", message => {
         maxToolCalls: execution.maxToolCalls,
       });
       const completion = await agent.run(message.task);
-      finish({ type: "completed", completion });
+      await finish({ type: "completed", completion });
     } catch (error) {
       if (error?.blocked) {
-        finish({
+        await finish({
           type: "blocked",
           error: error.message,
           approvalId: error.approvalId ?? null,
         });
         return;
       }
-      finish({
+      await finish({
         type: "failed",
         error: error instanceof Error ? error.message : String(error),
         diagnostics: failureDiagnostics(error),

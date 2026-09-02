@@ -4,6 +4,9 @@ const MAX_REASONING_TURNS = 16;
 const MAX_TOOL_CALLS = 24;
 const MAX_PROVIDER_ATTEMPTS = 3;
 const MAX_SAFE_TOOL_ATTEMPTS = 3;
+const MAX_TOOL_RESULT_CHARS = 120_000;
+const MAX_ACTIVE_TOOL_CONTEXT_CHARS = 360_000;
+const FAILED_CALL_MEMORY_TURNS = 4;
 const RETRY_BACKOFF_MS = [300, 900];
 const COMPLETION_SCHEMA = {
   type: "object",
@@ -32,11 +35,40 @@ const COMPLETION_SCHEMA_TEXT = JSON.stringify(COMPLETION_SCHEMA);
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
+const cappedText = text => {
+  if (text.length <= MAX_TOOL_RESULT_CHARS) return text;
+  const tailChars = Math.min(20_000, Math.floor(MAX_TOOL_RESULT_CHARS / 4));
+  const headChars = MAX_TOOL_RESULT_CHARS - tailChars;
+  return [
+    text.slice(0, headChars),
+    `\n\n[Tool result truncated for model context: ${text.length} characters total.`,
+    "Use a narrower Tool request, range read, search operation, or stored-content handle for omitted data.]\n\n",
+    text.slice(-tailChars),
+  ].join("");
+};
+
 const resultToText = result => {
-  if (typeof result === "string") return result;
-  if (Buffer.isBuffer(result)) return result.toString("utf8");
-  if (result === undefined) return "";
-  return JSON.stringify(result, null, 2);
+  let text;
+  if (typeof result === "string") text = result;
+  else if (Buffer.isBuffer(result)) text = result.toString("utf8");
+  else if (result === undefined) text = "";
+  else text = JSON.stringify(result, null, 2);
+  return cappedText(text);
+};
+
+const compactMessages = messages => {
+  const compacted = structuredClone(messages);
+  let retainedToolChars = 0;
+  for (let index = compacted.length - 1; index >= 0; index -= 1) {
+    const message = compacted[index];
+    if (message?.role !== "tool" || typeof message.content !== "string") continue;
+    if (retainedToolChars + message.content.length <= MAX_ACTIVE_TOOL_CONTEXT_CHARS) {
+      retainedToolChars += message.content.length;
+      continue;
+    }
+    message.content = "[Older Tool result omitted from active model context. Re-run a narrow read/search if it is still needed.]";
+  }
+  return compacted;
 };
 
 const describeTools = tools => tools.map(tool => ({
@@ -149,6 +181,15 @@ const canRetryToolError = (call, error) => (
   && error?.retryable === true
   && error?.code === "http_timeout"
 );
+const unsuccessfulToolResult = result => isObject(result) && result.ok === false;
+const unsuccessfulToolDetails = (call, result) => ({
+  message: Number.isInteger(result.status)
+    ? `${call.name} returned HTTP/status ${result.status}${result.statusText ? ` ${result.statusText}` : ""}`
+    : `${call.name} returned an unsuccessful result`,
+  code: Number.isInteger(result.status) ? `${call.name}_status_${result.status}` : `${call.name}_unsuccessful_result`,
+  retryable: false,
+  hint: "Inspect the returned status/body and change the endpoint, command, arguments, or strategy before retrying.",
+});
 
 export class Agent {
   constructor({
@@ -232,6 +273,7 @@ export class Agent {
         `Completion criteria:\n${task.completion ?? ""}`,
         `Resolved input:\n${JSON.stringify(task.input ?? {}, null, 2)}`,
         "Tool schemas are authoritative. Send only declared properties and satisfy required fields and declared types exactly.",
+        "Prefer narrow reads/searches and stored-content handles over loading large files or HTTP bodies into model context.",
         "When the Task is complete, return one JSON object with this exact shape:",
         '{"output":"human-readable Task result","data":null,"artifacts":[]}',
         "data may be any JSON value, including an array, object, scalar, or null. Use it when downstream Tasks would benefit from structured values.",
@@ -239,7 +281,7 @@ export class Agent {
         "For deliverables generated in your workspace, use the path returned by the filesystem Tool or a workspace-relative path.",
         "Do not declare ordinary source files, configuration files, or project files merely because you edited them.",
         "If there are no deliverable files, return an empty artifacts array.",
-        "When a Tool fails, inspect its structured error and change strategy. An unchanged deterministic failure is rejected without execution, so use that feedback to choose another Tool, path, endpoint, or argument set.",
+        "When a Tool fails or returns ok=false, inspect the structured result and change strategy instead of repeating it unchanged.",
       ].join("\n\n"),
     });
     messages.push({
@@ -254,7 +296,7 @@ export class Agent {
     let lastError;
     for (let attempt = 1; attempt <= MAX_PROVIDER_ATTEMPTS; attempt += 1) {
       try {
-        return await this.provider.generate({ model: this.model, messages, tools, format });
+        return await this.provider.generate({ model: this.model, messages: compactMessages(messages), tools, format });
       } catch (error) {
         lastError = error;
         if (error?.retryable !== true || attempt >= MAX_PROVIDER_ATTEMPTS) break;
@@ -353,7 +395,8 @@ export class Agent {
 
         const key = callKey(call);
         const priorFailure = failedCalls.get(key);
-        let error = priorFailure && !priorFailure.retryable
+        const recentFailure = priorFailure && reasoningTurns - priorFailure.turn <= FAILED_CALL_MEMORY_TURNS;
+        let error = recentFailure && !priorFailure.retryable
           ? Object.assign(new Error(`This exact Tool call already failed: ${priorFailure.message}`), {
             code: "repeated_failed_tool_call",
             retryable: false,
@@ -400,20 +443,29 @@ export class Agent {
         }
 
         if (!error) {
-          successfulTools += 1;
-          failedCalls.delete(key);
           messages.push({
             role: "tool",
             toolCallId: call.id ?? null,
             name: call.name,
             content: resultToText(result),
           });
+
+          if (!unsuccessfulToolResult(result)) {
+            successfulTools += 1;
+            failedCalls.delete(key);
+            continue;
+          }
+
+          failedTools += 1;
+          const details = unsuccessfulToolDetails(call, result);
+          failedCalls.set(key, { ...details, turn: reasoningTurns });
+          failureFingerprints.push(failureFingerprint(call, details));
           continue;
         }
 
         failedTools += 1;
         const details = toolFailureDetails(error);
-        failedCalls.set(key, details);
+        failedCalls.set(key, { ...details, turn: reasoningTurns });
         failureFingerprints.push(failureFingerprint(call, details));
         messages.push({
           role: "tool",
@@ -424,7 +476,6 @@ export class Agent {
       }
 
       if (successfulTools > 0) {
-        failedCalls.clear();
         noProgressTurns = 0;
         continue;
       }
@@ -443,11 +494,11 @@ export class Agent {
         messages.push({
           role: "system",
           content: [
-            `The previous Tool turn made no progress: all ${failedTools} Tool call${failedTools === 1 ? "" : "s"} failed.`,
+            `The previous Tool turn made no progress: all ${failedTools} Tool call${failedTools === 1 ? "" : "s"} failed or returned an unsuccessful result.`,
             `No-progress turn ${noProgressTurns} of ${this.maxNoProgressTurns}.`,
             `Distinct failures: ${uniqueFailures.length}.`,
-            "Use the error codes and hints to change the Tool, arguments, endpoint, file path, or strategy.",
-            "An unchanged deterministic failure will be rejected without executing it again; treat that rejection as feedback rather than a reason to stop.",
+            "Use the error codes/statuses and returned bodies to change the Tool, arguments, endpoint, file path, or strategy.",
+            "An unchanged deterministic failure is temporarily rejected without executing it again.",
           ].join(" "),
         });
       }

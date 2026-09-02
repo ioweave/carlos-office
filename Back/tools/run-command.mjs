@@ -9,7 +9,9 @@ const commandError = (message, code, hint = null) => {
   return error;
 };
 
-const shouldUseShell = (command, args) => {
+const shouldUseShell = (mode, command, args) => {
+  if (mode === "shell") return true;
+  if (mode === "direct") return false;
   if (/\s|[|&;<>()$`]/.test(command)) return true;
   if (args.length !== 1) return false;
 
@@ -17,7 +19,7 @@ const shouldUseShell = (command, args) => {
   const executable = command.split("/").at(-1);
   return argument.startsWith(`${command} `)
     || argument.startsWith(`${executable} `)
-    || /\s|[|&;<>()$`]/.test(argument);
+    || /[|&;<>()$`]/.test(argument);
 };
 
 const shellCommand = (command, args) => {
@@ -30,23 +32,34 @@ const shellCommand = (command, args) => {
 
 const tool = {
   name: "run-command",
-  description: "Runs a Linux command on the Carlos Office host. Prefer command as the executable plus tokenized args. For resilience, Carlos Office also accepts common shell-style model output such as one full command line in command or one full command line packed into a single args item; those forms are normalized through /bin/bash -lc so quoting, redirection, pipes, and environment variables work as expected. Relative working directories resolve inside the Agent workspace; absolute working directories are allowed when the Task explicitly requires inspecting an existing host path.",
+  description: "Runs a Linux command on the Carlos Office host. Prefer mode=direct with command plus tokenized args. Use mode=shell only when pipes, redirects, shell expansion, or compound shell syntax are required. mode=auto remains the compatibility default for tolerant LLM output. Non-zero exit codes are returned as structured results by default so discovery commands such as grep, test, and diff can be reasoned about without turning ordinary negative results into Tool exceptions.",
   requiresApproval: true,
   provider: null,
   model: null,
   input: {
     type: "object",
     properties: {
-      command: { type: "string", description: "Executable name or a complete Linux shell command line." },
+      command: { type: "string", description: "Executable name or, in shell mode, a complete Linux shell command line." },
       args: {
         type: "array",
         items: { type: "string" },
-        description: "Preferred: one array element per executable argument. A single full shell-style command line is also accepted and normalized automatically.",
+        description: "One array element per executable argument. In auto mode one shell-style command line is also tolerated.",
         default: [],
       },
+      mode: {
+        type: "string",
+        enum: ["direct", "shell", "auto"],
+        description: "Execution mode. direct preserves argv exactly; shell uses /bin/bash -lc; auto tolerates common LLM shell-style output.",
+        default: "auto",
+      },
       cwd: { type: "string", description: "Optional working directory. Relative paths resolve inside the Agent workspace." },
-      stdin: { type: ["string", "null"], description: "Optional UTF-8 text written to the command standard input.", default: null },
+      stdin: { type: ["string", "null"], description: "Optional UTF-8 text written to standard input.", default: null },
       timeoutMs: { type: "number", description: "Maximum runtime in milliseconds.", default: 300000 },
+      failOnNonZero: {
+        type: "boolean",
+        description: "When true, non-zero exit codes become Tool failures. Defaults to false so normal discovery negatives remain inspectable.",
+        default: false,
+      },
     },
     required: ["command"],
     additionalProperties: false,
@@ -54,6 +67,8 @@ const tool = {
   output: {
     type: "object",
     properties: {
+      ok: { type: "boolean" },
+      exitCode: { type: "number" },
       command: { type: "string" },
       args: { type: "array", items: { type: "string" } },
       mode: { type: "string", enum: ["direct", "shell"] },
@@ -70,6 +85,10 @@ const tool = {
     if (!Array.isArray(args) || args.some(argument => typeof argument !== "string")) {
       throw commandError('"args" must be an array of strings.', "tool_invalid_input");
     }
+    const mode = inputs.mode ?? "auto";
+    if (!["direct", "shell", "auto"].includes(mode)) {
+      throw commandError('"mode" must be direct, shell, or auto.', "tool_invalid_input");
+    }
     const timeoutMs = inputs.timeoutMs ?? 300_000;
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       throw commandError('"timeoutMs" must be a positive number.', "tool_invalid_input");
@@ -78,7 +97,7 @@ const tool = {
     const cwd = inputs.cwd
       ? resolveWorkspacePath(context.workspaceDir, inputs.cwd)
       : (context.workspaceDir ?? null);
-    const useShell = shouldUseShell(command, args);
+    const useShell = shouldUseShell(mode, command, args);
     const executedCommand = useShell ? "/bin/bash" : command;
     const executedArgs = useShell ? ["-lc", shellCommand(command, args)] : args;
 
@@ -90,8 +109,11 @@ const tool = {
         input: inputs.stdin ?? null,
         timeoutMs,
         signal: context.signal,
+        rejectOnNonZero: inputs.failOnNonZero === true,
       });
       return {
+        ok: result.exitCode === 0,
+        exitCode: result.exitCode,
         command,
         args: [...args],
         mode: useShell ? "shell" : "direct",

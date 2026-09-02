@@ -15,15 +15,19 @@ export const NORA_DECISION_SCHEMA = Object.freeze({
   properties: {
     action: { type: "string", enum: [...NORA_ACTIONS] },
     response: { type: "string" },
+    conversationTitle: { type: "string" },
     name: { type: "string" },
     source: { type: "string" },
     content: { type: "string" },
-    process: { type: "object" },
+    process: { type: ["string", "object"] },
     workflow: { type: "object" },
     schedule: { type: "object" },
-    steps: { type: "array" },
+    steps: { type: "array", items: { type: "object" } },
+    inputs: { type: "object" },
+    config: { type: "object" },
   },
   required: ["action"],
+  additionalProperties: false,
 });
 
 const actionSet = new Set(NORA_ACTIONS);

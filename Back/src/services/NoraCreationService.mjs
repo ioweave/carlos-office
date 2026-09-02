@@ -108,10 +108,10 @@ const validateProcessDependencies = (
 };
 
 const workflowShape = '{"start":"start","end":"end","tasks":{"start":{"type":"start"},"inspect":{"type":"task","name":"Inspect files","objective":"Inspect the relevant files and report findings","tools":["read-file"]},"end":{"type":"end"}},"edges":[["start","inspect"],["inspect","end"]],"groups":[]}';
-const mapExample = '{"id":"map-items","type":"map","name":"Map items","members":["inspect"],"source":"upstream.list_items","itemAs":"item","indexAs":"index","concurrency":4,"throttle":{"requests":20,"windowMs":60000}}';
+const mapExample = '{"id":"map-items","type":"map","name":"Map items","members":["inspect"],"source":"upstream.list_items","itemAs":"item","indexAs":"index","concurrency":4,"maxItemAttempts":1,"failurePolicy":"fail-fast","throttle":{"requests":20,"windowMs":60000}}';
 const loopExample = '{"id":"loop-qc","type":"loop","name":"Quality control","members":["inspect"],"maxIterations":3,"minimumScore":0.85,"criteria":"The result must be complete, accurate, and satisfy the Task completion criteria."}';
-const researchExecutionExample = '{"maxReasoningTurns":24,"maxToolCalls":36,"maxNoProgressTurns":4}';
-const deepResearchExecutionExample = '{"maxReasoningTurns":40,"maxToolCalls":64,"maxNoProgressTurns":4}';
+const researchExecutionExample = '{"maxReasoningTurns":24,"maxToolCalls":36,"maxNoProgressTurns":4,"maxAttempts":2}';
+const deepResearchExecutionExample = '{"maxReasoningTurns":40,"maxToolCalls":64,"maxNoProgressTurns":4,"maxAttempts":2}';
 
 const graphRules = [
   'Graph nodes are only type "start", "task", or "end". Map and Loop are execution Groups, not graph nodes.',
@@ -120,11 +120,15 @@ const graphRules = [
   "Every executable Task uses type task, a concise 2-5 word name (maximum 50 characters), and a non-empty objective.",
   "Task objective contains detailed execution instructions; completion contains acceptance criteria.",
   "Use Task data output when downstream execution needs machine-readable arrays or objects.",
-  "Task execution is optional and may contain only maxReasoningTurns (1-64), maxToolCalls (1-128), and maxNoProgressTurns (1-8). Omit it for ordinary work.",
+  "Every Task output alias must be unique in the graph. Prefer upstream.<producerTaskId> references over aliases.",
+  "Every upstream Task input must reference an actual ancestor dependency. Never reference a sibling, descendant, or nonexistent producer.",
+  "Task execution is optional and may contain only maxReasoningTurns (1-64), maxToolCalls (1-128), maxNoProgressTurns (1-8), and maxAttempts (1-4). Omit it for ordinary work.",
+  "Set maxAttempts above 1 only for Tasks whose work is safe to replay. Carlos Office automatically retries only failures whose completed Tool calls were read-only/idempotent.",
   `For web research requiring several external sources, prefer execution ${researchExecutionExample}. For deep or large-document research, especially when http-content is needed, prefer ${deepResearchExecutionExample}.`,
   "Split broad research into independent source-domain Tasks that can run in parallel, followed by a downstream synthesis Task over their structured data. Do not make one Task perform discovery, acquisition, extraction, and cross-domain synthesis when the work can be decomposed.",
   "Research Tasks should prefer authoritative primary sources and stop source discovery once sufficient authoritative sources satisfy the objective.",
   "When http returns a stored content reference, use http-content search/read against that stored body instead of re-fetching it or loading the entire large document into model context.",
+  "Use narrow read-file ranges and narrow http-content reads/searches. Do not load entire large files into model context when a range or search is sufficient.",
   "Synthesis Tasks should normally consume upstream structured data without web Tools unless a specific missing fact genuinely requires new research.",
   "groups is optional and contains Map or Loop execution scopes. A Task or nested Group may directly belong to at most one Group.",
   "Start and end cannot be Group members. Group nesting must not contain cycles.",
@@ -136,9 +140,11 @@ const graphRules = [
   "Do not combine a producer Task ID and its declared output alias. Example: if Task list-assets has output assets and its data is the array, use upstream.list-assets (preferred) or the unique alias upstream.assets; never use upstream.list-assets.assets.",
   "When a Task is intended to feed a Map directly, its objective/completion must require the Agent completion data field to contain the JSON array itself. Do not rely on a prose output that merely describes the items.",
   "Prefer upstream.<producerTaskId> over output aliases because Task IDs are unambiguous. Never invent an unbound bare Map source name.",
-  "If a mapped Task declares an explicit inputs list, include the Map source path. Runtime can also resolve canonical Map sources from completed ancestor Task data, but the graph definition should still state the dependency explicitly.",
+  "If a mapped Task declares an explicit inputs list, include the Map source path. Runtime can resolve canonical Map sources from completed ancestor Task data, but the graph definition must state the dependency explicitly.",
   "A Map containing exactly one executable Task is valid only for genuine fan-out/fan-in: an upstream collection is produced, that Task runs once per item, and downstream work outside the Map consumes the aggregate result. Otherwise omit the Map.",
   "A Map iterates its source collection. concurrency is the shared maximum number of active child Task executions across the entire Map, including parallel branches and nested Groups. concurrency 1 means serial iteration; it does not create a different For Each primitive.",
+  "Map maxItemAttempts is 1-4 and defaults to 1. Raise it only for read-only/idempotent mapped work; do not replay irreversible or externally mutating actions automatically.",
+  "Map failurePolicy is fail-fast or continue. Use continue only when partial results are valid and downstream Tasks are prepared to inspect per-item failure records.",
   "Map throttle optionally limits new Task executions to requests per windowMs.",
   "Tasks in one Map preserve their normal graph dependencies for each item. Nested Maps must obey both outer and inner concurrency/rate limits.",
   `Loop Group V1 shape: ${loopExample}`,
@@ -167,7 +173,7 @@ export const getNoraRequestDecisionInstruction = () => [
   "Never claim a notification or alarm capability exists unless it is available or created in the plan.",
   ...graphRules,
   `Valid minimal Workflow graph: ${workflowShape}`,
-  "Tasks do not name persistent specialist Agents. A Task may constrain provider/model, Tools, Skills, and execution budget; otherwise Nora selects resources at runtime and Carlos Office applies bounded defaults.",
+  "Tasks do not name persistent specialist Agents. A Task may constrain provider/model, Tools, Skills, and execution budget; otherwise Nora selects resources once for the active Workflow run and Carlos Office applies bounded defaults.",
   "Use Maps only for real collection fan-out with a resolvable array source. Do not use Maps as generic containers. Use Loop only when independent Nora QC/retry materially improves a Task.",
   "For a Tool, return complete valid ESM source with no Markdown fences.",
   "A Tool must export its Tool object as default or as `tool` and use only available Node APIs or dependencies.",

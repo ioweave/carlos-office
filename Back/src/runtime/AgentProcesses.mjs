@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { authorize, consumeApproval, listApprovals } from "../controllers/AuthorizationController.mjs";
 import { recordEvent } from "../controllers/EventController.mjs";
 import { getWorkflow } from "../controllers/ProcessController.mjs";
-import { getTool } from "../registry/Tools.mjs";
+import { getTool, validateToolInput } from "../registry/Tools.mjs";
 import { getKnowledge } from "../services/KnowledgeService.mjs";
 import {
   cleanupInvocationWorkspace,
@@ -142,6 +142,7 @@ const enrichFailedResult = (entry, result) => {
     message: typeof baseDiagnostics.message === "string" && baseDiagnostics.message
       ? baseDiagnostics.message
       : result.error || "Agent process failed",
+    ...(typeof baseDiagnostics.retryable === "boolean" ? { retryable: baseDiagnostics.retryable } : {}),
     execution: structuredClone(entry.execution),
     ...(entry.toolCallCount ? {
       toolCallCount: entry.toolCallCount,
@@ -183,7 +184,7 @@ const runTool = async (entry, message) => {
     }
     const tool = getTool(call.name);
     if (!tool) throw toolError(`Unknown Tool: ${call.name}`, "unknown_tool", "The Tool registry no longer contains this capability.");
-    const input = call.input ?? {};
+    const input = validateToolInput(tool, call.input ?? {});
     if (tool.requiresApproval && !hasCarlosAuthority(workflowId)) {
       const approved = approvedToolAction({ workflowId, taskId, invocationId, toolName: tool.name, input });
       if (!approved) {
@@ -470,7 +471,7 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
     });
     child.on("error", error => {
       const message = error instanceof Error ? error.message : String(error);
-      void settle({ status: "failed", error: message, diagnostics: { phase: "process", code: "agent_process_error", message } });
+      void settle({ status: "failed", error: message, diagnostics: { phase: "process", code: "agent_process_error", message, retryable: true } });
     });
     child.on("exit", (code, signal) => {
       if (entry.settled) return;
@@ -478,7 +479,7 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
       const error = cancelled ? String(controller.signal.reason ?? "Workflow cancelled") : `Agent process exited unexpectedly (${signal ?? code ?? "unknown"})`;
       void settle(cancelled
         ? { status: "cancelled", error }
-        : { status: "failed", error, diagnostics: { phase: "process", code: "agent_process_exit", message: error } });
+        : { status: "failed", error, diagnostics: { phase: "process", code: "agent_process_exit", message: error, retryable: true } });
     });
 
     child.send({

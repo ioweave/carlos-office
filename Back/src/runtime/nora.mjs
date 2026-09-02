@@ -22,6 +22,32 @@ const parseJson = content => {
   return normalizeNoraDecision(parsed);
 };
 
+const generateJson = async ({ provider, model, messages, format, signal }) => provider.generate({
+  model,
+  messages,
+  tools: [],
+  format,
+  signal,
+});
+
+const repairJson = async ({ provider, model, messages, format, content, parseError, signal }) => {
+  const repairMessages = [
+    ...messages,
+    ...(typeof content === "string" && content.trim() ? [{ role: "assistant", content }] : []),
+    {
+      role: "system",
+      content: [
+        "The previous response was invalid JSON or violated the required decision shape.",
+        `Validation error: ${errorMessage(parseError)}`,
+        "Repair it now. Return exactly one complete JSON object and nothing else.",
+        "Do not add Markdown, commentary, code fences, or a second object.",
+      ].join("\n"),
+    },
+  ];
+  const response = await generateJson({ provider, model, messages: repairMessages, format, signal });
+  return parseJson(response?.content ?? "");
+};
+
 const decide = async (message, signal) => {
   const selection = message.selection;
   const provider = providers.get(selection?.provider);
@@ -68,26 +94,38 @@ const decide = async (message, signal) => {
     content: [message.instruction, "", "Context:", JSON.stringify(message.context, null, 2)].join("\n"),
   });
 
-  const response = await provider.generate({
-    model: selection.model,
-    messages,
-    tools: [],
-    format: message.format ?? JSON_OBJECT_SCHEMA,
-    signal,
-  });
+  const format = message.format ?? JSON_OBJECT_SCHEMA;
+  const response = await generateJson({ provider, model: selection.model, messages, format, signal });
   const content = response?.content ?? "";
 
   try {
     return parseJson(content);
   } catch (error) {
-    console.error("[nora] Invalid JSON response.", {
+    console.warn("[nora] Invalid JSON response; attempting one bounded repair.", {
       requestId: message.id ?? null,
       provider: selection.provider,
       model: selection.model,
       error: errorMessage(error),
-      rawResponse: content,
     });
-    throw error;
+    try {
+      return await repairJson({
+        provider,
+        model: selection.model,
+        messages,
+        format,
+        content,
+        parseError: error,
+        signal,
+      });
+    } catch (repairError) {
+      console.error("[nora] JSON repair failed.", {
+        requestId: message.id ?? null,
+        provider: selection.provider,
+        model: selection.model,
+        error: errorMessage(repairError),
+      });
+      throw repairError;
+    }
   }
 };
 

@@ -204,13 +204,18 @@ export const createOllamaProvider = ({
       return false;
     }
   })();
+  const settingsForModel = model => isObject(modelSettings?.[model]) ? modelSettings[model] : {};
+  const isCloudModel = model => {
+    const setting = settingsForModel(model);
+    if (setting.location === "local") return false;
+    return setting.location === "cloud" || endpointIsCloud || /(?:^|[-:])cloud$/i.test(model);
+  };
   const timeoutForModel = model => {
-    const setting = isObject(modelSettings?.[model]) ? modelSettings[model] : {};
+    const setting = settingsForModel(model);
     if (Number.isSafeInteger(setting.inferenceTimeoutMs) && setting.inferenceTimeoutMs >= 0) {
       return setting.inferenceTimeoutMs;
     }
-    const isCloud = setting.location === "cloud" || endpointIsCloud || /(?:^|[-:])cloud$/i.test(model);
-    return isCloud ? CLOUD_INFERENCE_TIMEOUT_MS : LOCAL_INFERENCE_TIMEOUT_MS;
+    return isCloudModel(model) ? CLOUD_INFERENCE_TIMEOUT_MS : LOCAL_INFERENCE_TIMEOUT_MS;
   };
 
   const provider = {
@@ -230,8 +235,8 @@ export const createOllamaProvider = ({
       };
 
       if (tools.length) body.tools = normalizeTools(tools);
-      // Ollama Cloud currently does not enforce structured outputs. Ground the schema in the prompt there instead.
-      if (format && !endpointIsCloud) body.format = format;
+      // Cloud-backed Ollama models do not reliably support native structured-output format, even through a local daemon.
+      if (format && !isCloudModel(model)) body.format = format;
 
       const result = await request(
         `${apiUrl}/chat`,
@@ -291,7 +296,7 @@ export const createOllamaProvider = ({
 
         return {
           name: modelName,
-          location: endpointIsCloud || /(?:^|[-:])cloud$/i.test(modelName) ? "cloud" : "local",
+          location: isCloudModel(modelName) ? "cloud" : "local",
           details: shown?.details ?? tagged.details ?? null,
           capabilities: Array.isArray(shown?.capabilities) ? shown.capabilities : null,
           modelInfo: shown?.model_info ?? null,

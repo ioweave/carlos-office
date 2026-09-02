@@ -1,15 +1,16 @@
 const NODE_TYPES = new Set(["start", "task", "end"]);
 const GROUP_TYPES = new Set(["map", "loop"]);
+const MAP_FAILURE_POLICIES = new Set(["fail-fast", "continue"]);
 const MAX_TASK_NAME_LENGTH = 50;
 const MAX_GROUP_NAME_LENGTH = 60;
 const TASK_EXECUTION_LIMITS = Object.freeze({
   maxReasoningTurns: { min: 1, max: 64 },
   maxToolCalls: { min: 1, max: 128 },
   maxNoProgressTurns: { min: 1, max: 8 },
+  maxAttempts: { min: 1, max: 4 },
 });
 
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
-
 const hasTask = (graph, taskId) => Object.prototype.hasOwnProperty.call(graph.tasks, taskId);
 
 const validateStringList = (value, label) => {
@@ -66,6 +67,8 @@ const normalizeGeneratedGroup = group => {
     normalized.itemAs ??= "item";
     normalized.indexAs ??= "index";
     normalized.concurrency ??= 1;
+    normalized.maxItemAttempts ??= 1;
+    normalized.failurePolicy ??= "fail-fast";
   }
   if (normalized.type === "loop") {
     normalized.maxIterations ??= 3;
@@ -95,13 +98,9 @@ export const normalizeGeneratedGraph = graph => {
     if (taskId === normalized.start || taskId === normalized.end || !isObject(task)) continue;
     if (!task.type) task.type = "task";
     if (task.type === "task" && (!task.objective || !String(task.objective).trim())) {
-      if (typeof task.description === "string" && task.description.trim()) {
-        task.objective = task.description.trim();
-      }
+      if (typeof task.description === "string" && task.description.trim()) task.objective = task.description.trim();
     }
-    if (task.type === "task" && (!task.name || !String(task.name).trim())) {
-      task.name = taskNameFromId(taskId);
-    }
+    if (task.type === "task" && (!task.name || !String(task.name).trim())) task.name = taskNameFromId(taskId);
   }
 
   normalized.groups = Array.isArray(normalized.groups)
@@ -116,9 +115,7 @@ const validateTaskDefinition = (taskId, task) => {
   if (task.type !== "task") return;
 
   if (task.name != null) {
-    if (typeof task.name !== "string" || !task.name.trim()) {
-      throw new Error(`Task ${taskId} name must be a non-empty string`);
-    }
+    if (typeof task.name !== "string" || !task.name.trim()) throw new Error(`Task ${taskId} name must be a non-empty string`);
     if (task.name.trim().length > MAX_TASK_NAME_LENGTH) {
       throw new Error(`Task ${taskId} name cannot exceed ${MAX_TASK_NAME_LENGTH} characters`);
     }
@@ -126,8 +123,8 @@ const validateTaskDefinition = (taskId, task) => {
   if (typeof task.objective !== "string" || !task.objective.trim()) {
     throw new Error(`Task ${taskId} objective must be a non-empty string`);
   }
-  if (task.output != null && typeof task.output !== "string") {
-    throw new Error(`Task ${taskId} output must be a string`);
+  if (task.output != null && (typeof task.output !== "string" || !task.output.trim())) {
+    throw new Error(`Task ${taskId} output must be a non-empty string`);
   }
   if (task.completion != null && typeof task.completion !== "string") {
     throw new Error(`Task ${taskId} completion must be a string`);
@@ -200,9 +197,7 @@ const validateGroups = graph => {
     if (!Array.isArray(group.members) || !group.members.length) {
       throw new Error(`Execution Group ${group.id} must contain at least one member`);
     }
-    if (new Set(group.members).size !== group.members.length) {
-      throw new Error(`Execution Group ${group.id} contains duplicate members`);
-    }
+    if (new Set(group.members).size !== group.members.length) throw new Error(`Execution Group ${group.id} contains duplicate members`);
     if (group.members.some(member => typeof member !== "string" || !member.trim())) {
       throw new Error(`Execution Group ${group.id} members must be non-empty IDs`);
     }
@@ -220,6 +215,14 @@ const validateGroups = graph => {
       }
       if (!Number.isSafeInteger(group.concurrency) || group.concurrency < 1 || group.concurrency > 64) {
         throw new Error(`Map Group ${group.id} concurrency must be an integer from 1 to 64`);
+      }
+      const maxItemAttempts = group.maxItemAttempts ?? 1;
+      if (!Number.isSafeInteger(maxItemAttempts) || maxItemAttempts < 1 || maxItemAttempts > 4) {
+        throw new Error(`Map Group ${group.id} maxItemAttempts must be an integer from 1 to 4`);
+      }
+      const failurePolicy = group.failurePolicy ?? "fail-fast";
+      if (!MAP_FAILURE_POLICIES.has(failurePolicy)) {
+        throw new Error(`Map Group ${group.id} failurePolicy must be fail-fast or continue`);
       }
       validateThrottle(group, group.throttle);
     }
@@ -250,9 +253,7 @@ const validateGroups = graph => {
       if (task && ["start", "end"].includes(task.type)) {
         throw new Error(`Execution Group ${group.id} cannot contain ${task.type} node ${member}`);
       }
-      if (owner.has(member)) {
-        throw new Error(`Execution member ${member} belongs directly to more than one Group`);
-      }
+      if (owner.has(member)) throw new Error(`Execution member ${member} belongs directly to more than one Group`);
       owner.set(member, group.id);
     }
   }
@@ -282,33 +283,63 @@ const validateGroups = graph => {
 const reachableFrom = (start, adjacency) => {
   const visited = new Set();
   const pending = [start];
-
   while (pending.length) {
     const node = pending.pop();
     if (visited.has(node)) continue;
-
     visited.add(node);
     for (const next of adjacency.get(node) ?? []) pending.push(next);
   }
-
   return visited;
 };
 
 const validateAcyclic = (graph, adjacency) => {
   const visiting = new Set();
   const visited = new Set();
-
   const visit = node => {
     if (visiting.has(node)) throw new Error(`Graph contains a cycle involving node: ${node}`);
     if (visited.has(node)) return;
-
     visiting.add(node);
     for (const next of adjacency.get(node) ?? []) visit(next);
     visiting.delete(node);
     visited.add(node);
   };
-
   for (const node of Object.keys(graph.tasks)) visit(node);
+};
+
+const producerByAlias = graph => {
+  const result = new Map();
+  for (const [taskId, task] of Object.entries(graph.tasks)) {
+    if (task?.type !== "task" || !task.output) continue;
+    const existing = result.get(task.output);
+    if (existing) throw new Error(`Task output alias ${task.output} is ambiguous: ${existing} and ${taskId}`);
+    result.set(task.output, taskId);
+  }
+  return result;
+};
+
+const validateProducerReference = ({ graph, taskId, path, reverseAdjacency, aliases, label }) => {
+  const parts = String(path || "").split(".").filter(Boolean);
+  if (parts[0] !== "upstream" || parts.length < 2) return;
+  const producerId = graph.tasks[parts[1]]?.type === "task" ? parts[1] : aliases.get(parts[1]);
+  if (!producerId) throw new Error(`${label} ${path} references an unknown upstream Task or output alias`);
+  const ancestors = reachableFrom(taskId, reverseAdjacency);
+  ancestors.delete(taskId);
+  if (!ancestors.has(producerId)) {
+    throw new Error(`${label} ${path} references ${producerId}, which is not an upstream dependency`);
+  }
+};
+
+const validateBindings = (graph, reverseAdjacency, aliases) => {
+  for (const [taskId, task] of Object.entries(graph.tasks)) {
+    if (task?.type !== "task") continue;
+    for (const input of task.inputs ?? []) {
+      validateProducerReference({ graph, taskId, path: input, reverseAdjacency, aliases, label: `Task ${taskId} input` });
+    }
+    for (const group of graph.groups ?? []) {
+      if (group.type !== "map" || !(group.members ?? []).includes(taskId)) continue;
+      validateProducerReference({ graph, taskId, path: group.source, reverseAdjacency, aliases, label: `Map ${group.id} source` });
+    }
+  }
 };
 
 export const validateGraph = graph => {
@@ -320,34 +351,26 @@ export const validateGraph = graph => {
   if (!Array.isArray(graph.edges)) throw new Error("Graph edges must be an array");
   if (!hasTask(graph, graph.start)) throw new Error(`Start node does not exist: ${graph.start}`);
   if (!hasTask(graph, graph.end)) throw new Error(`End node does not exist: ${graph.end}`);
-  if (graph.tasks[graph.start]?.type !== "start") {
-    throw new Error(`Start node ${graph.start} must have type "start"`);
-  }
+  if (graph.tasks[graph.start]?.type !== "start") throw new Error(`Start node ${graph.start} must have type "start"`);
   if (graph.tasks[graph.end]?.type !== "end") throw new Error(`End node ${graph.end} must have type "end"`);
 
   let startNodes = 0;
   let endNodes = 0;
-
   for (const [taskId, task] of Object.entries(graph.tasks)) {
     validateTaskDefinition(taskId, task);
     if (task.type === "start") startNodes += 1;
     if (task.type === "end") endNodes += 1;
   }
-
   if (startNodes !== 1) throw new Error("Graph must contain exactly one start node");
   if (endNodes !== 1) throw new Error("Graph must contain exactly one end node");
+  const aliases = producerByAlias(graph);
 
   const adjacency = new Map(Object.keys(graph.tasks).map(taskId => [taskId, []]));
   const reverseAdjacency = new Map(Object.keys(graph.tasks).map(taskId => [taskId, []]));
   const seenEdges = new Set();
 
   for (const edge of graph.edges) {
-    if (
-      !Array.isArray(edge)
-      || edge.length !== 2
-      || typeof edge[0] !== "string"
-      || typeof edge[1] !== "string"
-    ) {
+    if (!Array.isArray(edge) || edge.length !== 2 || typeof edge[0] !== "string" || typeof edge[1] !== "string") {
       throw new Error("Every edge must be [fromTaskId, toTaskId]");
     }
 
@@ -368,9 +391,7 @@ export const validateGraph = graph => {
   validateAcyclic(graph, adjacency);
 
   const reachable = reachableFrom(graph.start, adjacency);
-  if (!reachable.has(graph.end)) {
-    throw new Error(`End node ${graph.end} is not reachable from start node ${graph.start}`);
-  }
+  if (!reachable.has(graph.end)) throw new Error(`End node ${graph.end} is not reachable from start node ${graph.start}`);
   for (const taskId of Object.keys(graph.tasks)) {
     if (!reachable.has(taskId)) throw new Error(`Graph node is not reachable from start: ${taskId}`);
   }
@@ -381,6 +402,7 @@ export const validateGraph = graph => {
   }
 
   validateGroups(graph);
+  validateBindings(graph, reverseAdjacency, aliases);
   return true;
 };
 
@@ -397,7 +419,7 @@ export const getTaskExecutionGroups = (graph, taskId) => {
   while (owner.has(current)) {
     const group = groups.get(owner.get(current));
     if (!group) break;
-    path.push(structuredClone(group));
+    path.push(structuredClone(normalizeGeneratedGroup(group)));
     current = group.id;
   }
   return path.reverse();
@@ -424,9 +446,7 @@ export const validateProcessDefinition = process => {
   if (!process.name || typeof process.name !== "string" || !process.name.trim()) {
     throw new Error("Process name must be a non-empty string");
   }
-  if (process.purpose != null && typeof process.purpose !== "string") {
-    throw new Error("Process purpose must be a string");
-  }
+  if (process.purpose != null && typeof process.purpose !== "string") throw new Error("Process purpose must be a string");
   validateStringList(process.inputs, "Process inputs");
   validateGraph(process);
   return true;

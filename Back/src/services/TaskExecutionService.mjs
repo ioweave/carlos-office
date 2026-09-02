@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { getTaskExecutionGroups } from "./WorkflowGraphService.mjs";
 
@@ -27,12 +27,18 @@ const mapDataFor = (groupId, items) => ({
   __carlosOfficeMap: groupId,
   items: items.map((item, index) => ({
     index,
+    status: item?.status ?? "failed",
     output: item?.output ?? null,
     data: item?.data ?? null,
+    error: item?.error ?? null,
+    diagnostics: item?.diagnostics ?? null,
   })),
 });
 
-const valueFromMapItem = item => item?.data != null ? clone(item.data) : clone(item?.output);
+const valueFromMapItem = item => {
+  if (item?.status === "completed") return item.data != null ? clone(item.data) : clone(item.output);
+  return { __failed: true, error: item?.error ?? "Map item failed", diagnostics: clone(item?.diagnostics ?? null) };
+};
 
 export const materializeMapData = (value, retainedGroupIds = new Set()) => {
   if (Array.isArray(value)) return value.map(item => materializeMapData(item, retainedGroupIds));
@@ -119,10 +125,6 @@ const resolveMapSource = ({ workflow, taskId, input, sourcePath }) => {
       if (rest.length) {
         found = consider(getPath(raw, rest.join(".")), `upstream.${producerId}.${rest.join(".")}`);
         if (found) return { ...found, attempts };
-
-        // Nora historically emitted upstream.<taskId>.<outputName> even when
-        // the Task value itself is the declared output. Treat that legacy
-        // spelling as the canonical upstream.<taskId> value.
         if (rest.length === 1 && producer.output === rest[0]) {
           found = consider(raw, `upstream.${producerId}`);
           if (found) return { ...found, attempts };
@@ -135,11 +137,7 @@ const resolveMapSource = ({ workflow, taskId, input, sourcePath }) => {
   }
 
   const best = attempts.find(item => item.value !== undefined) ?? null;
-  return {
-    value: best?.value,
-    resolvedPath: best?.resolvedPath ?? null,
-    attempts,
-  };
+  return { value: best?.value, resolvedPath: best?.resolvedPath ?? null, attempts };
 };
 
 const projectMapData = (value, groupId, index) => {
@@ -156,12 +154,17 @@ const projectMapData = (value, groupId, index) => {
   ]));
 };
 
+const stableValue = value => {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (!isObject(value)) return value;
+  return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableValue(value[key])]));
+};
+const fingerprint = value => createHash("sha256").update(JSON.stringify(stableValue(value))).digest("hex").slice(0, 20);
 const scopeKey = scope => scope
   .filter(item => item.type === "map")
-  .map(item => `${item.groupId}:${item.index}`)
+  .map(item => `${item.groupId}:${item.index}:${item.itemFingerprint ?? "legacy"}`)
   .join("/");
-
-const checkpointKey = (scope, groupId, index) => `${scopeKey(scope)}|${groupId}:${index}`;
+const checkpointKey = (scope, groupId, index, item) => `${scopeKey(scope)}|${groupId}:${index}:${fingerprint(item)}`;
 
 const normalizeAgentCompletion = result => {
   if (result.status !== "completed") return result;
@@ -179,13 +182,11 @@ const normalizeAgentCompletion = result => {
 };
 
 const limiterKey = (workflowId, groupId) => `${workflowId}\u0000${groupId}`;
-
 const pruneStarts = limiter => {
   if (!limiter.throttle) return;
   const threshold = Date.now() - limiter.throttle.windowMs;
   limiter.starts = limiter.starts.filter(startedAt => startedAt > threshold);
 };
-
 const scheduleLimiterCleanup = limiter => {
   if (limiter.active || limiter.queue.length) return;
   pruneStarts(limiter);
@@ -203,13 +204,9 @@ const scheduleLimiterCleanup = limiter => {
     scheduleLimiterCleanup(limiter);
   }, delay);
 };
-
 const getLimiter = (workflowId, group) => {
   const key = limiterKey(workflowId, group.id);
-  const signature = JSON.stringify({
-    concurrency: group.concurrency,
-    throttle: group.throttle ?? null,
-  });
+  const signature = JSON.stringify({ concurrency: group.concurrency, throttle: group.throttle ?? null });
   let limiter = limiterStates.get(key);
   if (!limiter || limiter.signature !== signature) {
     if (limiter?.cleanupTimer) clearTimeout(limiter.cleanupTimer);
@@ -227,11 +224,9 @@ const getLimiter = (workflowId, group) => {
   }
   return limiter;
 };
-
 const wakeLimiter = limiter => {
   for (const wake of limiter.queue.splice(0)) wake();
 };
-
 const waitForLimiter = async (limiter, isCancelled) => {
   while (true) {
     if (isCancelled()) throw Object.assign(new Error("Workflow stopped"), { cancelled: true });
@@ -252,10 +247,7 @@ const waitForLimiter = async (limiter, isCancelled) => {
     }
 
     let delay = 0;
-    if (throttle && !rateReady) {
-      delay = Math.max(10, limiter.starts[0] + throttle.windowMs - now + 1);
-    }
-
+    if (throttle && !rateReady) delay = Math.max(10, limiter.starts[0] + throttle.windowMs - now + 1);
     await new Promise(resolve => {
       const wake = () => resolve();
       limiter.queue.push(wake);
@@ -269,7 +261,6 @@ const waitForLimiter = async (limiter, isCancelled) => {
     });
   }
 };
-
 const withOneLimiter = async (workflowId, group, operation, isCancelled) => {
   const limiter = getLimiter(workflowId, group);
   await waitForLimiter(limiter, isCancelled);
@@ -281,7 +272,6 @@ const withOneLimiter = async (workflowId, group, operation, isCancelled) => {
     scheduleLimiterCleanup(limiter);
   }
 };
-
 const withMapLimiters = (workflowId, groups, operation, isCancelled, index = 0) => {
   if (index >= groups.length) return operation();
   return withOneLimiter(
@@ -299,11 +289,7 @@ const normalizedReview = (review, minimumScore) => {
     throw new Error("Nora Loop review score must be a number from 0 to 1");
   }
   const feedback = typeof review.feedback === "string" ? review.feedback.trim() : "";
-  return {
-    passed: review.passed && review.score >= minimumScore,
-    score: review.score,
-    feedback,
-  };
+  return { passed: review.passed && review.score >= minimumScore, score: review.score, feedback };
 };
 
 const checkpointMap = invocations => new Map((invocations ?? [])
@@ -328,6 +314,7 @@ export const executeTaskWithGroups = async ({
   input,
   runAgent,
   review,
+  canRetryInvocation = () => false,
   recordInvocation = async () => {},
   checkpointInvocations = [],
   isCancelled = () => false,
@@ -347,19 +334,12 @@ export const executeTaskWithGroups = async ({
         isCancelled,
       );
     } catch (error) {
-      if (error?.cancelled || isCancelled()) {
-        result = { status: "cancelled", error: "Workflow stopped" };
-      } else {
-        result = errorResult(
-          error instanceof Error ? error.message : String(error),
-          "process",
-          "agent_invocation_failure",
-        );
-      }
+      if (error?.cancelled || isCancelled()) result = { status: "cancelled", error: "Workflow stopped" };
+      else result = errorResult(error instanceof Error ? error.message : String(error), "process", "agent_invocation_failure");
     }
 
     result = normalizeAgentCompletion(result);
-    const record = {
+    await recordInvocation({
       id: invocationId,
       kind: "agent",
       status: result.status,
@@ -372,8 +352,7 @@ export const executeTaskWithGroups = async ({
       data: result.data ?? null,
       error: result.error ?? null,
       diagnostics: result.diagnostics ?? null,
-    };
-    await recordInvocation(record);
+    });
     return result;
   };
 
@@ -408,10 +387,7 @@ export const executeTaskWithGroups = async ({
         assessment = normalizedReview(await review({
           group,
           iteration,
-          candidate: {
-            output: candidate.output,
-            data: candidate.data ?? null,
-          },
+          candidate: { output: candidate.output, data: candidate.data ?? null },
         }), group.minimumScore);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -462,36 +438,29 @@ export const executeTaskWithGroups = async ({
   };
 
   const wrapMap = (group, inner) => async context => {
-    const resolution = resolveMapSource({
-      workflow,
-      taskId,
-      input: context.input,
-      sourcePath: group.source,
-    });
+    const resolution = resolveMapSource({ workflow, taskId, input: context.input, sourcePath: group.source });
     const source = resolution.value;
     if (!Array.isArray(source)) {
       const resolvedType = valueType(source);
       const message = resolution.resolvedPath
         ? `Map Group ${group.id} source ${group.source} resolved via ${resolution.resolvedPath} to ${resolvedType}, not an array`
         : `Map Group ${group.id} source ${group.source} could not be resolved to an upstream or Workflow array`;
-      return errorResult(
-        message,
-        "map",
-        source === undefined ? "map_source_unresolved" : "map_source_not_array",
-        {
-          groupId: group.id,
-          source: group.source,
-          resolvedPath: resolution.resolvedPath,
-          resolvedType,
-        },
-      );
+      return errorResult(message, "map", source === undefined ? "map_source_unresolved" : "map_source_not_array", {
+        groupId: group.id,
+        source: group.source,
+        resolvedPath: resolution.resolvedPath,
+        resolvedType,
+      });
     }
 
+    const maxItemAttempts = group.maxItemAttempts ?? 1;
+    const failurePolicy = group.failurePolicy ?? "fail-fast";
     const results = new Array(source.length);
     let halt = null;
     await runPool(source.length, group.concurrency, async index => {
       if (halt || isCancelled()) return;
-      const key = checkpointKey(context.scope, group.id, index);
+      const itemFingerprint = fingerprint(source[index]);
+      const key = checkpointKey(context.scope, group.id, index, source[index]);
       const checkpoint = checkpoints.get(key);
       if (checkpoint) {
         results[index] = {
@@ -512,24 +481,40 @@ export const executeTaskWithGroups = async ({
       }
 
       const itemInput = projectMapData(context.input, group.id, index);
-      const result = await inner({
-        ...context,
-        input: {
-          ...itemInput,
-          [group.itemAs]: clone(source[index]),
-          [group.indexAs || "index"]: index,
-          __mapExecution: {
-            groupId: group.id,
-            index,
-            total: source.length,
+      let result;
+      for (let itemAttempt = 1; itemAttempt <= maxItemAttempts; itemAttempt += 1) {
+        result = await inner({
+          ...context,
+          input: {
+            ...itemInput,
+            [group.itemAs]: clone(source[index]),
+            [group.indexAs || "index"]: index,
+            __mapExecution: { groupId: group.id, index, total: source.length, attempt: itemAttempt, maxAttempts: maxItemAttempts },
           },
-        },
-        mapGroups: [...context.mapGroups, group],
-        scope: [...context.scope, { type: "map", groupId: group.id, index, total: source.length }],
-      });
+          mapGroups: [...context.mapGroups, group],
+          scope: [...context.scope, { type: "map", groupId: group.id, index, total: source.length, itemFingerprint }],
+        });
+        if (result.status === "completed" || result.status === "blocked" || result.status === "cancelled") break;
+        if (!canRetryInvocation(result) || itemAttempt >= maxItemAttempts) break;
+      }
 
       if (result.status !== "completed") {
-        halt ??= result;
+        results[index] = result;
+        await recordInvocation({
+          id: `map-item-${randomUUID()}`,
+          kind: "map-item",
+          groupId: group.id,
+          checkpointKey: key,
+          status: "failed",
+          scope: clone(context.scope),
+          index,
+          itemFingerprint,
+          startedAt: new Date().toISOString(),
+          endedAt: new Date().toISOString(),
+          error: result.error ?? "Map item failed",
+          diagnostics: clone(result.diagnostics ?? null),
+        });
+        if (failurePolicy !== "continue") halt ??= result;
         return;
       }
 
@@ -542,6 +527,7 @@ export const executeTaskWithGroups = async ({
         status: "completed",
         scope: clone(context.scope),
         index,
+        itemFingerprint,
         startedAt: new Date().toISOString(),
         endedAt: new Date().toISOString(),
         output: result.output ?? "",
@@ -553,17 +539,16 @@ export const executeTaskWithGroups = async ({
     if (isCancelled()) return { status: "cancelled", error: "Workflow stopped" };
     if (halt) return halt;
 
+    const failures = results.filter(result => result?.status !== "completed").length;
     const artifacts = results.flatMap(result => result?.artifactDeclarations ?? []);
     return {
       status: "completed",
-      output: `Processed ${source.length} item${source.length === 1 ? "" : "s"} in Map ${group.name || group.id}.`,
+      output: failures
+        ? `Processed ${source.length} items in Map ${group.name || group.id}; ${failures} item${failures === 1 ? "" : "s"} failed and were retained in structured data.`
+        : `Processed ${source.length} item${source.length === 1 ? "" : "s"} in Map ${group.name || group.id}.`,
       data: mapDataFor(group.id, results),
       artifactDeclarations: artifacts,
-      map: {
-        groupId: group.id,
-        items: source.length,
-        concurrency: group.concurrency,
-      },
+      map: { groupId: group.id, items: source.length, failures, concurrency: group.concurrency, failurePolicy },
     };
   };
 
@@ -573,11 +558,7 @@ export const executeTaskWithGroups = async ({
     if (group.type === "map") executor = wrapMap(group, executor);
   }
 
-  return executor({
-    input: clone(input),
-    scope: [],
-    mapGroups: [],
-  });
+  return executor({ input: clone(input), scope: [], mapGroups: [] });
 };
 
 export const clearWorkflowExecutionLimiters = workflowId => {
