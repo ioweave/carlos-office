@@ -106,7 +106,7 @@ process.on("message", message => {
         maxToolCalls: execution.maxToolCalls,
       });
       const completion = await agent.run(message.task);
-      await finish({ type: "completed", completion, usage: agent.getUsage() });
+      await finish({ type: "completed", completion, usage: completion.usage ?? agent.getUsage() });
     } catch (error) {
       const usage = agent?.getUsage() ?? null;
       if (error?.blocked) {
