@@ -8,7 +8,8 @@ import { parseHttpDocument } from "../src/services/DocumentParserService.mjs";
 import { resolveWorkspacePath } from "../src/services/ExecutionWorkspaceService.mjs";
 
 const MAX_RESPONSE_BYTES = 500_000_000;
-const INLINE_RESPONSE_BYTES = 1_000_000;
+const INLINE_RESPONSE_BYTES = 64_000;
+const CONTENT_PREVIEW_CHARS = 2_000;
 const TEXT_SAMPLE_BYTES = 8_192;
 const here = dirname(fileURLToPath(import.meta.url));
 const contentDir = resolve(here, "../.runtime/http-content");
@@ -58,6 +59,11 @@ const readCompleteBody = async response => {
   return Buffer.concat(chunks, bodyBytes);
 };
 
+const previewText = text => {
+  if (text.length <= CONTENT_PREVIEW_CHARS * 2) return text;
+  return `${text.slice(0, CONTENT_PREVIEW_CHARS)}\n…\n${text.slice(-CONTENT_PREVIEW_CHARS)}`;
+};
+
 const storeLargeBody = async (text, bodyBytes, metadata = {}) => {
   await mkdir(contentDir, { recursive: true });
   const id = `http-content-${randomUUID()}`;
@@ -67,6 +73,7 @@ const storeLargeBody = async (text, bodyBytes, metadata = {}) => {
     bodyBytes,
     storedBytes: Buffer.byteLength(text, "utf8"),
     ...metadata,
+    preview: previewText(text),
     instruction: "The complete readable response is stored locally. Use the http-content Tool to stat, search, or read byte ranges; do not request the whole body into model context at once.",
   };
 };
@@ -115,7 +122,7 @@ const responseBase = ({ response, method, contentType, rawBody, responseHeaders,
 
 const tool = {
   name: "http",
-  description: "Issues HTTP requests with optional credentials injected locally by service name. Any received HTTP response, including 4xx and 5xx, is a successful Tool observation: ok reports transport/tool success while httpOk reports the remote HTTP success flag and status/statusText preserve the actual response. PDFs are detected by MIME type or file signature and automatically converted to readable text with the local document parser; scanned/image-only PDFs are preserved in the Agent workspace with an OCR hint instead of being decoded as UTF-8 garbage. Large readable bodies are preserved through http-content handles. Credential secrets never enter Agent or model context and may only be sent to hosts allowed by that credential profile.",
+  description: "Issues HTTP requests with optional credentials injected locally by service name. Any received HTTP response, including 4xx and 5xx, is a successful Tool observation: ok reports transport/tool success while httpOk reports the remote HTTP success flag and status/statusText preserve the actual response. PDFs are detected by MIME type or file signature and automatically converted to readable text with the local document parser; scanned/image-only PDFs are preserved in the Agent workspace with an OCR hint instead of being decoded as UTF-8 garbage. Readable responses over 64 KB are stored behind an http-content handle with a small preview so large pages and documents do not flood model context. Credential secrets never enter Agent or model context and may only be sent to hosts allowed by that credential profile.",
   requiresApproval: false,
   provider: null,
   model: null,
