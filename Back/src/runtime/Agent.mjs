@@ -6,6 +6,7 @@ const MAX_PROVIDER_ATTEMPTS = 3;
 const MAX_SAFE_TOOL_ATTEMPTS = 3;
 const MAX_TOOL_RESULT_CHARS = 120_000;
 const MAX_ACTIVE_TOOL_CONTEXT_CHARS = 360_000;
+const MAX_RELAY_OUTPUT_CHARS = 600;
 const FAILED_CALL_MEMORY_TURNS = 4;
 const RETRY_BACKOFF_MS = [300, 900];
 const COMPLETION_SCHEMA = {
@@ -30,7 +31,13 @@ const COMPLETION_SCHEMA = {
   required: ["output", "data", "artifacts"],
   additionalProperties: false,
 };
-const COMPLETION_SCHEMA_TEXT = JSON.stringify(COMPLETION_SCHEMA);
+const RELAY_COMPLETION_SCHEMA = {
+  ...COMPLETION_SCHEMA,
+  properties: {
+    ...COMPLETION_SCHEMA.properties,
+    output: { type: "string", maxLength: MAX_RELAY_OUTPUT_CHARS },
+  },
+};
 
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -52,7 +59,7 @@ const resultToText = result => {
   if (typeof result === "string") text = result;
   else if (Buffer.isBuffer(result)) text = result.toString("utf8");
   else if (result === undefined) text = "";
-  else text = JSON.stringify(result, null, 2);
+  else text = JSON.stringify(result);
   return cappedText(text);
 };
 
@@ -71,6 +78,7 @@ const compactMessages = messages => {
   return compacted;
 };
 
+const messageCharacters = messages => messages.reduce((total, message) => total + String(message?.content ?? "").length, 0);
 const describeTools = tools => tools.map(tool => ({
   name: tool.name,
   description: tool.description ?? "",
@@ -134,7 +142,7 @@ const normalizeArtifacts = value => {
   });
 };
 
-const normalizeCompletion = content => {
+const normalizeCompletion = (content, relayMode = false) => {
   let value;
   try {
     value = parseProviderJSON(content);
@@ -150,8 +158,17 @@ const normalizeCompletion = content => {
   if (!Object.prototype.hasOwnProperty.call(value, "artifacts")) {
     throw failure("Agent completion must include artifacts", "completion", "invalid_completion");
   }
+
+  const output = value.output.trim();
+  if (relayMode && output.length > MAX_RELAY_OUTPUT_CHARS) {
+    throw failure(
+      `Relay output exceeds ${MAX_RELAY_OUTPUT_CHARS} characters; move substantive handoff content into compact data`,
+      "completion",
+      "relay_output_too_verbose",
+    );
+  }
   return {
-    output: value.output.trim(),
+    output,
     data: value.data === undefined ? null : structuredClone(value.data),
     artifacts: normalizeArtifacts(value.artifacts),
   };
@@ -223,6 +240,46 @@ export class Agent {
     this.maxNoProgressTurns = maxNoProgressTurns;
     this.maxReasoningTurns = maxReasoningTurns;
     this.maxToolCalls = maxToolCalls;
+    this.usage = {
+      modelCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      inputCharacters: 0,
+      outputCharacters: 0,
+      totalDuration: 0,
+    };
+  }
+
+  getUsage() {
+    return structuredClone(this.usage);
+  }
+
+  recordUsage(response, inputCharacters) {
+    this.usage.modelCalls += 1;
+    this.usage.inputCharacters += inputCharacters;
+    this.usage.outputCharacters += String(response?.content ?? "").length;
+    const usage = isObject(response?.usage) ? response.usage : {};
+    const inputTokens = Number.isFinite(usage.inputTokens) ? usage.inputTokens : 0;
+    const outputTokens = Number.isFinite(usage.outputTokens) ? usage.outputTokens : 0;
+    this.usage.inputTokens += inputTokens;
+    this.usage.outputTokens += outputTokens;
+    this.usage.totalTokens += Number.isFinite(usage.totalTokens) ? usage.totalTokens : inputTokens + outputTokens;
+    if (Number.isFinite(usage.totalDuration)) this.usage.totalDuration += usage.totalDuration;
+  }
+
+  withUsage(completion, relayMode) {
+    let dataCharacters = 0;
+    try { dataCharacters = JSON.stringify(completion.data)?.length ?? 0; } catch { dataCharacters = 0; }
+    return {
+      ...completion,
+      usage: {
+        ...this.getUsage(),
+        relayMode: Boolean(relayMode),
+        completionOutputCharacters: completion.output.length,
+        completionDataCharacters: dataCharacters,
+      },
+    };
   }
 
   buildMessages(task) {
@@ -258,37 +315,50 @@ export class Agent {
       });
     }
 
-    messages.push({
-      role: "system",
-      content: [
-        "You are one temporary specialist Agent process inside Carlos Office.",
-        "You exist only for this Task and have no persistent identity or defaults.",
-        `Workflow: ${task.workflowId}`,
-        `Task: ${task.id}`,
-        `Execution workspace: ${task.workspaceDir ?? "managed by Carlos Office"}`,
-        "Relative filesystem paths and the default working directory resolve inside this private invocation workspace.",
-        "Use relative paths for generated files, scratch files, downloaded working copies, and intermediate outputs.",
-        "Do not use the Carlos Office Back directory as scratch storage. Use an absolute path only when the Task explicitly requires reading or modifying an existing external file/project at that exact location.",
-        `Objective:\n${task.objective ?? ""}`,
-        `Completion criteria:\n${task.completion ?? ""}`,
-        `Resolved input:\n${JSON.stringify(task.input ?? {}, null, 2)}`,
-        "Tool schemas are authoritative. Send only declared properties and satisfy required fields and declared types exactly.",
-        "Prefer narrow reads/searches and stored-content handles over loading large files or HTTP bodies into model context.",
-        "When the Task is complete, return one JSON object with this exact shape:",
-        '{"output":"human-readable Task result","data":null,"artifacts":[]}',
-        "data may be any JSON value, including an array, object, scalar, or null. Use it when downstream Tasks would benefit from structured values.",
-        "The artifacts array is ONLY for files intended as deliverables to Carlos.",
-        "For deliverables generated in your workspace, use the path returned by the filesystem Tool or a workspace-relative path.",
-        "Do not declare ordinary source files, configuration files, or project files merely because you edited them.",
-        "If there are no deliverable files, return an empty artifacts array.",
-        "When a Tool fails or returns ok=false, inspect the structured result and change strategy instead of repeating it unchanged.",
-      ].join("\n\n"),
-    });
+    const taskInstructions = [
+      "You are one temporary specialist Agent process inside Carlos Office.",
+      "You exist only for this Task and have no persistent identity or defaults.",
+      `Workflow: ${task.workflowId}`,
+      `Task: ${task.id}`,
+      `Execution workspace: ${task.workspaceDir ?? "managed by Carlos Office"}`,
+      "Relative filesystem paths and the default working directory resolve inside this private invocation workspace.",
+      "Use relative paths for generated files, scratch files, downloaded working copies, and intermediate outputs.",
+      "Do not use the Carlos Office Back directory as scratch storage. Use an absolute path only when the Task explicitly requires reading or modifying an existing external file/project at that exact location.",
+      `Objective:\n${task.objective ?? ""}`,
+      `Completion criteria:\n${task.completion ?? ""}`,
+      `Resolved input (compact JSON):\n${JSON.stringify(task.input ?? {})}`,
+      "Tool schemas are authoritative. Send only declared properties and satisfy required fields and declared types exactly.",
+      "Prefer narrow reads/searches and stored-content handles over loading large files or HTTP bodies into model context.",
+    ];
+
+    if (task.relayMode) {
+      taskInstructions.push(
+        "RELAY MODE: another Task consumes this result. Optimize for lossless machine handoff, not human-readable exposition.",
+        "Target at least 60% fewer handoff tokens than normal explanatory prose while preserving every downstream-relevant fact.",
+        "Use caveman-style telegraphic fragments: facts, values, evidence, constraints. No greeting, intro, transitions, conclusion, narration, or restatement of the Task/input.",
+        "State each fact once. Put substantive handoff content in data as compact structured JSON; keep output to one short status/result sentence under 600 characters.",
+        "Preserve exact numbers, dates, IDs, paths, URLs, citations, error codes, uncertainty, contrary evidence, requirements, and exact payloads needed downstream.",
+        "Do not shorten away meaning. Reference large source material by stable path/content handle/range instead of reproducing it when the downstream Task can retrieve it.",
+        "Prefer concise, obvious field names and arrays/objects over prose paragraphs. Do not use cryptic abbreviations that make the data ambiguous.",
+      );
+    }
+
+    taskInstructions.push(
+      "When the Task is complete, return one JSON object with this exact shape:",
+      '{"output":"Task result","data":null,"artifacts":[]}',
+      "data may be any JSON value, including an array, object, scalar, or null. Use it for all information another Task may need.",
+      "The artifacts array is ONLY for files intended as deliverables to Carlos.",
+      "For deliverables generated in your workspace, use the path returned by the filesystem Tool or a workspace-relative path.",
+      "Do not declare ordinary source files, configuration files, or project files merely because you edited them.",
+      "If there are no deliverable files, return an empty artifacts array.",
+      "When a Tool fails or returns ok=false, inspect the structured result and change strategy instead of repeating it unchanged.",
+    );
+
+    messages.push({ role: "system", content: taskInstructions.join("\n\n") });
     messages.push({
       role: "user",
       content: "Perform this Task. Use available Tools when needed. Return the completed Task output using the required JSON completion object.",
     });
-
     return messages;
   }
 
@@ -296,7 +366,10 @@ export class Agent {
     let lastError;
     for (let attempt = 1; attempt <= MAX_PROVIDER_ATTEMPTS; attempt += 1) {
       try {
-        return await this.provider.generate({ model: this.model, messages: compactMessages(messages), tools, format });
+        const compacted = compactMessages(messages);
+        const response = await this.provider.generate({ model: this.model, messages: compacted, tools, format });
+        this.recordUsage(response, messageCharacters(compacted));
+        return response;
       } catch (error) {
         lastError = error;
         if (error?.retryable !== true || attempt >= MAX_PROVIDER_ATTEMPTS) break;
@@ -306,7 +379,8 @@ export class Agent {
     throw classifyFailure(lastError, "model", "provider_error");
   }
 
-  async repairCompletion(messages, content) {
+  async repairCompletion(messages, content, relayMode = false) {
+    const schema = relayMode ? RELAY_COMPLETION_SCHEMA : COMPLETION_SCHEMA;
     const repairMessages = [
       ...messages,
       ...(typeof content === "string" && content.trim() ? [{ role: "assistant", content }] : []),
@@ -316,13 +390,17 @@ export class Agent {
           "Your final Task completion was invalid or empty.",
           "Return only one valid completion object with output, data, and artifacts.",
           "Do not call Tools. Do not add prose or Markdown outside the JSON object.",
-          `Required JSON schema: ${COMPLETION_SCHEMA_TEXT}`,
+          ...(relayMode ? [
+            `This is RELAY MODE: output must stay under ${MAX_RELAY_OUTPUT_CHARS} characters and substantive handoff content belongs in compact data.`,
+            "Preserve all downstream-relevant facts while removing explanatory prose and repetition.",
+          ] : []),
+          `Required JSON schema: ${JSON.stringify(schema)}`,
         ].join("\n"),
       },
     ];
     let lastError = failure("Agent completion repair returned no usable output", "completion", "invalid_completion_repair");
 
-    for (const format of [COMPLETION_SCHEMA, null]) {
+    for (const format of [schema, null]) {
       const response = await this.generate(repairMessages, [], format);
       const candidate = typeof response?.content === "string" ? response.content : "";
       if (!candidate.trim()) {
@@ -331,7 +409,7 @@ export class Agent {
       }
 
       try {
-        return normalizeCompletion(candidate);
+        return normalizeCompletion(candidate, relayMode);
       } catch (error) {
         lastError = classifyFailure(error, "completion", "invalid_completion_repair");
         repairMessages.push(
@@ -343,7 +421,6 @@ export class Agent {
         );
       }
     }
-
     throw lastError;
   }
 
@@ -375,12 +452,13 @@ export class Agent {
       if (!toolCalls.length) {
         if (content.trim()) {
           try {
-            return normalizeCompletion(content);
+            return this.withUsage(normalizeCompletion(content, Boolean(task.relayMode)), task.relayMode);
           } catch {
             // Repair below with Tools disabled and the full completion schema grounded in the prompt.
           }
         }
-        return this.repairCompletion(messages, content);
+        const completion = await this.repairCompletion(messages, content, Boolean(task.relayMode));
+        return this.withUsage(completion, task.relayMode);
       }
 
       messages.push({ role: "assistant", content, toolCalls: structuredClone(toolCalls) });
@@ -471,7 +549,7 @@ export class Agent {
           role: "tool",
           toolCallId: call.id ?? null,
           name: call.name,
-          content: `Tool failed:\n${JSON.stringify(details, null, 2)}`,
+          content: `Tool failed:\n${JSON.stringify(details)}`,
         });
       }
 
