@@ -12,6 +12,7 @@ import {
   resolveWorkspacePath,
   stageInvocationCompletion,
 } from "../services/ExecutionWorkspaceService.mjs";
+import { getTaskExecutionGroups } from "../services/WorkflowGraphService.mjs";
 
 const agentProgram = fileURLToPath(new URL("./AgentProcess.mjs", import.meta.url));
 const active = new Map();
@@ -35,6 +36,40 @@ const executionPolicyFor = (task, tools) => {
     ? DOCUMENT_RESEARCH_EXECUTION_POLICY
     : toolNames.has("http") ? WEB_RESEARCH_EXECUTION_POLICY : STANDARD_EXECUTION_POLICY;
   return { ...defaults, ...(isObject(task.execution) ? task.execution : {}) };
+};
+const directPredecessorTaskIds = (workflow, taskId) => (workflow.edges ?? [])
+  .filter(([, to]) => to === taskId)
+  .map(([from]) => from)
+  .filter(from => workflow.tasks?.[from]?.type === "task");
+const taskRelaysDownstream = (workflow, taskId) => (workflow.edges ?? []).some(
+  ([from, to]) => from === taskId && workflow.tasks?.[to]?.type === "task",
+);
+const compactAgentInput = (workflow, taskId, input, requiredInputs) => {
+  if (Array.isArray(requiredInputs) && requiredInputs.length) return structuredClone(input ?? {});
+  if (!workflow || !isObject(input)) return structuredClone(input ?? {});
+
+  const compact = {};
+  if (Object.prototype.hasOwnProperty.call(input, "workflow")) compact.workflow = structuredClone(input.workflow);
+
+  const sourceUpstream = isObject(input.upstream) ? input.upstream : {};
+  const upstream = {};
+  for (const producerId of directPredecessorTaskIds(workflow, taskId)) {
+    if (!Object.prototype.hasOwnProperty.call(sourceUpstream, producerId)) continue;
+    upstream[producerId] = structuredClone(sourceUpstream[producerId]);
+  }
+  if (Object.keys(upstream).length) compact.upstream = upstream;
+
+  const preservedNames = new Set(["__mapExecution", "__loopReview"]);
+  for (const group of getTaskExecutionGroups(workflow, taskId)) {
+    if (group.type !== "map") continue;
+    preservedNames.add(group.itemAs || "item");
+    preservedNames.add(group.indexAs || "index");
+  }
+  for (const name of preservedNames) {
+    if (Object.prototype.hasOwnProperty.call(input, name)) compact[name] = structuredClone(input[name]);
+  }
+
+  return Object.keys(compact).length ? compact : structuredClone(input);
 };
 const sameInput = (left, right) => {
   try { return JSON.stringify(left) === JSON.stringify(right); } catch { return false; }
@@ -305,6 +340,9 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
     throw error;
   }
   const execution = executionPolicyFor(task, tools);
+  const workflow = getWorkflow(workflowId);
+  const relayMode = workflow ? taskRelaysDownstream(workflow, taskId) : false;
+  const agentInput = compactAgentInput(workflow, taskId, task.input ?? {}, task.inputs);
 
   return new Promise((resolve, reject) => {
     let child;
@@ -338,6 +376,7 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
       tools: tools.map(tool => tool.name),
       skills: skills.map(skill => skill.name),
       execution,
+      relayMode,
       status: "working",
       toolNames: new Set(tools.map(tool => tool.name)),
       toolCalls: [],
@@ -362,6 +401,7 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
       provider,
       model,
       execution: structuredClone(execution),
+      relayMode,
       inactivityTimeoutMs,
       absoluteTimeoutMs,
     });
@@ -380,6 +420,9 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
       active.delete(id);
       if (activeInvocationKeys.get(key) === id) activeInvocationKeys.delete(key);
 
+      const usage = isObject(rawResult.usage)
+        ? structuredClone(rawResult.usage)
+        : isObject(rawResult.completion?.usage) ? structuredClone(rawResult.completion.usage) : null;
       let result = rawResult;
       if (result.status === "completed") {
         try {
@@ -389,7 +432,11 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
             attemptId,
             invocationId,
             workspaceDir,
-            completion: result.completion,
+            completion: {
+              output: result.completion?.output ?? "",
+              data: result.completion?.data ?? null,
+              artifacts: result.completion?.artifacts ?? [],
+            },
           });
           result = {
             status: "completed",
@@ -418,13 +465,15 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
 
       if (result.status === "failed") result = enrichFailedResult(entry, result);
       const toolCalls = entry.toolCalls.map(call => structuredClone(call));
-      result = { ...result, toolCalls };
+      result = { ...result, toolCalls, ...(usage ? { usage } : {}) };
 
       recordAgentEvent("agent.stopped", {
         workflowId, taskId, invocationId, agentId: id, pid: child.pid, status: result.status,
         toolCallCount: entry.toolCallCount,
         toolFailureCount: entry.toolFailureCount,
         execution: structuredClone(execution),
+        relayMode,
+        ...(usage ? { usage } : {}),
         ...(result.status === "failed" ? { error: result.error, diagnostics: result.diagnostics } : {}),
       });
       resolve({ ...result, agentId: id, pid: child.pid, invocationId });
@@ -463,10 +512,19 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
         void runTool(entry, message);
         return;
       }
-      if (message?.type === "completed") void settle({ status: "completed", completion: message.completion });
-      if (message?.type === "blocked") void settle({ status: "blocked", error: message.error, approvalId: message.approvalId ?? null });
+      if (message?.type === "completed") {
+        void settle({ status: "completed", completion: message.completion, usage: message.usage ?? null });
+      }
+      if (message?.type === "blocked") {
+        void settle({ status: "blocked", error: message.error, approvalId: message.approvalId ?? null, usage: message.usage ?? null });
+      }
       if (message?.type === "failed") {
-        void settle({ status: "failed", error: message.error, diagnostics: isObject(message.diagnostics) ? message.diagnostics : null });
+        void settle({
+          status: "failed",
+          error: message.error,
+          diagnostics: isObject(message.diagnostics) ? message.diagnostics : null,
+          usage: message.usage ?? null,
+        });
       }
     });
     child.on("error", error => {
@@ -494,8 +552,9 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
         workflowId,
         objective: task.objective ?? "",
         completion: task.completion ?? "",
-        input: structuredClone(task.input ?? {}),
+        input: agentInput,
         requiredInputs: Array.isArray(task.inputs) ? [...task.inputs] : [],
+        relayMode,
         knowledge: getKnowledge(),
         workspaceDir,
       },
@@ -515,6 +574,7 @@ export const listActiveAgents = () => [...active.values()].map(entry => ({
   tools: [...entry.tools],
   skills: [...entry.skills],
   execution: structuredClone(entry.execution),
+  relayMode: entry.relayMode,
   timeoutMs: entry.absoluteTimeoutMs,
   inactivityTimeoutMs: entry.inactivityTimeoutMs,
   absoluteTimeoutMs: entry.absoluteTimeoutMs,
