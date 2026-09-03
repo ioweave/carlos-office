@@ -44,6 +44,17 @@ await conversations.migrateLegacyCarlosAttachments();
 await schedules.loadSchedules();
 await nora.initializeNora();
 
+for (const workflow of processes.listWorkflows().filter(item => (
+  item.status === "running" && item.interruption?.recovery === "langgraph_resume"
+))) {
+  void nora.runWorkflow(workflow.id).catch(error => {
+    console.error("[workflow-recovery] Could not resume LangGraph Workflow.", {
+      workflowId: workflow.id,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
 const normalizeHostname = hostname => String(hostname || "")
   .trim()
   .toLowerCase()
