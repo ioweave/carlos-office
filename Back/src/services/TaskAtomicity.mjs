@@ -10,18 +10,18 @@ export const LEGACY_TASK_OPERATION = "legacy";
 const OPERATION_SET = new Set(TASK_OPERATIONS);
 const TOOL_FREE_SET = new Set(TOOL_FREE_TASK_OPERATIONS);
 const ACTION_PATTERNS = Object.freeze({
-  search: /\b(search\w*|investig\w*|busc\w*)\b/i,
-  fetch: /\b(fetch\w*|retriev\w*|download\w*|obtain\w*|obten\w*|recuper\w*|descarg\w*)\b/i,
-  extract: /\b(extract\w*|transcrib\w*|parse\w*|extraer\w*|extrae\w*|extraig\w*)\b/i,
-  inspect: /\b(inspect\w*|review\w*|examin\w*|revis\w*|inspeccion\w*)\b/i,
-  verify: /\b(verif\w*|confirm\w*|validat\w*|validar\w*|valid\w*)\b/i,
-  analyze: /\b(analyz\w*|analys\w*|evaluat\w*|assess\w*|analiz\w*|evalu\w*)\b/i,
-  compare: /\b(compar\w*|contrast\w*)\b/i,
-  synthesize: /\b(synthesi\w*|summariz\w*|integrat\w*|sintetiz\w*|resum\w*|integr\w*)\b/i,
-  transform: /\b(transform\w*|convert\w*|normaliz\w*)\b/i,
-  write: /\b(writ\w*|draft\w*|redact\w*|generat\w*|creat\w*|escrib\w*|gener\w*)\b/i,
-  execute: /\b(execut\w*|run\w*|send\w*|delet\w*|updat\w*|ejecut\w*|corr\w*|envi\w*|elimin\w*|actualiz\w*)\b/i,
-  decide: /\b(decid\w*|choos\w*|select\w*|eleg\w*|seleccion\w*)\b/i,
+  search: /\b(search|investigate|investiga|investigar|busca|buscar)\b/i,
+  fetch: /\b(fetch|retrieve|download|obtain|obten|obtener|recupera|recuperar|descarga|descargar)\b/i,
+  extract: /\b(extract|transcribe|parse|extraer|extrae|extraiga)\b/i,
+  inspect: /\b(inspect|review|examine|revisa|revisar|inspecciona|inspeccionar)\b/i,
+  verify: /\b(verify|confirm|validate|verifica|verificar|confirma|confirmar|valida|validar)\b/i,
+  analyze: /\b(analyze|analyse|evaluate|assess|analiza|analizar|evalua|evaluar)\b/i,
+  compare: /\b(compare|contrast|compara|comparar|contrasta|contrastar)\b/i,
+  synthesize: /\b(synthesize|summarize|integrate|sintetiza|sintetizar|resume|resumir|integra|integrar)\b/i,
+  transform: /\b(transform|convert|normalize|transforma|transformar|convierte|convertir|normaliza|normalizar)\b/i,
+  write: /\b(write|draft|generate|create|redacta|redactar|genera|generar|crea|crear|escribe|escribir)\b/i,
+  execute: /\b(execute|run|send|delete|update|ejecuta|ejecutar|corre|correr|envia|enviar|elimina|eliminar|actualiza|actualizar)\b/i,
+  decide: /\b(decide|choose|select|decide|decidir|elige|elegir|selecciona|seleccionar)\b/i,
 });
 const SEQUENCE_PATTERN = /\b(and then|then|after that|afterwards|next|y luego|luego|despues|posteriormente|a continuacion)\b/i;
 const NUMBERED_ACTION_PATTERN = /(?:^|\s)(?:\(\d+\)|\d+[.)])\s*/g;
