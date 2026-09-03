@@ -20,6 +20,13 @@ export const TOOL_FREE_TASK_OPERATIONS = Object.freeze([
   "transform",
   "decide",
 ]);
+export const TASK_TOOL_REQUIRED_OPERATIONS = Object.freeze([
+  "search",
+  "fetch",
+  "extract",
+  "inspect",
+  "execute",
+]);
 export const TASK_OBJECTIVE_MAX_CHARS = 700;
 export const TASK_COMPLETION_MAX_CHARS = 600;
 
@@ -80,7 +87,7 @@ export const WORKFLOW_NODE_SCHEMA = Object.freeze({
       type: "array",
       items: { type: "string", minLength: 1 },
       uniqueItems: true,
-      description: "Optional resolved input paths. Use workflow.<name> or upstream.<producerTaskId>[.<property>].",
+      description: "Explicit minimal input paths. [] means no external context. Use workflow.<name> or upstream.<producerTaskId>[.<property>].",
     },
     output: {
       type: "string",
@@ -90,25 +97,25 @@ export const WORKFLOW_NODE_SCHEMA = Object.freeze({
     provider: {
       type: "string",
       minLength: 1,
-      description: "Optional fixed provider. provider and model must be present together.",
+      description: "Optional fixed provider. provider and model must be present together. Otherwise the Workflow Nora model is inherited deterministically.",
     },
     model: {
       type: "string",
       minLength: 1,
-      description: "Optional fixed model. provider and model must be present together.",
+      description: "Optional fixed model. provider and model must be present together. Otherwise the Workflow Nora model is inherited deterministically.",
     },
     tools: {
       type: "array",
       items: { type: "string", minLength: 1 },
       maxItems: 1,
       uniqueItems: true,
-      description: "Optional authoritative Tool list. A Task may use at most one Tool. Omit for Nora selection; [] means no Tool.",
+      description: "Authoritative Tool assignment. Atomic Tool operations use exactly one Tool; evidence-only operations use []. Runtime Tool selection is not used.",
     },
     skills: {
       type: "array",
       items: { type: "string", minLength: 1 },
       uniqueItems: true,
-      description: "Optional authoritative Skill list. Omit for Nora selection; [] intentionally means no Skills.",
+      description: "Authoritative Skill list. Use [] when none are required; runtime Skill selection is not used.",
     },
     timeoutMs: {
       type: ["integer", "null"],
@@ -267,8 +274,13 @@ export const getWorkflowDesignInstruction = () => [
   "Never ask one Task to fetch information and analyze it, or analyze and compare it, or compare and generate an output. Those are separate Task nodes.",
   "Task objectives must be concise and atomic. Put case context in Workflow inputs and pass evidence through upstream data; do not paste the whole job into one objective.",
   `Task objective length is bounded to ${TASK_OBJECTIVE_MAX_CHARS} characters and completion to ${TASK_COMPLETION_MAX_CHARS} characters. Numbered multi-action objectives and sequential 'then/luego' instructions are invalid.`,
+  "Every Task must declare inputs explicitly. Use [] when it needs no Workflow/upstream context. Carlos Office does not inject the whole Workflow input into Tasks that declare [].",
+  "Declare only the minimum input paths the operation requires. A search whose objective already names the target usually uses inputs:[].",
+  "Tool assignment is decided when the Workflow is designed, not while the Task is running.",
+  `Operations ${TASK_TOOL_REQUIRED_OPERATIONS.join(", ")} require exactly one Tool. Operations ${TOOL_FREE_TASK_OPERATIONS.join(", ")} require tools:[]. write may use zero or one Tool depending on whether it creates an external artifact.`,
   "A Task may use AT MOST ONE Tool. If two Tools are required, that is evidence that two Task nodes are required.",
-  `Operations ${TOOL_FREE_TASK_OPERATIONS.join(", ")} are evidence-only and must use zero Tools; they work solely from resolved inputs/upstream data.`,
+  "Skills are also fixed at design time; use skills:[] when none are required.",
+  "Provider/model are inherited deterministically from the Workflow's Nora model unless explicitly pinned together on the Task. Runtime model selection is not used.",
   "search discovers candidate sources only; fetch retrieves one identified resource; extract reads one provided resource; inspect observes one provided target; verify checks one claim against provided evidence.",
   "analyze reasons over provided evidence; compare compares provided inputs; synthesize combines upstream results; transform changes provided content; write produces one output/artifact; execute performs one side effect; decide makes one choice.",
   "Task output is an OPTIONAL ALIAS used only to address that Task downstream. It is not the Agent result. Omit output instead of emitting an empty string.",
@@ -278,7 +290,7 @@ export const getWorkflowDesignInstruction = () => [
   "Loop: an execution Group for quality-controlled repetition. In v1.1 it directly owns exactly one executable Task. Nora reviews each result and may repeat it up to maxIterations. Never create a graph back-edge for a Loop.",
   "Groups never appear in edges. start/end cannot be Group members. A Task or nested Group may directly belong to at most one Group.",
   "Use workflow.<input> for Workflow inputs. Use upstream.<producerTaskId> or a unique output alias for completed ancestor data. Never invent sibling/descendant dependencies.",
-  "Omit optional provider/model, tools, skills, output, timeoutMs, execution, and Groups that are not needed. Do not fill optional fields with empty strings or null placeholders just to satisfy shape.",
+  "Omit optional output, timeoutMs, execution, and Groups that are not needed. Do not use empty strings or null placeholders.",
   `Workflow graph JSON schema: ${JSON.stringify(WORKFLOW_GRAPH_SCHEMA)}`,
   `Reusable Process JSON schema: ${JSON.stringify(PROCESS_DEFINITION_SCHEMA)}`,
 ].join("\n\n");
