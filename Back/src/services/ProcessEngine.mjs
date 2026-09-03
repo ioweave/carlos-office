@@ -1,14 +1,12 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { importArtifact } from "../controllers/ArtifactController.mjs";
-import { recordEvent } from "../controllers/EventController.mjs";
+import { listEvents, recordEvent } from "../controllers/EventController.mjs";
 import {
   addTaskAttempt,
-  getReadyTasks,
   getTaskAttempt,
   getWorkflow,
   listTaskAttempts,
-  markWorkflowStalled,
   setTaskStatus,
   updateTaskAttempt,
   updateTaskAttemptRuntime,
@@ -23,13 +21,13 @@ import {
   stopAllAgents,
 } from "../runtime/AgentProcesses.mjs";
 import { appendInvocationJournal, clearInvocationJournal } from "./InvocationJournalService.mjs";
+import { runLangGraphWorkflow } from "./LangGraphWorkflowRuntime.mjs";
 import { executeTaskWithGroups, materializeMapData } from "./TaskExecutionService.mjs";
 import { getTaskExecutionGroups } from "./WorkflowGraphService.mjs";
 
 const activeRuns = new Map();
 const workflowTransitions = new Map();
 const ORPHANED_ATTEMPT_REASON = "Previous Agent process is no longer active";
-const RESERVED_INPUT_NAMES = new Set(["workflow", "upstream", "runtime"]);
 const DEFAULT_MAX_ATTEMPTS = 2;
 const RECOVERABLE_FAILURE_CODES = new Set([
   "provider_error",
@@ -41,6 +39,18 @@ const RECOVERABLE_FAILURE_CODES = new Set([
   "task_inactivity_timeout",
 ]);
 const READ_ONLY_TOOLS = new Set(["read-file", "http-content", "workspace-variables"]);
+const HALTED_WORKFLOW_STATUSES = new Set(["blocked", "cancelled", "failed", "paused", "stalled"]);
+
+class WorkflowHaltError extends Error {
+  constructor(workflowId, taskId, status) {
+    super(`Workflow ${workflowId} halted at Task ${taskId} with status ${status}`);
+    this.name = "WorkflowHaltError";
+    this.code = "workflow_halted";
+    this.workflowId = workflowId;
+    this.taskId = taskId;
+    this.status = status;
+  }
+}
 
 const errorMessage = error => error instanceof Error ? error.message : String(error);
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -77,12 +87,14 @@ const selectionFrom = (value, validateModelSelection, models = []) => {
   }
 };
 
+const incomingTaskIds = (workflow, taskId) => workflow.edges
+  .filter(([, to]) => to === taskId)
+  .map(([from]) => from)
+  .filter(id => workflow.tasks?.[id]?.type === "task");
+
 const ancestorTaskIds = (workflow, taskId) => {
   const reverse = new Map(Object.keys(workflow.tasks ?? {}).map(id => [id, []]));
-  for (const [from, to] of workflow.edges ?? []) {
-    if (!reverse.has(to)) reverse.set(to, []);
-    reverse.get(to).push(from);
-  }
+  for (const [from, to] of workflow.edges ?? []) reverse.get(to)?.push(from);
   const result = new Set();
   const pending = [...(reverse.get(taskId) ?? [])];
   while (pending.length) {
@@ -93,7 +105,10 @@ const ancestorTaskIds = (workflow, taskId) => {
   }
   return [...result].filter(id => workflow.tasks[id]?.type === "task");
 };
-const latestCompletedAttempt = task => [...(task.attempts ?? [])].reverse().find(attempt => attempt.status === "completed") ?? null;
+
+const latestCompletedAttempt = task => [...(task.attempts ?? [])]
+  .reverse()
+  .find(attempt => attempt.status === "completed") ?? null;
 const attemptValue = attempt => attempt?.data != null ? attempt.data : attempt?.output;
 
 const getPath = (value, path) => {
@@ -105,6 +120,7 @@ const getPath = (value, path) => {
   }
   return current;
 };
+
 const setPath = (target, path, value) => {
   const parts = String(path || "").split(".").map(part => part.trim()).filter(Boolean);
   if (!parts.length) return;
@@ -116,48 +132,62 @@ const setPath = (target, path, value) => {
   current[parts.at(-1)] = structuredClone(value);
 };
 
+const upstreamValue = (workflow, taskId, reference, retainedMapIds) => {
+  const ancestors = ancestorTaskIds(workflow, taskId);
+  const producerId = ancestors.find(id => id === reference || workflow.tasks[id]?.output === reference);
+  if (!producerId) return undefined;
+  return materializeMapData(attemptValue(latestCompletedAttempt(workflow.tasks[producerId])), retainedMapIds);
+};
+
+const resolveInputPath = (workflow, taskId, path, retainedMapIds) => {
+  if (path === "workflow") return materializeMapData(structuredClone(workflow.inputs ?? {}), retainedMapIds);
+  if (path.startsWith("workflow.")) return getPath(workflow.inputs ?? {}, path.slice("workflow.".length));
+  if (path === "upstream") {
+    return Object.fromEntries(ancestorTaskIds(workflow, taskId).flatMap(id => {
+      const value = upstreamValue(workflow, taskId, id, retainedMapIds);
+      return value === undefined ? [] : [[id, value]];
+    }));
+  }
+  if (path.startsWith("upstream.")) {
+    const parts = path.slice("upstream.".length).split(".");
+    const value = upstreamValue(workflow, taskId, parts.shift(), retainedMapIds);
+    return parts.length ? getPath(value, parts.join(".")) : value;
+  }
+
+  const workflowValue = getPath(workflow.inputs ?? {}, path);
+  if (workflowValue !== undefined) return workflowValue;
+  const [reference, ...rest] = path.split(".");
+  const value = upstreamValue(workflow, taskId, reference, retainedMapIds);
+  return rest.length ? getPath(value, rest.join(".")) : value;
+};
+
 const resolveTaskInput = (workflow, taskId, task) => {
   const retainedMapIds = new Set(
     getTaskExecutionGroups(workflow, taskId)
       .filter(group => group.type === "map")
       .map(group => group.id),
   );
-  const workflowInput = materializeMapData(structuredClone(workflow.inputs ?? {}), retainedMapIds);
+
+  if (Array.isArray(task.inputs) && task.inputs.length) {
+    const selected = {};
+    for (const name of task.inputs) {
+      const value = resolveInputPath(workflow, taskId, name, retainedMapIds);
+      if (value === undefined) throw new Error(`Task input "${name}" could not be resolved before execution`);
+      setPath(selected, name, value);
+    }
+    return selected;
+  }
+
   const upstream = {};
-  const available = { workflow: structuredClone(workflowInput), upstream, runtime: {} };
-  for (const [name, value] of Object.entries(workflowInput)) {
-    if (!RESERVED_INPUT_NAMES.has(name)) available[name] = structuredClone(value);
+  for (const upstreamId of incomingTaskIds(workflow, taskId)) {
+    const value = upstreamValue(workflow, taskId, upstreamId, retainedMapIds);
+    if (value !== undefined) upstream[upstreamId] = structuredClone(value);
   }
-
-  const collisions = new Set();
-  for (const upstreamId of ancestorTaskIds(workflow, taskId)) {
-    const upstreamTask = workflow.tasks[upstreamId];
-    const attempt = latestCompletedAttempt(upstreamTask);
-    if (!attempt) continue;
-    const value = materializeMapData(attemptValue(attempt), retainedMapIds);
-    upstream[upstreamId] = structuredClone(value);
-    if (!Object.prototype.hasOwnProperty.call(available, upstreamId)) available[upstreamId] = structuredClone(value);
-    else collisions.add(upstreamId);
-
-    if (upstreamTask.output) {
-      upstream[upstreamTask.output] = structuredClone(value);
-      if (!Object.prototype.hasOwnProperty.call(available, upstreamTask.output)) available[upstreamTask.output] = structuredClone(value);
-      else collisions.add(upstreamTask.output);
-    }
-  }
-  if (collisions.size) available.runtime.inputCollisions = [...collisions];
-
-  if (!Array.isArray(task.inputs) || !task.inputs.length) return available;
-  const selected = {};
-  for (const name of task.inputs) {
-    if (collisions.has(name) && !name.includes(".")) {
-      throw new Error(`Task input "${name}" is ambiguous. Use workflow.${name} or upstream.${name}.`);
-    }
-    const value = getPath(available, name);
-    if (value === undefined) throw new Error(`Task input "${name}" could not be resolved before execution`);
-    setPath(selected, name, value);
-  }
-  return selected;
+  return {
+    workflow: materializeMapData(structuredClone(workflow.inputs ?? {}), retainedMapIds),
+    upstream,
+    runtime: {},
+  };
 };
 
 const loadTools = names => names.map(name => {
@@ -176,37 +206,22 @@ const skillDescription = content => String(content ?? "")
   .find(Boolean)
   ?.replace(/^#+\s*/, "") ?? "";
 
-const clearAttemptJournal = async (workflowId, taskId, attemptId) => {
-  try { await clearInvocationJournal(workflowId, taskId, attemptId); } catch (error) {
-    console.warn("[invocations] Could not clear completed Attempt journal.", {
-      workflowId,
-      taskId,
-      attemptId,
-      message: errorMessage(error),
-    });
-  }
-};
-
 const finishAttempt = async (workflowId, taskId, attemptId, changes) => {
-  const result = await updateTaskAttempt(
-    workflowId,
-    taskId,
-    attemptId,
-    { ...changes, endedAt: new Date().toISOString() },
-  );
-  await clearAttemptJournal(workflowId, taskId, attemptId);
+  const result = await updateTaskAttempt(workflowId, taskId, attemptId, {
+    ...changes,
+    endedAt: new Date().toISOString(),
+  });
+  await clearInvocationJournal(workflowId, taskId, attemptId);
   return result;
 };
 
 const settleAttemptAndTask = async (workflowId, taskId, attemptId, changes, taskStatus) => {
-  const updated = updateTaskAttemptRuntime(
-    workflowId,
-    taskId,
-    attemptId,
-    { ...changes, endedAt: new Date().toISOString() },
-  );
+  const updated = updateTaskAttemptRuntime(workflowId, taskId, attemptId, {
+    ...changes,
+    endedAt: new Date().toISOString(),
+  });
   await setTaskStatus(workflowId, taskId, taskStatus);
-  await clearAttemptJournal(workflowId, taskId, attemptId);
+  await clearInvocationJournal(workflowId, taskId, attemptId);
   return updated;
 };
 
@@ -216,24 +231,25 @@ const liveAgentForTask = (workflowId, taskId) => listActiveAgents().find(
 
 const closeOrphanedRunningAttempts = async (workflowId, taskId, task) => {
   const runningAttempts = (task.attempts ?? []).filter(attempt => attempt.status === "running");
-  if (!runningAttempts.length) return 0;
+  if (!runningAttempts.length) return;
   const liveAgent = liveAgentForTask(workflowId, taskId);
-  if (liveAgent) throw new Error(`Task ${taskId} in Workflow ${workflowId} already has an active Agent process (${liveAgent.id})`);
+  if (liveAgent) throw new Error(`Task ${taskId} already has active Agent ${liveAgent.id}`);
 
   for (const attempt of runningAttempts) {
-    const diagnostics = { phase: "process", code: "orphaned_agent_process", message: ORPHANED_ATTEMPT_REASON };
+    const diagnostics = {
+      phase: "process",
+      code: "orphaned_agent_process",
+      message: ORPHANED_ATTEMPT_REASON,
+      retryable: true,
+    };
     await finishAttempt(workflowId, taskId, attempt.id, {
       status: "failed",
       error: ORPHANED_ATTEMPT_REASON,
       diagnostics,
       blockedReason: null,
     });
-    await recordEvent("attempt.orphaned", {
-      workflowId, taskId, attemptId: attempt.id, agentId: attempt.agentId ?? null, pid: attempt.pid ?? null,
-      error: ORPHANED_ATTEMPT_REASON, diagnostics,
-    });
+    await recordEvent("attempt.orphaned", { workflowId, taskId, attemptId: attempt.id, diagnostics });
   }
-  return runningAttempts.length;
 };
 
 const failSetup = async (workflowId, taskId, error) => {
@@ -287,7 +303,7 @@ export const selectTaskExecution = async ({
   const task = workflow.tasks?.[taskId];
   if (!task || task.type !== "task") throw new Error(`Unknown executable Task: ${taskId}`);
 
-  const availableModels = models.map(entry => ({ provider: entry.provider, models: Array.isArray(entry.models) ? [...entry.models] : [] }));
+  const availableModels = models.map(entry => ({ provider: entry.provider, models: [...(entry.models ?? [])] }));
   const availableTools = listTools().map(tool => ({
     name: tool.name,
     description: tool.description ?? "",
@@ -306,14 +322,12 @@ export const selectTaskExecution = async ({
   if (!fixedModel || fixedTools === null || fixedSkills === null) {
     decision = await decide(
       [
-        "Choose the unspecified execution resources for this ready Task.",
-        "Explicit Task provider/model, tools, and skills are authoritative constraints and must not be replaced.",
-        "There are no persistent specialist Agent identities or Agent defaults.",
-        "Return only:",
-        '{"provider":"provider-name","model":"model-name","tools":[],"skills":[]}',
-      ].join("\n\n"),
+        "Choose only the unspecified runtime resources for this Task.",
+        "Explicit provider/model, tools, and skills are authoritative and must not be replaced.",
+        "Return only JSON matching the supplied execution-selection schema.",
+      ].join("\n"),
       {
-        workflow: { id: workflow.id, process: workflow.process, inputs: workflow.inputs, config: workflow.config },
+        workflow: { id: workflow.id, process: workflow.process },
         task: { id: taskId, ...task },
         executionGroups: getTaskExecutionGroups(workflow, taskId),
         fixed: { model: fixedModel, tools: fixedTools, skills: fixedSkills },
@@ -328,10 +342,12 @@ export const selectTaskExecution = async ({
   const selectedModel = fixedModel ?? validateModelSelection({ provider: decision.provider, model: decision.model });
   const selectedTools = fixedTools ?? decision.tools;
   const selectedSkills = fixedSkills ?? decision.skills;
-  if (!Array.isArray(selectedTools)) throw new Error("Nora must select a Tool list for the Task");
-  if (!Array.isArray(selectedSkills)) throw new Error("Nora must select a Skill list for the Task");
-  if (selectedTools.some(name => !toolNames.has(name))) throw new Error("Nora selected an invalid Tool set");
-  if (selectedSkills.some(name => !skillNames.has(name))) throw new Error("Nora selected an invalid Skill set");
+  if (!Array.isArray(selectedTools) || selectedTools.some(name => !toolNames.has(name))) {
+    throw new Error("Nora selected an invalid Tool set");
+  }
+  if (!Array.isArray(selectedSkills) || selectedSkills.some(name => !skillNames.has(name))) {
+    throw new Error("Nora selected an invalid Skill set");
+  }
   return { ...selectedModel, tools: [...new Set(selectedTools)], skills: [...new Set(selectedSkills)] };
 };
 
@@ -340,7 +356,8 @@ const importDeclaredArtifacts = async (workflow, completion) => {
   if (!declarations.length) return { output: completion.output, data: completion.data ?? null, artifacts: [] };
   const conversationId = workflow?.config?.conversationId;
   if (!conversationId) return { output: completion.output, data: completion.data ?? null, artifacts: [] };
-  const artifactIds = [];
+
+  const artifacts = [];
   for (const declaration of declarations) {
     if (!isObject(declaration) || typeof declaration.path !== "string" || !declaration.path.trim()) {
       throw new Error("Agent declared an invalid Artifact path");
@@ -352,9 +369,9 @@ const importDeclaredArtifacts = async (workflow, completion) => {
       type: declaration.type ?? null,
       createdBy: declaration.createdBy || "Temporary Agent",
     });
-    artifactIds.push(artifact.id);
+    artifacts.push(artifact.id);
   }
-  return { output: completion.output, data: completion.data ?? null, artifacts: artifactIds };
+  return { output: completion.output, data: completion.data ?? null, artifacts };
 };
 
 const appendInvocation = (workflowId, taskId, attemptId, invocation) => withWorkflowTransition(
@@ -363,8 +380,9 @@ const appendInvocation = (workflowId, taskId, attemptId, invocation) => withWork
     const current = getTaskAttempt(workflowId, taskId, attemptId);
     if (!current) return null;
     await appendInvocationJournal({ workflowId, taskId, attemptId, invocation });
-    const invocations = [...(current.invocations ?? []), structuredClone(invocation)];
-    return updateTaskAttemptRuntime(workflowId, taskId, attemptId, { invocations });
+    return updateTaskAttemptRuntime(workflowId, taskId, attemptId, {
+      invocations: [...(current.invocations ?? []), structuredClone(invocation)],
+    });
   },
 );
 
@@ -374,38 +392,40 @@ const toolCallIsSafeToReplay = call => {
   if (call.tool !== "http") return false;
   return ["GET", "OPTIONS"].includes(String(call.input?.method || "GET").toUpperCase());
 };
+
 const resultCanRetrySafely = result => {
   if (result?.status !== "failed") return false;
   const diagnostics = result.diagnostics ?? {};
   if (diagnostics.retryable !== true && !RECOVERABLE_FAILURE_CODES.has(diagnostics.code)) return false;
-  const calls = Array.isArray(result.toolCalls) ? result.toolCalls : [];
-  return calls.every(toolCallIsSafeToReplay);
+  return (result.toolCalls ?? []).every(toolCallIsSafeToReplay);
 };
 
-const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSelection }) => {
-  if (runState?.cancelled) return null;
+const runTaskAttempt = async ({ workflowId, taskId, execution, runState, decide, noraSelection }) => {
   const tools = loadTools(execution.tools);
   const skills = loadSkills(execution.skills);
-
   const prepared = await withWorkflowTransition(workflowId, async () => {
-    const workflow = getWorkflow(workflowId);
-    const task = workflow?.tasks?.[taskId];
+    let workflow = getWorkflow(workflowId);
+    let task = workflow?.tasks?.[taskId];
     if (!task || task.type !== "task") throw new Error(`Unknown executable Task: ${taskId}`);
-    if (task.status !== "ready") {
-      if (runState?.cancelled || task.status === "cancelled" || ["paused", "cancelled"].includes(workflow.status)) return null;
-      throw new Error(`Task ${taskId} is ${task.status}, not ready`);
+    if (runState.cancelled || ["paused", "cancelled"].includes(workflow.status)) return null;
+
+    if (task.status === "running") {
+      await closeOrphanedRunningAttempts(workflowId, taskId, task);
+      await setTaskStatus(workflowId, taskId, "pending");
+      workflow = getWorkflow(workflowId);
+      task = workflow.tasks[taskId];
+    } else if (task.status === "pending") {
+      await setTaskStatus(workflowId, taskId, "pending");
+      workflow = getWorkflow(workflowId);
+      task = workflow.tasks[taskId];
     }
+    if (task.status !== "ready") throw new WorkflowHaltError(workflowId, taskId, task.status);
+    if (liveAgentForTask(workflowId, taskId)) throw new Error(`Task ${taskId} already has an active Agent process`);
 
-    await closeOrphanedRunningAttempts(workflowId, taskId, task);
-    const latestWorkflow = getWorkflow(workflowId);
-    const latestTask = latestWorkflow?.tasks?.[taskId];
-    if (!latestTask || latestTask.status !== "ready") return null;
-    if (liveAgentForTask(workflowId, taskId)) throw new Error(`Task ${taskId} in Workflow ${workflowId} already has an active Agent process`);
-
-    const input = resolveTaskInput(latestWorkflow, taskId, latestTask);
+    const input = resolveTaskInput(workflow, taskId, task);
     const previousAttempts = listTaskAttempts(workflowId, taskId);
-    const checkpointAttempt = latestTask.resumeCheckpointAttemptId
-      ? previousAttempts.find(item => item.id === latestTask.resumeCheckpointAttemptId) ?? null
+    const checkpointAttempt = task.resumeCheckpointAttemptId
+      ? previousAttempts.find(item => item.id === task.resumeCheckpointAttemptId) ?? null
       : null;
     const runAttempt = (runState.attemptsByTask.get(taskId) ?? 0) + 1;
     runState.attemptsByTask.set(taskId, runAttempt);
@@ -423,8 +443,8 @@ const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSe
       input: structuredClone(input),
       tools: [...execution.tools],
       skills: [...execution.skills],
-      execution: structuredClone(latestTask.execution ?? {}),
-      executionGroups: getTaskExecutionGroups(latestWorkflow, taskId),
+      execution: structuredClone(task.execution ?? {}),
+      executionGroups: getTaskExecutionGroups(workflow, taskId),
       startedAt: new Date().toISOString(),
       endedAt: null,
       output: null,
@@ -437,16 +457,8 @@ const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSe
       checkpointFromAttemptId: checkpointAttempt?.id ?? null,
     };
     await addTaskAttempt(workflowId, taskId, attempt);
-    try { await setTaskStatus(workflowId, taskId, "running"); } catch (error) {
-      const message = `Could not reserve Task execution: ${errorMessage(error)}`;
-      await finishAttempt(workflowId, taskId, attempt.id, {
-        status: "failed",
-        error: message,
-        diagnostics: { phase: "setup", code: "task_reservation_failure", message },
-      });
-      throw error;
-    }
-    return { attempt, input, task: structuredClone(latestTask), workflow: latestWorkflow, checkpointAttempt };
+    await setTaskStatus(workflowId, taskId, "running");
+    return { attempt, input, task: structuredClone(task), workflow, checkpointAttempt };
   });
 
   if (!prepared) return null;
@@ -458,16 +470,8 @@ const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSe
     provider: execution.provider,
     model: execution.model,
     runAttempt: attempt.runAttempt,
-    executionGroups: attempt.executionGroups.map(group => group.id),
+    runtime: "langgraph",
   });
-
-  if (runState?.cancelled) {
-    return withWorkflowTransition(workflowId, () => finishAttempt(workflowId, taskId, attempt.id, {
-      status: "cancelled",
-      error: "Workflow stopped before Agent launch",
-      diagnostics: null,
-    }));
-  }
 
   let result;
   try {
@@ -477,7 +481,7 @@ const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSe
       task,
       input,
       checkpointInvocations: checkpointAttempt?.invocations ?? [],
-      isCancelled: () => Boolean(runState?.cancelled || getWorkflow(workflowId)?.status === "paused"),
+      isCancelled: () => Boolean(runState.cancelled || getWorkflow(workflowId)?.status === "paused"),
       canRetryInvocation: resultCanRetrySafely,
       recordInvocation: invocation => appendInvocation(workflowId, taskId, attempt.id, invocation),
       runAgent: ({ invocationId, input: invocationInput }) => runAgentProcess({
@@ -493,24 +497,14 @@ const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSe
       }),
       review: ({ group, iteration, candidate }) => decide(
         [
-          "You are Nora acting as the independent quality controller for one Loop execution.",
-          "Assess the candidate result against the Task objective, completion criteria, and the Loop criteria.",
-          "Be strict: mediocre, incomplete, unsupported, or materially incorrect work must fail.",
-          "Return only JSON:",
-          '{"passed":true,"score":0.0,"feedback":"specific feedback for the next retry if rejected"}',
-          "score must be between 0 and 1. passed must reflect your qualitative assessment; Carlos Office also enforces the configured minimum score.",
-        ].join("\n\n"),
+          "Review one Loop candidate against the Task completion criteria and Loop criteria.",
+          "Reject incomplete, unsupported, or materially incorrect work.",
+          "Return only the configured Loop review JSON schema.",
+        ].join("\n"),
         {
           workflow: { id: workflow.id, process: workflow.process },
-          task: { id: taskId, name: task.name ?? taskId, objective: task.objective ?? "", completion: task.completion ?? "" },
-          loop: {
-            id: group.id,
-            name: group.name ?? group.id,
-            iteration,
-            maxIterations: group.maxIterations,
-            minimumScore: group.minimumScore,
-            criteria: group.criteria ?? "",
-          },
+          task: { id: taskId, name: task.name ?? taskId, objective: task.objective, completion: task.completion ?? "" },
+          loop: { ...group, iteration },
           candidate,
         },
         noraSelection,
@@ -530,7 +524,12 @@ const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSe
   if (result.status === "completed") {
     try { completion = await importDeclaredArtifacts(getWorkflow(workflowId), result); } catch (error) {
       const message = `Could not register Task Artifact: ${errorMessage(error)}`;
-      result = { ...result, status: "failed", error: message, diagnostics: { phase: "artifact", code: "artifact_registration_failure", message } };
+      result = {
+        ...result,
+        status: "failed",
+        error: message,
+        diagnostics: { phase: "artifact", code: "artifact_registration_failure", message },
+      };
     }
   }
 
@@ -539,11 +538,10 @@ const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSe
     const current = getWorkflow(workflowId);
     const currentTask = current?.tasks?.[taskId];
     if (!currentTask) throw new Error(`Unknown executable Task: ${taskId}`);
-    const taskWasCancelled = currentTask.status === "cancelled";
-    const executionWasCancelled = (
-      runState?.cancelled || taskWasCancelled || result.status === "cancelled"
-      || current?.status === "cancelled" || current?.status === "paused"
-    );
+    const executionWasCancelled = runState.cancelled
+      || currentTask.status === "cancelled"
+      || result.status === "cancelled"
+      || ["cancelled", "paused"].includes(current.status);
 
     if (executionWasCancelled) {
       return {
@@ -551,54 +549,34 @@ const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSe
         attempt: await finishAttempt(workflowId, taskId, attempt.id, {
           ...runtime,
           status: "cancelled",
-          error: result.error ?? (taskWasCancelled ? "Task cancelled by Carlos" : "Workflow stopped"),
+          error: result.error ?? "Workflow stopped",
           diagnostics: null,
         }),
       };
     }
     if (result.status === "completed") {
-      const completed = currentTask.status === "running" && current.status === "running"
-        ? await settleAttemptAndTask(workflowId, taskId, attempt.id, {
-          ...runtime,
-          status: "completed",
-          output: completion.output,
-          data: completion.data,
-          artifacts: completion.artifacts,
-          error: null,
-          diagnostics: null,
-          blockedReason: null,
-        }, "completed")
-        : await finishAttempt(workflowId, taskId, attempt.id, {
-          ...runtime,
-          status: "completed",
-          output: completion.output,
-          data: completion.data,
-          artifacts: completion.artifacts,
-          error: null,
-          diagnostics: null,
-          blockedReason: null,
-        });
+      const completed = await settleAttemptAndTask(workflowId, taskId, attempt.id, {
+        ...runtime,
+        status: "completed",
+        output: completion.output,
+        data: completion.data,
+        artifacts: completion.artifacts,
+        error: null,
+        diagnostics: null,
+        blockedReason: null,
+      }, "completed");
       return { event: "attempt.completed", attempt: completed };
     }
     if (result.status === "blocked") {
       const reason = result.error || "Carlos approval required";
-      const blocked = currentTask.status === "running" && current.status === "running"
-        ? await settleAttemptAndTask(workflowId, taskId, attempt.id, {
-          ...runtime,
-          status: "blocked",
-          error: null,
-          diagnostics: null,
-          blockedReason: reason,
-          approvalId: result.approvalId ?? null,
-        }, "blocked")
-        : await finishAttempt(workflowId, taskId, attempt.id, {
-          ...runtime,
-          status: "blocked",
-          error: null,
-          diagnostics: null,
-          blockedReason: reason,
-          approvalId: result.approvalId ?? null,
-        });
+      const blocked = await settleAttemptAndTask(workflowId, taskId, attempt.id, {
+        ...runtime,
+        status: "blocked",
+        error: null,
+        diagnostics: null,
+        blockedReason: reason,
+        approvalId: result.approvalId ?? null,
+      }, "blocked");
       return { event: "attempt.blocked", attempt: blocked, approvalId: result.approvalId ?? null };
     }
 
@@ -606,7 +584,7 @@ const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSe
     const diagnostics = failureDiagnostics({ ...result, message, diagnostics: result.diagnostics }, "process", "agent_process_failure");
     const maxAttempts = task.execution?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
     const canRetry = attempt.runAttempt < maxAttempts && resultCanRetrySafely({ ...result, diagnostics });
-    if (canRetry && currentTask.status === "running" && current.status === "running") {
+    if (canRetry) {
       const failed = await settleAttemptAndTask(workflowId, taskId, attempt.id, {
         ...runtime,
         status: "failed",
@@ -616,19 +594,12 @@ const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSe
       return { event: "attempt.retry_scheduled", attempt: failed, retry: true, error: message, diagnostics };
     }
 
-    const failed = currentTask.status === "running" && current.status === "running"
-      ? await settleAttemptAndTask(workflowId, taskId, attempt.id, {
-        ...runtime,
-        status: "failed",
-        error: message,
-        diagnostics,
-      }, "failed")
-      : await finishAttempt(workflowId, taskId, attempt.id, {
-        ...runtime,
-        status: "failed",
-        error: message,
-        diagnostics,
-      });
+    const failed = await settleAttemptAndTask(workflowId, taskId, attempt.id, {
+      ...runtime,
+      status: "failed",
+      error: message,
+      diagnostics,
+    }, "failed");
     return { event: "attempt.failed", attempt: failed, error: message, diagnostics };
   });
 
@@ -646,6 +617,73 @@ const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSe
   return outcome.attempt;
 };
 
+const workflowDefinitionFingerprint = workflow => createHash("sha256")
+  .update(JSON.stringify({
+    start: workflow.start,
+    end: workflow.end,
+    edges: workflow.edges,
+    groups: workflow.groups ?? [],
+    tasks: Object.fromEntries(Object.entries(workflow.tasks ?? {}).map(([taskId, task]) => {
+      const {
+        status: _status,
+        attempts: _attempts,
+        blockedReason: _blockedReason,
+        error: _error,
+        resumeCheckpointAttemptId: _resumeCheckpointAttemptId,
+        ...definition
+      } = task;
+      return [taskId, definition];
+    })),
+  }))
+  .digest("hex")
+  .slice(0, 16);
+
+const workflowRunMarker = workflowId => {
+  const events = [
+    ...listEvents({ type: "workflow.started", workflowId }),
+    ...listEvents({ type: "workflow.restarted", workflowId }),
+  ].filter(event => event.at).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  return events.at(-1)?.at ?? "initial";
+};
+
+const executeTaskNode = async ({ workflowId, taskId, runState, decide, getNoraSelection, models, validateModelSelection }) => {
+  let workflow = getWorkflow(workflowId);
+  const currentTask = workflow?.tasks?.[taskId];
+  if (!currentTask) throw new Error(`Unknown executable Task: ${taskId}`);
+  if (["completed", "skipped"].includes(currentTask.status)) return attemptValue(latestCompletedAttempt(currentTask));
+  if (HALTED_WORKFLOW_STATUSES.has(workflow.status)) throw new WorkflowHaltError(workflowId, taskId, workflow.status);
+
+  let execution = runState.executionByTask.get(taskId) ?? null;
+  const noraSelection = getNoraSelection(workflow);
+  if (!execution) {
+    try {
+      execution = await selectTaskExecution({
+        workflowId,
+        taskId,
+        decide,
+        noraSelection,
+        models,
+        validateModelSelection,
+      });
+      runState.executionByTask.set(taskId, structuredClone(execution));
+    } catch (error) {
+      await failSetup(workflowId, taskId, error);
+      throw new WorkflowHaltError(workflowId, taskId, "failed");
+    }
+  }
+
+  while (!runState.cancelled) {
+    const attempt = await runTaskAttempt({ workflowId, taskId, execution, runState, decide, noraSelection });
+    if (!attempt) throw new WorkflowHaltError(workflowId, taskId, getWorkflow(workflowId)?.status ?? "cancelled");
+    runState.attempts.push(attempt);
+    if (attempt.status === "completed") return attemptValue(attempt);
+    if (attempt.status === "failed" && attempt.diagnostics?.recovery === "automatic_retry") continue;
+    workflow = getWorkflow(workflowId);
+    throw new WorkflowHaltError(workflowId, taskId, workflow?.tasks?.[taskId]?.status ?? attempt.status);
+  }
+  throw new WorkflowHaltError(workflowId, taskId, "cancelled");
+};
+
 const runWorkflowInternal = async ({
   workflowId,
   decide,
@@ -654,51 +692,38 @@ const runWorkflowInternal = async ({
   validateModelSelection,
   runState,
 }) => {
-  const attempts = [];
-  while (!runState.cancelled) {
-    const workflow = getWorkflow(workflowId);
-    if (!workflow) throw new Error(`Unknown Workflow: ${workflowId}`);
-    if (["completed", "cancelled", "paused", "blocked", "failed", "stalled"].includes(workflow.status)) break;
+  const workflow = getWorkflow(workflowId);
+  if (!workflow) throw new Error(`Unknown Workflow: ${workflowId}`);
+  const threadId = `${workflowId}:${workflowRunMarker(workflowId)}:${workflowDefinitionFingerprint(workflow)}`;
 
-    const readyTasks = getReadyTasks(workflowId);
-    if (!readyTasks.length) {
-      await markWorkflowStalled(workflowId);
-      break;
+  try {
+    await runLangGraphWorkflow({
+      workflow,
+      threadId,
+      signal: runState.controller.signal,
+      runTask: taskId => executeTaskNode({
+        workflowId,
+        taskId,
+        runState,
+        decide,
+        getNoraSelection,
+        models,
+        validateModelSelection,
+      }),
+    });
+  } catch (error) {
+    const current = getWorkflow(workflowId);
+    if (!(error instanceof WorkflowHaltError) && !runState.cancelled && !HALTED_WORKFLOW_STATUSES.has(current?.status)) {
+      await recordEvent("workflow.runtime_failed", {
+        workflowId,
+        runtime: "langgraph",
+        threadId,
+        error: errorMessage(error),
+      });
+      throw error;
     }
-
-    const assignments = [];
-    for (const task of readyTasks) {
-      if (runState.cancelled) break;
-      try {
-        const currentWorkflow = getWorkflow(workflowId);
-        const noraSelection = getNoraSelection(currentWorkflow);
-        let execution = runState.executionByTask.get(task.id) ?? null;
-        if (!execution) {
-          execution = await selectTaskExecution({
-            workflowId,
-            taskId: task.id,
-            decide,
-            noraSelection,
-            models,
-            validateModelSelection,
-          });
-          runState.executionByTask.set(task.id, structuredClone(execution));
-        }
-        const latest = getWorkflow(workflowId);
-        if (runState.cancelled || latest?.status !== "running" || latest.tasks?.[task.id]?.status !== "ready") continue;
-        assignments.push({ taskId: task.id, execution, noraSelection });
-      } catch (error) {
-        if (runState.cancelled || getWorkflow(workflowId)?.status === "paused") continue;
-        await failSetup(workflowId, task.id, error);
-      }
-    }
-
-    const batch = (await Promise.all(assignments.map(({ taskId, execution, noraSelection }) => (
-      runTask({ workflowId, taskId, execution, runState, decide, noraSelection })
-    )))).filter(Boolean);
-    attempts.push(...batch);
   }
-  return { workflow: getWorkflow(workflowId), attempts };
+  return { workflow: getWorkflow(workflowId), attempts: [...runState.attempts], threadId };
 };
 
 export const runWorkflow = options => {
@@ -707,11 +732,14 @@ export const runWorkflow = options => {
     if (!existing.cancelled) return existing.promise;
     return existing.promise.then(() => runWorkflow(options));
   }
+
   const runState = {
     cancelled: false,
+    controller: new AbortController(),
     promise: null,
     executionByTask: new Map(),
     attemptsByTask: new Map(),
+    attempts: [],
   };
   const promise = runWorkflowInternal({ ...options, runState }).finally(() => {
     if (activeRuns.get(options.workflowId) === runState) activeRuns.delete(options.workflowId);
@@ -720,11 +748,26 @@ export const runWorkflow = options => {
   activeRuns.set(options.workflowId, runState);
   return promise;
 };
-export const cancelTaskExecution = (workflowId, taskId, reason = "Task cancelled") => cancelTaskAgents(workflowId, taskId, reason);
+
+export const cancelTaskExecution = (workflowId, taskId, reason = "Task cancelled") => (
+  cancelTaskAgents(workflowId, taskId, reason)
+);
+
 export const cancelWorkflowExecution = (workflowId, reason = "Workflow cancelled") => {
   const runState = activeRuns.get(workflowId);
-  if (runState) runState.cancelled = true;
+  if (runState) {
+    runState.cancelled = true;
+    runState.controller.abort(reason);
+  }
   return cancelWorkflowAgents(workflowId, reason);
 };
+
 export const listAgentProcesses = () => listActiveAgents();
-export const shutdownProcessEngine = () => { stopAllAgents("Carlos Office platform shutting down"); };
+
+export const shutdownProcessEngine = () => {
+  for (const runState of activeRuns.values()) {
+    runState.cancelled = true;
+    runState.controller.abort("Carlos Office platform shutting down");
+  }
+  stopAllAgents("Carlos Office platform shutting down");
+};
