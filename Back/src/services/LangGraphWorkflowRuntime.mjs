@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 
+import { validateAtomicGraph } from "./WorkflowGraphService.mjs";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const runtimeDir = resolve(here, "../../ObsidianVault/System/Runtime");
 const checkpointPath = resolve(runtimeDir, "langgraph-checkpoints.sqlite");
@@ -43,6 +45,7 @@ const addDependencyEdge = (builder, workflow, targetId, target) => {
 };
 
 const compileWorkflow = async ({ workflow, runTask }) => {
+  validateAtomicGraph(workflow);
   const builder = new StateGraph(WorkflowState);
   for (const taskId of executableTaskIds(workflow)) {
     builder.addNode(taskId, async () => {
