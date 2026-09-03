@@ -102,7 +102,7 @@ const formatInstruction = format => {
 
 const requestMessages = (messages, format) => {
   const instruction = formatInstruction(format);
-  return instruction ? [...messages, { role: "system", content: instruction }] : messages;
+  return instruction ? [{ role: "system", content: instruction }, ...messages] : messages;
 };
 
 const request = async (
