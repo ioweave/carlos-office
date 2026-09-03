@@ -2,13 +2,12 @@ import { recordEvent } from "../controllers/EventController.mjs";
 import {
   getProcess,
   saveProcess,
-  validateGraph,
   validateProcessDefinition,
 } from "../controllers/ProcessController.mjs";
 import { createSchedule, validateScheduleTiming } from "../controllers/ScheduleController.mjs";
 import { getSkill, saveSkill } from "../registry/Skills.mjs";
 import { getTool, saveTool } from "../registry/Tools.mjs";
-import { normalizeGeneratedGraph } from "./WorkflowGraphService.mjs";
+import { normalizeGeneratedGraph, validateAtomicGraph } from "./WorkflowGraphService.mjs";
 import { getWorkflowDesignInstruction } from "./WorkflowSchema.mjs";
 
 const MIN_PLAN_STEPS = 2;
@@ -16,6 +15,30 @@ const MAX_PLAN_STEPS = 5;
 const PLAN_TYPES = new Set(["tool", "skill", "create_process", "create_schedule"]);
 const PLAN_PHASE = Object.freeze({ tool: 0, skill: 0, create_process: 1, create_schedule: 2 });
 const REGISTRY_NAME = /^[a-zA-Z0-9_-]+$/;
+const WORKFLOW_SHAPE = '{"start":"start","end":"end","tasks":{"start":{"type":"start"},"inspect":{"type":"task","operation":"inspect","name":"Inspect files","objective":"Inspect the provided files for relevant findings.","tools":["read-file"]},"end":{"type":"end"}},"edges":[["start","inspect"],["inspect","end"]],"groups":[]}';
+const MAP_EXAMPLE = '{"id":"map-items","type":"map","name":"Map items","members":["inspect"],"source":"upstream.list-items","itemAs":"item","indexAs":"index","concurrency":4,"maxItemAttempts":1,"failurePolicy":"fail-fast"}';
+const LOOP_EXAMPLE = '{"id":"loop-qc","type":"loop","name":"Quality control","members":["inspect"],"maxIterations":3,"minimumScore":0.85,"criteria":"Result satisfies the Task completion criteria."}';
+
+const GRAPH_RULES = [
+  'Graph nodes are only "start", "task", and "end". Map/Loop are execution Groups, never nodes.',
+  "Exactly one start and one end are required; edges are acyclic [from,to] dependencies.",
+  "A Task is exactly ONE operation applied to ONE target. It is not a mini-workflow.",
+  "Every Task must declare one operation from the authoritative Workflow schema.",
+  "Never create a generic research Task. Decompose research into search -> fetch -> extract -> verify/analyze/compare -> synthesize as needed.",
+  "Never combine fetch+analyze, fetch+extract, extract+analyze, analyze+compare, compare+synthesize, or synthesize+write in one Task.",
+  "A Task may use at most ONE Tool. If work needs two Tools, create two Task nodes joined by an edge.",
+  "verify, analyze, compare, synthesize, transform, and decide consume supplied/upstream evidence and use zero Tools.",
+  "Keep objectives concise. Put case facts/context in Workflow inputs; pass results through upstream data instead of repeating context in objectives.",
+  "Do not put numbered action lists or sequential 'then/luego' instructions inside a Task objective.",
+  "Completion describes acceptance of the same one operation; it must not introduce another operation.",
+  "Task output is an optional unique alias, not the Agent result. Prefer upstream.<taskId>; omit output when unnecessary.",
+  "Relay Tasks put substantive handoff content in compact data and keep output to one short sentence.",
+  "Every upstream input must reference a real ancestor. At convergence consume each direct predecessor once.",
+  "Synthesis consumes upstream evidence without web/file Tools. Missing evidence requires a separate upstream acquisition Task.",
+  "Map is only for genuine array iteration. Loop directly owns one Task for quality-controlled repetition.",
+  `Map example: ${MAP_EXAMPLE}`,
+  `Loop example: ${LOOP_EXAMPLE}`,
+];
 
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const errorMessage = error => error instanceof Error ? error.message : String(error);
@@ -61,44 +84,30 @@ const normalizeSchedule = schedule => {
   const enabled = schedule.enabled ?? true;
   const inputs = schedule.inputs ?? {};
   const config = schedule.config ?? {};
-
   if (typeof enabled !== "boolean") throw new Error("Schedule enabled must be a boolean");
   if (!isObject(inputs)) throw new Error("Schedule inputs must be an object");
   if (!isObject(config)) throw new Error("Schedule config must be an object");
   validateScheduleTiming(schedule.timing);
 
-  return {
-    process,
-    enabled,
-    timing: structuredClone(schedule.timing),
-    inputs: structuredClone(inputs),
-    config: structuredClone(config),
-  };
+  return { process, enabled, timing: structuredClone(schedule.timing), inputs: structuredClone(inputs), config: structuredClone(config) };
 };
 
 const validateProcessDependencies = (
   process,
-  {
-    plannedTools = new Set(),
-    plannedSkills = new Set(),
-    validateModelSelection = null,
-  } = {},
+  { plannedTools = new Set(), plannedSkills = new Set(), validateModelSelection = null } = {},
 ) => {
   for (const [taskId, task] of Object.entries(process.tasks)) {
     if (task.type !== "task") continue;
-
     for (const toolName of task.tools ?? []) {
       if (!plannedTools.has(toolName) && !getTool(toolName)) {
         throw new Error(`Process ${process.name} Task ${taskId} uses unknown Tool: ${toolName}`);
       }
     }
-
     for (const skillName of task.skills ?? []) {
       if (!plannedSkills.has(skillName) && !getSkill(skillName)) {
         throw new Error(`Process ${process.name} Task ${taskId} uses unknown Skill: ${skillName}`);
       }
     }
-
     if (task.provider || task.model) {
       if (typeof validateModelSelection !== "function") {
         throw new Error(`Process ${process.name} Task ${taskId} model selection cannot be validated`);
@@ -107,57 +116,6 @@ const validateProcessDependencies = (
     }
   }
 };
-
-const workflowShape = '{"start":"start","end":"end","tasks":{"start":{"type":"start"},"inspect":{"type":"task","name":"Inspect files","objective":"Inspect the relevant files and report findings","tools":["read-file"]},"end":{"type":"end"}},"edges":[["start","inspect"],["inspect","end"]],"groups":[]}';
-const mapExample = '{"id":"map-items","type":"map","name":"Map items","members":["inspect"],"source":"upstream.list_items","itemAs":"item","indexAs":"index","concurrency":4,"maxItemAttempts":1,"failurePolicy":"fail-fast","throttle":{"requests":20,"windowMs":60000}}';
-const loopExample = '{"id":"loop-qc","type":"loop","name":"Quality control","members":["inspect"],"maxIterations":3,"minimumScore":0.85,"criteria":"The result must be complete, accurate, and satisfy the Task completion criteria."}';
-const researchExecutionExample = '{"maxReasoningTurns":24,"maxToolCalls":36,"maxNoProgressTurns":4,"maxAttempts":2}';
-const deepResearchExecutionExample = '{"maxReasoningTurns":40,"maxToolCalls":64,"maxNoProgressTurns":4,"maxAttempts":2}';
-
-const graphRules = [
-  'Graph nodes are only type "start", "task", or "end". Map and Loop are execution Groups, not graph nodes.',
-  "Edges are [fromTaskId,toTaskId], remain acyclic, and define dependencies independently of execution Group boundaries.",
-  "The tasks object must contain exactly one named start node and one named end node.",
-  "Every executable Task uses type task, a concise 2-5 word name (maximum 50 characters), and a non-empty objective.",
-  "Task objective contains detailed execution instructions; completion contains acceptance criteria.",
-  "Task output is an optional unique downstream alias, not the Agent result. Omit it when no alias is needed; never emit output as an empty string.",
-  "Use Task data output when downstream execution needs machine-readable arrays or objects.",
-  "Every Task with another executable Task downstream is a relay Task. Require it to put substantive handoff facts in data and keep output to one short status/result sentence.",
-  "Relay Task handoffs must be dense and telegraphic: target at least 60% fewer tokens than explanatory prose, state each fact once, and omit introductions, transitions, conclusions, narration, and Task/input restatement.",
-  "Relay compression must be lossless for downstream work: preserve exact numbers, dates, IDs, paths, URLs, citations, error codes, uncertainty, contrary evidence, requirements, and exact payloads that later Tasks need.",
-  "At convergence, consume each direct predecessor once through canonical upstream.<taskId> data. Do not request both a Task ID and its output alias for the same producer.",
-  "Default downstream context is Workflow input plus direct predecessor outputs. If a later Task truly needs an older ancestor independently, connect that producer directly or declare one explicit upstream path instead of carrying all ancestors through every stage.",
-  "Every Task output alias must be unique in the graph. Prefer upstream.<producerTaskId> references over aliases.",
-  "Every upstream Task input must reference an actual ancestor dependency. Never reference a sibling, descendant, or nonexistent producer.",
-  "Task execution is optional and may contain only maxReasoningTurns (1-64), maxToolCalls (1-128), maxNoProgressTurns (1-8), and maxAttempts (1-4). Omit it for ordinary work.",
-  "Set maxAttempts above 1 only for Tasks whose work is safe to replay. Carlos Office automatically retries only failures whose completed Tool calls were read-only/idempotent.",
-  `For web research requiring several external sources, prefer execution ${researchExecutionExample}. For deep or large-document research, especially when http-content is needed, prefer ${deepResearchExecutionExample}.`,
-  "Split broad research into independent source-domain Tasks that can run in parallel, followed by a downstream synthesis Task over their structured data. Do not make one Task perform discovery, acquisition, extraction, and cross-domain synthesis when the work can be decomposed.",
-  "Research Tasks should prefer authoritative primary sources and stop source discovery once sufficient authoritative sources satisfy the objective.",
-  "When http returns a stored content reference, use http-content search/read against that stored body instead of re-fetching it or loading the entire large document into model context.",
-  "Use narrow read-file ranges and narrow http-content reads/searches. Do not load entire large files into model context when a range or search is sufficient.",
-  "Synthesis Tasks should normally consume upstream structured data without web Tools unless a specific missing fact genuinely requires new research.",
-  "groups is optional and contains Map or Loop execution scopes. A Task or nested Group may directly belong to at most one Group.",
-  "Start and end cannot be Group members. Group nesting must not contain cycles.",
-  `Map Group shape: ${mapExample}`,
-  "Map is the only collection-iteration runtime primitive. There is no separate For Each implementation or Group type; 'for each' is descriptive wording only. Use type map in every case.",
-  "A Map is an execution operator, never a visual or organizational grouping box. Never create a Map merely to label, group, or sequence Tasks.",
-  "Create a Map only when its source is genuinely expected to resolve to an array and the enclosed executable Task or Tasks must run once per item.",
-  "Use canonical Map source paths. For a Workflow input use workflow.<inputName>. For an upstream Task value use upstream.<producerTaskId>. A nested suffix such as upstream.<producerTaskId>.<property> is valid only when the producer's structured data is an object that actually contains that array property.",
-  "Do not combine a producer Task ID and its declared output alias. Example: if Task list-assets has output assets and its data is the array, use upstream.list-assets (preferred) or the unique alias upstream.assets; never use upstream.list-assets.assets.",
-  "When a Task is intended to feed a Map directly, its objective/completion must require the Agent completion data field to contain the JSON array itself. Do not rely on a prose output that merely describes the items.",
-  "Prefer upstream.<producerTaskId> over output aliases because Task IDs are unambiguous. Never invent an unbound bare Map source name.",
-  "If a mapped Task declares an explicit inputs list, include the Map source path. Runtime can resolve canonical Map sources from completed ancestor Task data, but the graph definition must state the dependency explicitly.",
-  "A Map containing exactly one executable Task is valid only for genuine fan-out/fan-in: an upstream collection is produced, that Task runs once per item, and downstream work outside the Map consumes the aggregate result. Otherwise omit the Map.",
-  "A Map iterates its source collection. concurrency is the shared maximum number of active child Task executions across the entire Map, including parallel branches and nested Groups. concurrency 1 means serial iteration; it does not create a different For Each primitive.",
-  "Map maxItemAttempts is 1-4 and defaults to 1. Raise it only for read-only/idempotent mapped work; do not replay irreversible or externally mutating actions automatically.",
-  "Map failurePolicy is fail-fast or continue. Use continue only when partial results are valid and downstream Tasks are prepared to inspect per-item failure records.",
-  "Map throttle optionally limits new Task executions to requests per windowMs.",
-  "Tasks in one Map preserve their normal graph dependencies for each item. Nested Maps must obey both outer and inner concurrency/rate limits.",
-  `Loop Group V1 shape: ${loopExample}`,
-  "Loop V1 directly contains exactly one executable Task. Nora independently reviews and scores each candidate result. Rejected or mediocre work is rerun with Nora's feedback until accepted or maxIterations is reached.",
-  "Never represent Loop with a graph back-edge. Do not create Store nodes in v1.1.",
-];
 
 export const getNoraRequestDecisionInstruction = () => [
   getWorkflowDesignInstruction(),
@@ -175,45 +133,33 @@ export const getNoraRequestDecisionInstruction = () => [
   '- "skill": create or update one reusable Markdown Skill.',
   '- "plan": perform 2-5 durable creation steps when one request requires multiple related capabilities.',
   "",
-  "Process and ad-hoc Workflows execute automatically after creation unless Carlos explicitly asks only to design or save a reusable Process.",
-  "Use plan only for compound creation. Plan steps may be tool, skill, create_process, or create_schedule.",
-  "When scheduled behavior needs a missing capability, create the Tool or Skill, then Process, then Schedule.",
-  "Do not choose a Schedule ID. Carlos Office assigns Schedule IDs automatically.",
-  "Never claim a notification or alarm capability exists unless it is available or created in the plan.",
-  ...graphRules,
-  `Valid minimal Workflow graph: ${workflowShape}`,
-  "Tasks do not name persistent specialist Agents. A Task may constrain provider/model, Tools, Skills, and execution budget; otherwise Nora selects resources once for the active Workflow run and Carlos Office applies bounded defaults.",
-  "Use Maps only for real collection fan-out with a resolvable array source. Do not use Maps as generic containers. Use Loop only when independent Nora QC/retry materially improves a Task.",
+  "Process and ad-hoc Workflows execute automatically after creation unless Carlos explicitly asks only to design/save.",
+  "For every Workflow, design the action pipeline first, then emit one atomic Task per action.",
+  ...GRAPH_RULES,
+  `Valid minimal Workflow graph: ${WORKFLOW_SHAPE}`,
+  "Tasks do not name persistent specialist Agents. Provider/model, Tool, Skill, and execution constraints are optional.",
   "For a Tool, return complete valid ESM source with no Markdown fences.",
-  "A Tool must export its Tool object as default or as `tool` and use only available Node APIs or dependencies.",
-  "Tool approval is an autonomous authority boundary, not a second confirmation for work Carlos directly requested.",
-  "Set requiresApproval true only for high-impact external or irreversible actions such as deletion, spending, external communication/publication, or credential/security/account changes.",
-  "Routine local reads, file create/update/overwrite, code edits, and Carlos Office registry changes should not require approval.",
+  "Tool approval is reserved for high-impact external or irreversible actions, not routine local work.",
   "For a Skill, return complete Markdown content.",
   "",
   "Return one of:",
   '{"action":"respond","response":"..."}',
   '{"action":"clarify","response":"..."}',
   '{"action":"process","process":"Process Name","inputs":{},"config":{},"response":"optional"}',
-  `{"action":"adhoc","workflow":${workflowShape},"inputs":{},"config":{},"response":"optional"}`,
-  `{"action":"create_process","process":{"name":"...","purpose":"...","inputs":[],${workflowShape.slice(1)},"response":"optional"}`,
+  `{"action":"adhoc","workflow":${WORKFLOW_SHAPE},"inputs":{},"config":{},"response":"optional"}`,
+  `{"action":"create_process","process":{"name":"...","purpose":"...","inputs":[],${WORKFLOW_SHAPE.slice(1)},"response":"optional"}`,
   '{"action":"create_schedule","schedule":{"process":"...","enabled":true,"timing":{"type":"cron","value":"0 5 * * *"},"inputs":{},"config":{}},"response":"optional"}',
   '{"action":"tool","name":"tool-name","source":"complete ESM source","response":"optional"}',
   '{"action":"skill","name":"skill-name","content":"complete Markdown","response":"optional"}',
   '{"action":"plan","steps":[{"type":"tool"},{"type":"create_process"},{"type":"create_schedule"}],"response":"optional"}',
 ].join("\n");
 
-export const ensureValidGeneratedGraph = async ({
-  definition,
-  label,
-  askForJson,
-  modelSelection,
-}) => {
+export const ensureValidGeneratedGraph = async ({ definition, label, askForJson, modelSelection }) => {
   if (!isObject(definition)) throw new Error(`${label} definition must be an object`);
 
   const normalized = normalizeGeneratedGraph(definition);
   try {
-    validateGraph(normalized);
+    validateAtomicGraph(normalized);
     return structuredClone(normalized);
   } catch (validationError) {
     const repaired = await askForJson(
@@ -221,61 +167,40 @@ export const ensureValidGeneratedGraph = async ({
         getWorkflowDesignInstruction(),
         "",
         `Repair this generated ${label} graph.`,
-        "",
-        "The graph is invalid. Satisfy every Carlos Office graph invariant:",
-        ...graphRules.map(rule => `- ${rule}`),
-        "- every node is reachable from start and can reach end;",
-        "- no self-edges or duplicate edges;",
-        "- start has no incoming edges and end has no outgoing edges;",
-        "- Task inputs, tools, and skills are arrays of names when present;",
-        "- Task provider and model are configured together when present;",
-        "- Task execution fields, when present, remain inside their validated numeric ranges;",
-        "- Task definitions do not contain persistent Agent identities.",
-        "",
-        `Preserve the requested semantics. Return only a graph shaped like: ${workflowShape}`,
+        "The graph violates the atomic Task contract. Decompose it; do not weaken the contract.",
+        ...GRAPH_RULES.map(rule => `- ${rule}`),
+        "- every node must be reachable from start and able to reach end;",
+        "- provider and model must be configured together when present;",
+        "- preserve requested semantics by adding edges/Tasks, not by stuffing actions into one objective;",
+        `Return only a graph shaped like: ${WORKFLOW_SHAPE}`,
       ].join("\n"),
-      {
-        validationError: errorMessage(validationError),
-        invalidDefinition: normalized,
-      },
+      { validationError: errorMessage(validationError), invalidDefinition: normalized },
       modelSelection,
     );
 
     const normalizedRepair = normalizeGeneratedGraph(repaired);
-    validateGraph(normalizedRepair);
+    validateAtomicGraph(normalizedRepair);
     return structuredClone(normalizedRepair);
   }
 };
 
 export const createOrUpdateTool = async (name, source) => {
   const toolName = requireRegistryName(name, "Tool name");
-  const toolSource = requireText(source, "Tool source");
-  const tool = await saveTool(toolName, toolSource);
+  const tool = await saveTool(toolName, requireText(source, "Tool source"));
   await recordEvent("nora.tool_saved", { tool: tool.name });
   return tool;
 };
 
 export const createOrUpdateSkill = async (name, content) => {
   const skillName = requireRegistryName(name, "Skill name");
-  const skillContent = requireText(content, "Skill content");
-  const skill = await saveSkill(skillName, skillContent);
+  const skill = await saveSkill(skillName, requireText(content, "Skill content"));
   await recordEvent("nora.skill_saved", { skill: skill.name });
   return skill;
 };
 
-export const createProcess = async ({
-  process,
-  askForJson,
-  modelSelection,
-  validateModelSelection,
-}) => {
+export const createProcess = async ({ process, askForJson, modelSelection, validateModelSelection }) => {
   const initial = normalizeProcess(process);
-  const graph = await ensureValidGeneratedGraph({
-    definition: initial,
-    label: `Process ${initial.name}`,
-    askForJson,
-    modelSelection,
-  });
+  const graph = await ensureValidGeneratedGraph({ definition: initial, label: `Process ${initial.name}`, askForJson, modelSelection });
   const normalized = normalizeProcess({ ...initial, ...graph });
   validateProcessDefinition(normalized);
   validateProcessDependencies(normalized, { validateModelSelection });
@@ -288,7 +213,6 @@ export const createProcess = async ({
 export const createProcessSchedule = async schedule => {
   const normalized = normalizeSchedule(schedule);
   if (!getProcess(normalized.process)) throw new Error(`Schedule references unknown Process: ${normalized.process}`);
-
   const stored = await createSchedule(normalized);
   await recordEvent("nora.schedule_created", { scheduleId: stored.id, process: stored.process });
   return stored;
@@ -305,18 +229,12 @@ const validatePlanShape = steps => {
   }
 };
 
-const prepareCreationPlan = async ({
-  steps,
-  askForJson,
-  modelSelection,
-  validateModelSelection,
-}) => {
+const prepareCreationPlan = async ({ steps, askForJson, modelSelection, validateModelSelection }) => {
   validatePlanShape(steps);
 
   const plannedTools = new Set();
   const plannedSkills = new Set();
   const plannedProcesses = new Set();
-
   for (const step of steps) {
     if (step.type === "tool") addUniqueName(plannedTools, requireRegistryName(step.name, "Tool name"), "Tool");
     if (step.type === "skill") addUniqueName(plannedSkills, requireRegistryName(step.name, "Skill name"), "Skill");
@@ -335,12 +253,7 @@ const prepareCreationPlan = async ({
     }
     if (step.type === "create_process") {
       const initial = normalizeProcess(step.process);
-      const graph = await ensureValidGeneratedGraph({
-        definition: initial,
-        label: `Process ${initial.name}`,
-        askForJson,
-        modelSelection,
-      });
+      const graph = await ensureValidGeneratedGraph({ definition: initial, label: `Process ${initial.name}`, askForJson, modelSelection });
       const process = normalizeProcess({ ...initial, ...graph });
       validateProcessDefinition(process);
       validateProcessDependencies(process, { plannedTools, plannedSkills, validateModelSelection });
@@ -361,12 +274,7 @@ const prepareCreationPlan = async ({
     .map(item => item.step);
 };
 
-export const executeCreationPlan = async ({
-  steps,
-  askForJson,
-  modelSelection,
-  validateModelSelection,
-}) => {
+export const executeCreationPlan = async ({ steps, askForJson, modelSelection, validateModelSelection }) => {
   const prepared = await prepareCreationPlan({ steps, askForJson, modelSelection, validateModelSelection });
   const results = [];
 
