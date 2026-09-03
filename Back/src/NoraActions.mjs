@@ -1,3 +1,5 @@
+import { WORKFLOW_GRAPH_SCHEMA } from "./services/WorkflowSchema.mjs";
+
 export const NORA_ACTIONS = Object.freeze([
   "respond",
   "clarify",
@@ -19,8 +21,11 @@ export const NORA_DECISION_SCHEMA = Object.freeze({
     name: { type: "string" },
     source: { type: "string" },
     content: { type: "string" },
-    process: { type: ["string", "object"] },
-    workflow: { type: "object" },
+    process: {
+      type: ["string", "object"],
+      description: "Existing Process name for action=process, or a reusable Process definition for action=create_process.",
+    },
+    workflow: WORKFLOW_GRAPH_SCHEMA,
     schedule: { type: "object" },
     steps: { type: "array", items: { type: "object" } },
     inputs: { type: "object" },
