@@ -22,6 +22,7 @@ import {
 } from "../runtime/AgentProcesses.mjs";
 import { appendInvocationJournal, clearInvocationJournal } from "./InvocationJournalService.mjs";
 import { runLangGraphWorkflow } from "./LangGraphWorkflowRuntime.mjs";
+import { taskAllowsTools, validateAtomicTaskDefinition } from "./TaskAtomicity.mjs";
 import { executeTaskWithGroups, materializeMapData } from "./TaskExecutionService.mjs";
 import { getTaskExecutionGroups } from "./WorkflowGraphService.mjs";
 
@@ -302,18 +303,20 @@ export const selectTaskExecution = async ({
   if (!workflow) throw new Error(`Unknown Workflow: ${workflowId}`);
   const task = workflow.tasks?.[taskId];
   if (!task || task.type !== "task") throw new Error(`Unknown executable Task: ${taskId}`);
+  validateAtomicTaskDefinition(taskId, task);
 
+  const toolsAllowed = taskAllowsTools(task.operation);
   const availableModels = models.map(entry => ({ provider: entry.provider, models: [...(entry.models ?? [])] }));
-  const availableTools = listTools().map(tool => ({
+  const availableTools = toolsAllowed ? listTools().map(tool => ({
     name: tool.name,
     description: tool.description ?? "",
     requiresApproval: Boolean(tool.requiresApproval),
-  }));
+  })) : [];
   const availableSkills = listSkills().map(({ name, content }) => ({ name, description: skillDescription(content) }));
   const toolNames = new Set(availableTools.map(tool => tool.name));
   const skillNames = new Set(availableSkills.map(skill => skill.name));
   const fixedModel = selectionFrom(task, validateModelSelection, availableModels);
-  const fixedTools = Array.isArray(task.tools) ? [...task.tools] : null;
+  const fixedTools = toolsAllowed ? (Array.isArray(task.tools) ? [...task.tools] : null) : [];
   const fixedSkills = Array.isArray(task.skills) ? [...task.skills] : null;
   if (fixedTools?.some(name => !toolNames.has(name))) throw new Error("Task requires an unknown Tool");
   if (fixedSkills?.some(name => !skillNames.has(name))) throw new Error("Task requires an unknown Skill");
@@ -322,8 +325,12 @@ export const selectTaskExecution = async ({
   if (!fixedModel || fixedTools === null || fixedSkills === null) {
     decision = await decide(
       [
-        "Choose only the unspecified runtime resources for this Task.",
-        "Explicit provider/model, tools, and skills are authoritative and must not be replaced.",
+        `Choose only unspecified runtime resources for this atomic ${task.operation} Task.`,
+        "The Task operation and objective are fixed and must not be broadened.",
+        toolsAllowed
+          ? "Select zero or one Tool only. A second Tool would be a second Task action and is forbidden."
+          : "This operation consumes supplied evidence. Select zero Tools.",
+        "Explicit provider/model, Tool, and Skills are authoritative and must not be replaced.",
         "Return only JSON matching the supplied execution-selection schema.",
       ].join("\n"),
       {
@@ -342,9 +349,10 @@ export const selectTaskExecution = async ({
   const selectedModel = fixedModel ?? validateModelSelection({ provider: decision.provider, model: decision.model });
   const selectedTools = fixedTools ?? decision.tools;
   const selectedSkills = fixedSkills ?? decision.skills;
-  if (!Array.isArray(selectedTools) || selectedTools.some(name => !toolNames.has(name))) {
-    throw new Error("Nora selected an invalid Tool set");
+  if (!Array.isArray(selectedTools) || selectedTools.length > 1 || selectedTools.some(name => !toolNames.has(name))) {
+    throw new Error("Atomic Task execution may select at most one valid Tool");
   }
+  if (!toolsAllowed && selectedTools.length) throw new Error(`Task operation ${task.operation} cannot use Tools`);
   if (!Array.isArray(selectedSkills) || selectedSkills.some(name => !skillNames.has(name))) {
     throw new Error("Nora selected an invalid Skill set");
   }
