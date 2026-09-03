@@ -2,6 +2,7 @@ import {
   TASK_COMPLETION_MAX_CHARS,
   TASK_OBJECTIVE_MAX_CHARS,
   TASK_OPERATIONS,
+  TASK_TOOL_REQUIRED_OPERATIONS,
   TOOL_FREE_TASK_OPERATIONS,
 } from "./WorkflowSchema.mjs";
 
@@ -9,6 +10,7 @@ export const LEGACY_TASK_OPERATION = "legacy";
 
 const OPERATION_SET = new Set(TASK_OPERATIONS);
 const TOOL_FREE_SET = new Set(TOOL_FREE_TASK_OPERATIONS);
+const TOOL_REQUIRED_SET = new Set(TASK_TOOL_REQUIRED_OPERATIONS);
 const ACTION_PATTERNS = Object.freeze({
   search: /\b(search|investigate|investiga|investigar|busca|buscar)\b/i,
   fetch: /\b(fetch|retrieve|download|obtain|obten|obtener|recupera|recuperar|descarga|descargar)\b/i,
@@ -80,6 +82,9 @@ export const validateAtomicTaskDefinition = (taskId, task, { requireOperation = 
 
   if (Array.isArray(task.tools) && task.tools.length > 1) {
     throw new Error(`Task ${taskId} may use at most one Tool; separate Tool actions into separate Task nodes`);
+  }
+  if (TOOL_REQUIRED_SET.has(operation) && (!Array.isArray(task.tools) || task.tools.length !== 1)) {
+    throw new Error(`Task ${taskId} operation ${operation} requires exactly one Tool`);
   }
   if (!taskAllowsTools(operation) && Array.isArray(task.tools) && task.tools.length) {
     throw new Error(`Task ${taskId} operation ${operation} is evidence-only and cannot use Tools`);
