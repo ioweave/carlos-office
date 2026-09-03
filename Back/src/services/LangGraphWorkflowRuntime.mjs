@@ -49,17 +49,14 @@ const compileWorkflow = async ({ workflow, runTask }) => {
   for (const taskId of executableTaskIds(workflow)) {
     builder.addNode(taskId, async () => {
       const result = await runTask(taskId);
-      return {
-        completedTasks: [taskId],
-        results: { [taskId]: result },
-      };
+      return { completedTasks: [taskId], results: { [taskId]: result } };
     });
   }
 
   for (const taskId of executableTaskIds(workflow)) addDependencyEdge(builder, workflow, taskId, taskId);
   addDependencyEdge(builder, workflow, workflow.end, END);
-
-  return builder.compile({ checkpointer: await getCheckpointer() });
+  const checkpointer = await getCheckpointer();
+  return { graph: builder.compile({ checkpointer }), checkpointer };
 };
 
 /**
@@ -67,11 +64,10 @@ const compileWorkflow = async ({ workflow, runTask }) => {
  * A null invocation resumes the latest checkpoint, so successful parallel nodes are not replayed after a sibling failure.
  */
 export const runLangGraphWorkflow = async ({ workflow, threadId, runTask, signal = null }) => {
-  const graph = await compileWorkflow({ workflow, runTask });
+  const { graph, checkpointer } = await compileWorkflow({ workflow, runTask });
   const config = { configurable: { thread_id: threadId } };
-  const checkpoint = await graph.checkpointer?.getTuple(config);
-  const input = checkpoint ? null : {};
-  return graph.invoke(input, {
+  const checkpoint = await checkpointer.getTuple(config);
+  return graph.invoke(checkpoint ? null : {}, {
     ...config,
     recursionLimit: Math.max(64, executableTaskIds(workflow).length * 4 + 16),
     ...(signal ? { signal } : {}),
