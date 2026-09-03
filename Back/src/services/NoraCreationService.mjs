@@ -8,14 +8,15 @@ import { createSchedule, validateScheduleTiming } from "../controllers/ScheduleC
 import { getSkill, saveSkill } from "../registry/Skills.mjs";
 import { getTool, saveTool } from "../registry/Tools.mjs";
 import { normalizeGeneratedGraph, validateAtomicGraph } from "./WorkflowGraphService.mjs";
-import { getWorkflowDesignInstruction } from "./WorkflowSchema.mjs";
+import { getWorkflowDesignInstruction, TASK_TOOL_REQUIRED_OPERATIONS } from "./WorkflowSchema.mjs";
 
 const MIN_PLAN_STEPS = 2;
 const MAX_PLAN_STEPS = 5;
 const PLAN_TYPES = new Set(["tool", "skill", "create_process", "create_schedule"]);
 const PLAN_PHASE = Object.freeze({ tool: 0, skill: 0, create_process: 1, create_schedule: 2 });
 const REGISTRY_NAME = /^[a-zA-Z0-9_-]+$/;
-const WORKFLOW_SHAPE = '{"start":"start","end":"end","tasks":{"start":{"type":"start"},"inspect":{"type":"task","operation":"inspect","name":"Inspect files","objective":"Inspect the provided files for relevant findings.","tools":["read-file"]},"end":{"type":"end"}},"edges":[["start","inspect"],["inspect","end"]],"groups":[]}';
+const TOOL_REQUIRED_OPERATIONS = new Set(TASK_TOOL_REQUIRED_OPERATIONS);
+const WORKFLOW_SHAPE = '{"start":"start","end":"end","tasks":{"start":{"type":"start"},"inspect":{"type":"task","operation":"inspect","name":"Inspect files","objective":"Inspect the provided files for relevant findings.","inputs":[],"tools":["read-file"],"skills":[]},"end":{"type":"end"}},"edges":[["start","inspect"],["inspect","end"]],"groups":[]}';
 const MAP_EXAMPLE = '{"id":"map-items","type":"map","name":"Map items","members":["inspect"],"source":"upstream.list-items","itemAs":"item","indexAs":"index","concurrency":4,"maxItemAttempts":1,"failurePolicy":"fail-fast"}';
 const LOOP_EXAMPLE = '{"id":"loop-qc","type":"loop","name":"Quality control","members":["inspect"],"maxIterations":3,"minimumScore":0.85,"criteria":"Result satisfies the Task completion criteria."}';
 
@@ -26,7 +27,11 @@ const GRAPH_RULES = [
   "Every Task must declare one operation from the authoritative Workflow schema.",
   "Never create a generic research Task. Decompose research into search -> fetch -> extract -> verify/analyze/compare -> synthesize as needed.",
   "Never combine fetch+analyze, fetch+extract, extract+analyze, analyze+compare, compare+synthesize, or synthesize+write in one Task.",
+  "Every Task declares inputs explicitly. Use inputs:[] when its atomic objective contains all target information it needs.",
+  "Never rely on implicit Workflow context. Declare only the smallest workflow.<field> or upstream.<taskId> paths needed by the one operation.",
+  "Tool assignment is fixed in the graph. search/fetch/extract/inspect/execute require exactly one Tool; evidence-only operations use tools:[].",
   "A Task may use at most ONE Tool. If work needs two Tools, create two Task nodes joined by an edge.",
+  "Skills are fixed in the graph. Use skills:[] unless a specific Skill is required.",
   "verify, analyze, compare, synthesize, transform, and decide consume supplied/upstream evidence and use zero Tools.",
   "Keep objectives concise. Put case facts/context in Workflow inputs; pass results through upstream data instead of repeating context in objectives.",
   "Do not put numbered action lists or sequential 'then/luego' instructions inside a Task objective.",
@@ -57,6 +62,20 @@ const requireRegistryName = (value, label) => {
 const addUniqueName = (names, name, label) => {
   if (names.has(name)) throw new Error(`Nora plan contains duplicate ${label}: ${name}`);
   names.add(name);
+};
+
+const compileGeneratedGraph = graph => {
+  const compiled = structuredClone(graph);
+  for (const [taskId, task] of Object.entries(compiled.tasks ?? {})) {
+    if (task?.type !== "task") continue;
+    task.inputs = Array.isArray(task.inputs) ? task.inputs : [];
+    task.skills = Array.isArray(task.skills) ? task.skills : [];
+    task.tools = Array.isArray(task.tools) ? task.tools : [];
+    if (TOOL_REQUIRED_OPERATIONS.has(task.operation) && task.tools.length !== 1) {
+      throw new Error(`Task ${taskId} operation ${task.operation} must declare exactly one Tool at design time`);
+    }
+  }
+  return compiled;
 };
 
 const normalizeProcess = process => {
@@ -137,7 +156,7 @@ export const getNoraRequestDecisionInstruction = () => [
   "For every Workflow, design the action pipeline first, then emit one atomic Task per action.",
   ...GRAPH_RULES,
   `Valid minimal Workflow graph: ${WORKFLOW_SHAPE}`,
-  "Tasks do not name persistent specialist Agents. Provider/model, Tool, Skill, and execution constraints are optional.",
+  "Tasks do not name persistent specialist Agents. Provider/model may be omitted to inherit the Workflow Nora model; inputs, Tool, and Skills are explicit execution contracts.",
   "For a Tool, return complete valid ESM source with no Markdown fences.",
   "Tool approval is reserved for high-impact external or irreversible actions, not routine local work.",
   "For a Skill, return complete Markdown content.",
@@ -159,17 +178,19 @@ export const ensureValidGeneratedGraph = async ({ definition, label, askForJson,
 
   const normalized = normalizeGeneratedGraph(definition);
   try {
-    validateAtomicGraph(normalized);
-    return structuredClone(normalized);
+    const compiled = compileGeneratedGraph(normalized);
+    validateAtomicGraph(compiled);
+    return structuredClone(compiled);
   } catch (validationError) {
     const repaired = await askForJson(
       [
         getWorkflowDesignInstruction(),
         "",
         `Repair this generated ${label} graph.`,
-        "The graph violates the atomic Task contract. Decompose it; do not weaken the contract.",
+        "The graph violates the atomic deterministic Task contract. Decompose it; do not weaken the contract.",
         ...GRAPH_RULES.map(rule => `- ${rule}`),
         "- every node must be reachable from start and able to reach end;",
+        "- every Task must declare inputs, tools, and skills arrays;",
         "- provider and model must be configured together when present;",
         "- preserve requested semantics by adding edges/Tasks, not by stuffing actions into one objective;",
         `Return only a graph shaped like: ${WORKFLOW_SHAPE}`,
@@ -178,7 +199,7 @@ export const ensureValidGeneratedGraph = async ({ definition, label, askForJson,
       modelSelection,
     );
 
-    const normalizedRepair = normalizeGeneratedGraph(repaired);
+    const normalizedRepair = compileGeneratedGraph(normalizeGeneratedGraph(repaired));
     validateAtomicGraph(normalizedRepair);
     return structuredClone(normalizedRepair);
   }
