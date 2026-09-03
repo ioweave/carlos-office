@@ -44,12 +44,12 @@ const reconcileWorkflow = workflow => {
       interruptedAttemptId = attempt.id;
     }
     if (task.status === "running") {
-      task.status = "pending";
+      task.status = "ready";
       if (interruptedAttemptId) task.resumeCheckpointAttemptId = interruptedAttemptId;
     }
   }
 
-  workflow.status = "pending";
+  workflow.status = "running";
   workflow.interruption = {
     at: now,
     reason: INTERRUPTION_REASON,
