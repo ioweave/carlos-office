@@ -1,3 +1,6 @@
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
+
 const CLOUD_INFERENCE_TIMEOUT_MS = 300_000;
 const LOCAL_INFERENCE_TIMEOUT_MS = 1_800_000;
 const DISCOVERY_TIMEOUT_MS = 15_000;
@@ -8,7 +11,7 @@ const normalizeBaseUrl = value => {
 };
 
 const headers = apiKey => {
-  const result = { "Content-Type": "application/json" };
+  const result = { "Content-Type": "application/json", "Accept-Encoding": "identity" };
   if (apiKey) result.Authorization = `Bearer ${apiKey}`;
   return result;
 };
@@ -105,6 +108,36 @@ const requestMessages = (messages, format) => {
   return instruction ? [{ role: "system", content: instruction }, ...messages] : messages;
 };
 
+const nodeRequest = (url, options, apiKey, signal) => new Promise((resolve, reject) => {
+  const target = new URL(url);
+  const requestFn = target.protocol === "https:" ? httpsRequest : httpRequest;
+  const body = options.body == null ? null : String(options.body);
+  const requestHeaders = { ...headers(apiKey), ...(options.headers ?? {}) };
+  if (body != null && !Object.keys(requestHeaders).some(name => name.toLowerCase() === "content-length")) {
+    requestHeaders["Content-Length"] = Buffer.byteLength(body);
+  }
+
+  const request = requestFn(target, {
+    method: options.method || "GET",
+    headers: requestHeaders,
+    signal,
+  }, response => {
+    const chunks = [];
+    response.on("data", chunk => chunks.push(Buffer.from(chunk)));
+    response.on("error", reject);
+    response.on("end", () => resolve({
+      status: response.statusCode ?? 0,
+      statusText: response.statusMessage ?? "",
+      headers: response.headers,
+      body: Buffer.concat(chunks).toString("utf8"),
+    }));
+  });
+
+  request.on("error", reject);
+  if (body != null) request.write(body);
+  request.end();
+});
+
 const request = async (
   url,
   options,
@@ -117,45 +150,49 @@ const request = async (
   const signal = providedSignal && timeoutSignal
     ? AbortSignal.any([providedSignal, timeoutSignal])
     : providedSignal || timeoutSignal || undefined;
+  const startedAt = Date.now();
 
   let response;
   try {
-    response = await fetch(url, {
-      ...requestOptions,
-      signal,
-      headers: {
-        ...headers(apiKey),
-        ...(requestOptions.headers ?? {}),
-      },
-    });
+    response = await nodeRequest(url, requestOptions, apiKey, signal);
   } catch (error) {
+    const elapsedMs = Date.now() - startedAt;
     if (timeoutSignal?.aborted && !providedSignal?.aborted) {
       const seconds = Math.round(timeoutMs / 1000);
       const timeoutError = new Error(`Ollama request exceeded its ${seconds} second inference timeout`);
       timeoutError.code = timeoutCode;
       timeoutError.retryable = false;
       timeoutError.timeoutMs = timeoutMs;
+      timeoutError.elapsedMs = elapsedMs;
       throw timeoutError;
     }
-    if (error instanceof TypeError && error.message === "fetch failed") {
-      const cause = typeof error.cause?.code === "string" ? ` (${error.cause.code})` : "";
-      const transportError = new Error(`Ollama transport failed${cause}`);
-      transportError.code = "provider_transient_error";
-      transportError.retryable = true;
-      throw transportError;
-    }
-    throw error;
+    if (providedSignal?.aborted || error?.name === "AbortError") throw error;
+
+    const cause = typeof error?.code === "string" ? ` (${error.code})` : "";
+    const transportError = new Error(`Ollama transport failed${cause}`);
+    transportError.code = "provider_transient_error";
+    transportError.retryable = true;
+    transportError.elapsedMs = elapsedMs;
+    throw transportError;
   }
 
-  if (!response.ok) {
-    const body = await response.text();
-    const error = new Error(`Ollama request failed (${response.status}): ${body || response.statusText}`);
+  if (response.status < 200 || response.status >= 300) {
+    const error = new Error(`Ollama request failed (${response.status}): ${response.body || response.statusText}`);
     error.code = response.status === 429 || response.status >= 500 ? "provider_transient_error" : "provider_request_error";
     error.retryable = response.status === 429 || response.status >= 500;
+    error.elapsedMs = Date.now() - startedAt;
     throw error;
   }
 
-  return response.json();
+  try {
+    return JSON.parse(response.body);
+  } catch (cause) {
+    const error = new Error("Ollama returned an invalid JSON response", { cause });
+    error.code = "provider_transient_error";
+    error.retryable = true;
+    error.elapsedMs = Date.now() - startedAt;
+    throw error;
+  }
 };
 
 const mapWithConcurrency = async (items, concurrency, mapper) => {
