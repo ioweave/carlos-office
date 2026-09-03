@@ -14,6 +14,11 @@
     "lint:fix": "eslint . --fix",
     "check": "node scripts/check-syntax.mjs"
   },
+  "dependencies": {
+    "@langchain/core": "^1.2.9",
+    "@langchain/langgraph": "^1.4.13",
+    "@langchain/langgraph-checkpoint-sqlite": "^1.0.4"
+  },
   "devDependencies": {
     "@eslint/js": "^9.18.0",
     "eslint": "^9.18.0",
