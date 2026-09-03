@@ -1,5 +1,6 @@
 import { readdir } from "node:fs/promises";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 
 const root = resolve(import.meta.dirname, "..");
@@ -25,4 +26,5 @@ for (const file of files) {
 }
 
 if (failed) process.exit(1);
-console.log(`Syntax OK: ${files.length} backend modules.`);
+await import(pathToFileURL(resolve(root, "src/services/LangGraphWorkflowRuntime.mjs")));
+console.log(`Syntax OK: ${files.length} backend modules. LangGraph runtime imports OK.`);
