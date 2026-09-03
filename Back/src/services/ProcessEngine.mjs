@@ -29,7 +29,7 @@ import { getTaskExecutionGroups } from "./WorkflowGraphService.mjs";
 const activeRuns = new Map();
 const workflowTransitions = new Map();
 const ORPHANED_ATTEMPT_REASON = "Previous Agent process is no longer active";
-const DEFAULT_MAX_ATTEMPTS = 2;
+const DEFAULT_MAX_ATTEMPTS = 3;
 const RECOVERABLE_FAILURE_CODES = new Set([
   "provider_error",
   "provider_transient_error",
@@ -169,7 +169,7 @@ const resolveTaskInput = (workflow, taskId, task) => {
       .map(group => group.id),
   );
 
-  if (Array.isArray(task.inputs) && task.inputs.length) {
+  if (Array.isArray(task.inputs)) {
     const selected = {};
     for (const name of task.inputs) {
       const value = resolveInputPath(workflow, taskId, name, retainedMapIds);
@@ -294,7 +294,6 @@ const failSetup = async (workflowId, taskId, error) => {
 export const selectTaskExecution = async ({
   workflowId,
   taskId,
-  decide,
   noraSelection,
   models = [],
   validateModelSelection,
@@ -307,55 +306,18 @@ export const selectTaskExecution = async ({
 
   const toolsAllowed = taskAllowsTools(task.operation);
   const availableModels = models.map(entry => ({ provider: entry.provider, models: [...(entry.models ?? [])] }));
-  const availableTools = toolsAllowed ? listTools().map(tool => ({
-    name: tool.name,
-    description: tool.description ?? "",
-    requiresApproval: Boolean(tool.requiresApproval),
-  })) : [];
-  const availableSkills = listSkills().map(({ name, content }) => ({ name, description: skillDescription(content) }));
-  const toolNames = new Set(availableTools.map(tool => tool.name));
-  const skillNames = new Set(availableSkills.map(skill => skill.name));
-  const fixedModel = selectionFrom(task, validateModelSelection, availableModels);
-  const fixedTools = toolsAllowed ? (Array.isArray(task.tools) ? [...task.tools] : null) : [];
-  const fixedSkills = Array.isArray(task.skills) ? [...task.skills] : null;
-  if (fixedTools?.some(name => !toolNames.has(name))) throw new Error("Task requires an unknown Tool");
-  if (fixedSkills?.some(name => !skillNames.has(name))) throw new Error("Task requires an unknown Skill");
+  const toolNames = new Set(listTools().map(tool => tool.name));
+  const skillNames = new Set(listSkills().map(skill => skill.name));
+  const selectedModel = selectionFrom(task, validateModelSelection, availableModels)
+    ?? selectionFrom(noraSelection, validateModelSelection, availableModels);
+  if (!selectedModel) throw new Error(`Task ${taskId} has no deterministic model selection`);
 
-  let decision = {};
-  if (!fixedModel || fixedTools === null || fixedSkills === null) {
-    decision = await decide(
-      [
-        `Choose only unspecified runtime resources for this atomic ${task.operation} Task.`,
-        "The Task operation and objective are fixed and must not be broadened.",
-        toolsAllowed
-          ? "Select zero or one Tool only. A second Tool would be a second Task action and is forbidden."
-          : "This operation consumes supplied evidence. Select zero Tools.",
-        "Explicit provider/model, Tool, and Skills are authoritative and must not be replaced.",
-        "Return only JSON matching the supplied execution-selection schema.",
-      ].join("\n"),
-      {
-        workflow: { id: workflow.id, process: workflow.process },
-        task: { id: taskId, ...task },
-        executionGroups: getTaskExecutionGroups(workflow, taskId),
-        fixed: { model: fixedModel, tools: fixedTools, skills: fixedSkills },
-        availableModels,
-        availableTools,
-        availableSkills,
-      },
-      noraSelection,
-    );
-  }
-
-  const selectedModel = fixedModel ?? validateModelSelection({ provider: decision.provider, model: decision.model });
-  const selectedTools = fixedTools ?? decision.tools;
-  const selectedSkills = fixedSkills ?? decision.skills;
-  if (!Array.isArray(selectedTools) || selectedTools.length > 1 || selectedTools.some(name => !toolNames.has(name))) {
-    throw new Error("Atomic Task execution may select at most one valid Tool");
-  }
+  const selectedTools = toolsAllowed && Array.isArray(task.tools) ? [...task.tools] : [];
+  const selectedSkills = Array.isArray(task.skills) ? [...task.skills] : [];
+  if (selectedTools.some(name => !toolNames.has(name))) throw new Error("Task requires an unknown Tool");
+  if (selectedSkills.some(name => !skillNames.has(name))) throw new Error("Task requires an unknown Skill");
+  if (selectedTools.length > 1) throw new Error("Atomic Task execution may select at most one Tool");
   if (!toolsAllowed && selectedTools.length) throw new Error(`Task operation ${task.operation} cannot use Tools`);
-  if (!Array.isArray(selectedSkills) || selectedSkills.some(name => !skillNames.has(name))) {
-    throw new Error("Nora selected an invalid Skill set");
-  }
   return { ...selectedModel, tools: [...new Set(selectedTools)], skills: [...new Set(selectedSkills)] };
 };
 
@@ -668,7 +630,6 @@ const executeTaskNode = async ({ workflowId, taskId, runState, decide, getNoraSe
       execution = await selectTaskExecution({
         workflowId,
         taskId,
-        decide,
         noraSelection,
         models,
         validateModelSelection,
