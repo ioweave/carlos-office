@@ -185,7 +185,9 @@ const resolveTaskInput = (workflow, taskId, task) => {
     if (value !== undefined) upstream[upstreamId] = structuredClone(value);
   }
   return {
-    workflow: materializeMapData(structuredClone(workflow.inputs ?? {}), retainedMapIds),
+    ...(task.operation === "legacy"
+      ? { workflow: materializeMapData(structuredClone(workflow.inputs ?? {}), retainedMapIds) }
+      : {}),
     upstream,
     runtime: {},
   };
@@ -201,11 +203,6 @@ const loadSkills = names => names.map(name => {
   if (!skill) throw new Error(`Unknown Skill: ${name}`);
   return skill;
 });
-const skillDescription = content => String(content ?? "")
-  .split(/\r?\n/)
-  .map(line => line.trim())
-  .find(Boolean)
-  ?.replace(/^#+\s*/, "") ?? "";
 
 const finishAttempt = async (workflowId, taskId, attemptId, changes) => {
   const result = await updateTaskAttempt(workflowId, taskId, attemptId, {
