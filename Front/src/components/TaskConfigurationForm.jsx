@@ -5,6 +5,8 @@ import { toast } from "sonner";
 import api, { endpoints } from "../api";
 
 const DEFAULT_TASK_TIMEOUT_MS = 300_000;
+const TASK_OBJECTIVE_MAX_CHARS = 700;
+const TASK_COMPLETION_MAX_CHARS = 600;
 const TASK_TIMEOUT_OPTIONS = [
   { value: "60000", label: "1 minute" },
   { value: "120000", label: "2 minutes" },
@@ -15,6 +17,21 @@ const TASK_TIMEOUT_OPTIONS = [
   { value: "3600000", label: "60 minutes" },
   { value: "0", label: "No timeout" },
 ];
+const TASK_OPERATION_OPTIONS = [
+  ["search", "Search — discover one source set"],
+  ["fetch", "Fetch — retrieve one identified resource"],
+  ["extract", "Extract — extract facts/text from one resource"],
+  ["inspect", "Inspect — inspect one provided target"],
+  ["verify", "Verify — verify one claim from supplied evidence"],
+  ["analyze", "Analyze — analyze supplied evidence"],
+  ["compare", "Compare — compare supplied inputs"],
+  ["synthesize", "Synthesize — combine upstream results"],
+  ["transform", "Transform — transform supplied content"],
+  ["write", "Write — produce one output/artifact"],
+  ["execute", "Execute — perform one side effect"],
+  ["decide", "Decide — make one choice"],
+];
+const TOOL_FREE_OPERATIONS = new Set(["verify", "analyze", "compare", "synthesize", "transform", "decide"]);
 
 const uniqueNames = value => (
   Array.isArray(value)
@@ -40,17 +57,19 @@ const taskDraftFrom = (task, taskId) => {
   const legacyTools = task?.tool ? [task.tool] : [];
   const hasFixedTools = Array.isArray(task?.tools) || legacyTools.length > 0;
   const hasFixedSkills = Array.isArray(task?.skills);
+  const operation = task?.operation && task.operation !== "legacy" ? task.operation : "";
 
   return {
     name: task?.name || humanizeId(taskId),
+    operation,
     objective: task?.objective || "",
     provider: task?.provider || "",
     model: task?.model || "",
     timeoutMs: String(task?.timeoutMs === null ? 0 : (task?.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS)),
     inputs: uniqueNames(task?.inputs).join(", "),
     output: task?.output || "",
-    toolsAutomatic: !hasFixedTools,
-    tools: uniqueNames(Array.isArray(task?.tools) ? task.tools : legacyTools),
+    toolsAutomatic: !hasFixedTools && !TOOL_FREE_OPERATIONS.has(operation),
+    tools: uniqueNames(Array.isArray(task?.tools) ? task.tools : legacyTools).slice(0, 1),
     skillsAutomatic: !hasFixedSkills,
     skills: uniqueNames(task?.skills),
     completion: task?.completion || "",
@@ -58,12 +77,9 @@ const taskDraftFrom = (task, taskId) => {
 };
 
 const sameDraft = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+const addCurrentOption = (options, current) => current && !options.includes(current) ? [current, ...options] : options;
 
-const addCurrentOption = (options, current) => (
-  current && !options.includes(current) ? [current, ...options] : options
-);
-
-function ChoiceList({ label, options, selected, automatic, onAutomaticChange, onToggle, disabled }) {
+function ChoiceList({ label, options, selected, automatic, onAutomaticChange, onToggle, disabled, single = false }) {
   return (
     <fieldset className="task-config__choice-field" disabled={disabled}>
       <legend>{label}</legend>
@@ -82,7 +98,8 @@ function ChoiceList({ label, options, selected, automatic, onAutomaticChange, on
           ) : options.map(name => (
             <label key={name} className="task-config__choice">
               <input
-                type="checkbox"
+                type={single ? "radio" : "checkbox"}
+                name={single ? `task-${label.toLowerCase()}` : undefined}
                 checked={selected.includes(name)}
                 onChange={() => onToggle(name)}
               />
@@ -165,26 +182,41 @@ export default function TaskConfigurationForm({
     ? TASK_TIMEOUT_OPTIONS
     : [{ value: draft.timeoutMs, label: `${Number(draft.timeoutMs) / 1000} seconds` }, ...TASK_TIMEOUT_OPTIONS];
   const dirty = !sameDraft(draft, baseline);
+  const toolsAllowed = Boolean(draft.operation) && !TOOL_FREE_OPERATIONS.has(draft.operation);
   const validName = !workflowId || (Boolean(draft.name.trim()) && draft.name.trim().length <= 50);
-  const valid = validName && Boolean(draft.objective.trim()) && (!draft.provider || Boolean(draft.model));
+  const valid = validName
+    && Boolean(draft.operation)
+    && Boolean(draft.objective.trim())
+    && draft.objective.trim().length <= TASK_OBJECTIVE_MAX_CHARS
+    && draft.completion.trim().length <= TASK_COMPLETION_MAX_CHARS
+    && (!draft.provider || Boolean(draft.model));
 
   const update = changes => setDraft(current => ({ ...current, ...changes }));
-  const toggle = (field, name) => setDraft(current => ({
+  const toggle = (field, name, single = false) => setDraft(current => ({
     ...current,
-    [field]: current[field].includes(name)
-      ? current[field].filter(item => item !== name)
-      : [...current[field], name],
+    [field]: single
+      ? (current[field].includes(name) ? [] : [name])
+      : current[field].includes(name)
+        ? current[field].filter(item => item !== name)
+        : [...current[field], name],
+  }));
+
+  const updateOperation = operation => setDraft(current => ({
+    ...current,
+    operation,
+    ...(TOOL_FREE_OPERATIONS.has(operation) ? { toolsAutomatic: false, tools: [] } : {}),
   }));
 
   const taskPayload = () => ({
     ...(workflowId ? { name: draft.name.trim() } : {}),
+    operation: draft.operation,
     objective: draft.objective.trim(),
     provider: draft.provider || null,
     model: draft.provider ? draft.model || null : null,
     timeoutMs: draft.timeoutMs === "0" ? null : Number(draft.timeoutMs),
     inputs: commaList(draft.inputs),
-    output: draft.output.trim(),
-    tools: draft.toolsAutomatic ? null : uniqueNames(draft.tools),
+    output: draft.output.trim() || null,
+    tools: toolsAllowed ? (draft.toolsAutomatic ? null : uniqueNames(draft.tools).slice(0, 1)) : [],
     skills: draft.skillsAutomatic ? null : uniqueNames(draft.skills),
     completion: draft.completion.trim(),
   });
@@ -197,15 +229,11 @@ export default function TaskConfigurationForm({
     try {
       let savedTask;
       let savedRecord;
-
       if (workflowId) {
         savedTask = (await api.patch(endpoints.workflowTask(workflowId, taskId), taskPayload())).data;
         savedRecord = savedTask;
       } else {
-        const updated = (await api.patch(endpoints.process(processName), {
-          taskId,
-          task: taskPayload(),
-        })).data;
+        const updated = (await api.patch(endpoints.process(processName), { taskId, task: taskPayload() })).data;
         savedTask = updated.tasks?.[taskId] || task;
         savedRecord = updated;
       }
@@ -242,12 +270,21 @@ export default function TaskConfigurationForm({
           )}
 
           <label className="field">
+            <span>Operation</span>
+            <select value={draft.operation} onChange={event => updateOperation(event.target.value)} disabled={disabled}>
+              <option value="">Select one atomic operation</option>
+              {TASK_OPERATION_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+
+          <label className="field">
             <span>Objective</span>
             <textarea
               rows={3}
+              maxLength={TASK_OBJECTIVE_MAX_CHARS}
               value={draft.objective}
               onChange={event => update({ objective: event.target.value })}
-              placeholder="What this Task must accomplish"
+              placeholder="One action only — e.g. Extract Art. 158.1 text from the provided document"
               disabled={disabled}
             />
           </label>
@@ -278,14 +315,8 @@ export default function TaskConfigurationForm({
 
           <label className="field">
             <span>Task timeout</span>
-            <select
-              value={draft.timeoutMs}
-              onChange={event => update({ timeoutMs: event.target.value })}
-              disabled={disabled}
-            >
-              {timeoutOptions.map(option => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
+            <select value={draft.timeoutMs} onChange={event => update({ timeoutMs: event.target.value })} disabled={disabled}>
+              {timeoutOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
 
@@ -295,31 +326,39 @@ export default function TaskConfigurationForm({
               type="text"
               value={draft.inputs}
               onChange={event => update({ inputs: event.target.value })}
-              placeholder="input-name, previous-output"
+              placeholder="workflow.case, upstream.fetch-law"
               disabled={disabled}
             />
           </label>
 
           <label className="field">
-            <span>Output</span>
+            <span>Output alias</span>
             <input
               type="text"
               value={draft.output}
               onChange={event => update({ output: event.target.value })}
-              placeholder="result-name"
+              placeholder="Optional"
               disabled={disabled}
             />
           </label>
 
-          <ChoiceList
-            label="Tools"
-            options={toolOptions}
-            selected={draft.tools}
-            automatic={draft.toolsAutomatic}
-            onAutomaticChange={value => update({ toolsAutomatic: value })}
-            onToggle={name => toggle("tools", name)}
-            disabled={disabled}
-          />
+          {toolsAllowed ? (
+            <ChoiceList
+              label="Tool"
+              options={toolOptions}
+              selected={draft.tools}
+              automatic={draft.toolsAutomatic}
+              onAutomaticChange={value => update({ toolsAutomatic: value, ...(value ? { tools: [] } : {}) })}
+              onToggle={name => toggle("tools", name, true)}
+              disabled={disabled}
+              single
+            />
+          ) : (
+            <div className="field">
+              <span>Tool</span>
+              <small>{draft.operation ? "This operation consumes supplied evidence and cannot use a Tool." : "Select an operation first."}</small>
+            </div>
+          )}
 
           <ChoiceList
             label="Skills"
@@ -335,9 +374,10 @@ export default function TaskConfigurationForm({
             <span>Completion</span>
             <textarea
               rows={3}
+              maxLength={TASK_COMPLETION_MAX_CHARS}
               value={draft.completion}
               onChange={event => update({ completion: event.target.value })}
-              placeholder="How the temporary Agent knows this Task is complete"
+              placeholder="Acceptance criteria for this same single operation"
               disabled={disabled}
             />
           </label>
