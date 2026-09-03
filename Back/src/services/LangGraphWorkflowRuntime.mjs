@@ -10,11 +10,9 @@ const runtimeDir = resolve(here, "../../ObsidianVault/System/Runtime");
 const checkpointPath = resolve(runtimeDir, "langgraph-checkpoints.sqlite");
 let checkpointerPromise = null;
 
-const mergeObjects = (left, right) => ({ ...(left ?? {}), ...(right ?? {}) });
 const appendValues = (left, right) => [...(left ?? []), ...(Array.isArray(right) ? right : [right])];
 
 const WorkflowState = Annotation.Root({
-  results: Annotation({ reducer: mergeObjects, default: () => ({}) }),
   completedTasks: Annotation({ reducer: appendValues, default: () => [] }),
 });
 
@@ -48,8 +46,8 @@ const compileWorkflow = async ({ workflow, runTask }) => {
   const builder = new StateGraph(WorkflowState);
   for (const taskId of executableTaskIds(workflow)) {
     builder.addNode(taskId, async () => {
-      const result = await runTask(taskId);
-      return { completedTasks: [taskId], results: { [taskId]: result } };
+      await runTask(taskId);
+      return { completedTasks: [taskId] };
     });
   }
 
