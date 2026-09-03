@@ -10,17 +10,17 @@ import { normalizeGeneratedGraph, validateGraph } from "./WorkflowGraphService.m
 
 const here = dirname(fileURLToPath(import.meta.url));
 const workflowsDir = resolve(here, "../../ObsidianVault/System/Workflows");
-const INTERRUPTION_REASON = "Backend restarted while Workflow execution was active";
+const INTERRUPTION_REASON = "Backend restarted while LangGraph Workflow execution was active";
 
 const reconcileWorkflow = workflow => {
+  const wasRunning = workflow.status === "running"
+    || Object.values(workflow.tasks ?? {}).some(task => task?.status === "running");
+  if (!wasRunning) return null;
+
   const now = new Date().toISOString();
-  let interrupted = workflow.status === "running";
   for (const task of Object.values(workflow.tasks ?? {})) {
     if (task?.type !== "task") continue;
-    if (task.status === "running") {
-      task.status = "blocked";
-      interrupted = true;
-    }
+    let interruptedAttemptId = null;
     for (const attempt of task.attempts ?? []) {
       if (attempt.status !== "running") continue;
       attempt.status = "failed";
@@ -30,13 +30,20 @@ const reconcileWorkflow = workflow => {
         phase: "process",
         code: "backend_interrupted",
         message: INTERRUPTION_REASON,
+        retryable: true,
+        recovery: "langgraph_resume",
       };
-      interrupted = true;
+      interruptedAttemptId = attempt.id;
+    }
+    if (task.status === "running") {
+      task.status = "pending";
+      if (interruptedAttemptId) task.resumeCheckpointAttemptId = interruptedAttemptId;
     }
   }
-  if (!interrupted) return null;
-  workflow.status = "blocked";
-  workflow.interruption = { at: now, reason: INTERRUPTION_REASON };
+
+  workflow.status = "pending";
+  workflow.interruption = { at: now, reason: INTERRUPTION_REASON, recovery: "langgraph_resume" };
+  delete workflow.stalled;
   return now;
 };
 
@@ -75,6 +82,7 @@ export const reconcileInterruptedWorkflows = async () => {
           workflowId: workflow.id ?? null,
           interruptedAt,
           reason: INTERRUPTION_REASON,
+          recovery: "langgraph_resume",
         });
       }
       reconciled.push(workflow.id ?? filename);
