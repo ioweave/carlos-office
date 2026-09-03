@@ -1,3 +1,8 @@
+import {
+  LEGACY_TASK_OPERATION,
+  validateAtomicGraph as assertAtomicGraph,
+  validateAtomicTaskDefinition,
+} from "./TaskAtomicity.mjs";
 import { TASK_EXECUTION_LIMITS } from "./WorkflowSchema.mjs";
 
 const NODE_TYPES = new Set(["start", "task", "end"]);
@@ -70,6 +75,7 @@ const normalizeGeneratedTask = (taskId, task) => {
   }
   delete normalized.description;
 
+  normalized.operation = cleanString(normalized.operation);
   normalized.name = cleanString(normalized.name);
   normalized.objective = cleanString(normalized.objective);
   normalized.completion = cleanString(normalized.completion);
@@ -80,6 +86,7 @@ const normalizeGeneratedTask = (taskId, task) => {
   normalized.tools = normalizeStringList(normalized.tools);
   normalized.skills = normalizeStringList(normalized.skills);
 
+  if (!normalized.operation) normalized.operation = LEGACY_TASK_OPERATION;
   if (!normalized.name) normalized.name = taskNameFromId(taskId);
   if (!normalized.output) delete normalized.output;
   if (!normalized.completion) delete normalized.completion;
@@ -194,6 +201,8 @@ const validateTaskDefinition = (taskId, task) => {
   if (hasModel && (typeof task.model !== "string" || !task.model.trim())) {
     throw new Error(`Task ${taskId} model must be a non-empty string`);
   }
+
+  validateAtomicTaskDefinition(taskId, task, { requireOperation: false });
 };
 
 const validateGroupLayout = group => {
@@ -447,6 +456,12 @@ export const validateGraph = graph => {
 
   validateGroups(graph);
   validateBindings(graph, reverseAdjacency, aliases);
+  return true;
+};
+
+export const validateAtomicGraph = graph => {
+  validateGraph(graph);
+  assertAtomicGraph(graph);
   return true;
 };
 
