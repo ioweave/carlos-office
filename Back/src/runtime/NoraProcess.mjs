@@ -6,6 +6,12 @@ import { NORA_DECISION_SCHEMA } from "../NoraActions.mjs";
 import { filterModelOptions, getRoutingModels } from "../controllers/ProviderController.mjs";
 import { getNora } from "../registry/Nora.mjs";
 import { getKnowledge } from "../services/KnowledgeService.mjs";
+import {
+  LOOP_REVIEW_SCHEMA,
+  TASK_EXECUTION_SELECTION_SCHEMA,
+  TASK_RECOVERY_SCHEMA,
+  WORKFLOW_GRAPH_SCHEMA,
+} from "../services/WorkflowSchema.mjs";
 
 const noraProgram = fileURLToPath(new URL("./nora.mjs", import.meta.url));
 const pending = new Map();
@@ -36,14 +42,29 @@ const includeConfiguredNoraModel = discovered => {
   return result;
 };
 
-const defaultFormat = context => (
-  Array.isArray(context?.conversation)
-  && Array.isArray(context?.availableProcesses)
-  && Array.isArray(context?.availableTools)
-  && Array.isArray(context?.availableSkills)
-    ? NORA_DECISION_SCHEMA
-    : null
-);
+const defaultFormat = context => {
+  if (typeof context?.validationError === "string" && context?.invalidDefinition) return WORKFLOW_GRAPH_SCHEMA;
+  if (context?.loop && context?.candidate && context?.task) return LOOP_REVIEW_SCHEMA;
+  if (
+    context?.task
+    && context?.fixed
+    && Array.isArray(context?.availableModels)
+    && Array.isArray(context?.availableTools)
+    && Array.isArray(context?.availableSkills)
+  ) {
+    return TASK_EXECUTION_SELECTION_SCHEMA;
+  }
+  if (context?.workflowId && context?.taskId && context?.task) return TASK_RECOVERY_SCHEMA;
+  if (
+    Array.isArray(context?.conversation)
+    && Array.isArray(context?.availableProcesses)
+    && Array.isArray(context?.availableTools)
+    && Array.isArray(context?.availableSkills)
+  ) {
+    return NORA_DECISION_SCHEMA;
+  }
+  return null;
+};
 
 const routedDecision = async (instruction, context) => {
   if (!Array.isArray(context?.availableModels) || !context.availableModels.some(entry => Array.isArray(entry?.models))) {
