@@ -1,3 +1,28 @@
+export const TASK_OPERATIONS = Object.freeze([
+  "search",
+  "fetch",
+  "extract",
+  "inspect",
+  "verify",
+  "analyze",
+  "compare",
+  "synthesize",
+  "transform",
+  "write",
+  "execute",
+  "decide",
+]);
+export const TOOL_FREE_TASK_OPERATIONS = Object.freeze([
+  "verify",
+  "analyze",
+  "compare",
+  "synthesize",
+  "transform",
+  "decide",
+]);
+export const TASK_OBJECTIVE_MAX_CHARS = 700;
+export const TASK_COMPLETION_MAX_CHARS = 600;
+
 export const TASK_EXECUTION_LIMITS = Object.freeze({
   maxReasoningTurns: { min: 1, max: 64 },
   maxToolCalls: { min: 1, max: 128 },
@@ -22,12 +47,17 @@ export const TASK_EXECUTION_SCHEMA = Object.freeze({
 
 export const WORKFLOW_NODE_SCHEMA = Object.freeze({
   type: "object",
-  description: "One graph node. start/end are topology-only; task is executable work.",
+  description: "One graph node. start/end are topology-only; task is exactly one executable operation.",
   properties: {
     type: {
       type: "string",
       enum: ["start", "task", "end"],
       description: "Node kind. Map and Loop are never node types; they belong in groups.",
+    },
+    operation: {
+      type: "string",
+      enum: TASK_OPERATIONS,
+      description: "Task only: exactly one operation. Broad research is forbidden; decompose search/fetch/extract/analyze/synthesize into separate nodes.",
     },
     name: {
       type: "string",
@@ -38,11 +68,13 @@ export const WORKFLOW_NODE_SCHEMA = Object.freeze({
     objective: {
       type: "string",
       minLength: 1,
-      description: "Exact work the temporary Agent must perform. Required by Carlos Office when type=task.",
+      maxLength: TASK_OBJECTIVE_MAX_CHARS,
+      description: "One atomic action only. Context belongs in inputs; sequential or numbered action lists are invalid.",
     },
     completion: {
       type: "string",
-      description: "Acceptance criteria that tell the temporary Agent when the Task is complete.",
+      maxLength: TASK_COMPLETION_MAX_CHARS,
+      description: "Acceptance criteria for that one operation; do not add another action here.",
     },
     inputs: {
       type: "array",
@@ -68,8 +100,9 @@ export const WORKFLOW_NODE_SCHEMA = Object.freeze({
     tools: {
       type: "array",
       items: { type: "string", minLength: 1 },
+      maxItems: 1,
       uniqueItems: true,
-      description: "Optional authoritative Tool list. Omit for Nora selection; [] intentionally means no Tools.",
+      description: "Optional authoritative Tool list. A Task may use at most one Tool. Omit for Nora selection; [] means no Tool.",
     },
     skills: {
       type: "array",
@@ -149,7 +182,7 @@ export const WORKFLOW_GRAPH_SCHEMA = Object.freeze({
       type: "object",
       minProperties: 2,
       additionalProperties: WORKFLOW_NODE_SCHEMA,
-      description: "Node dictionary keyed by stable node ID. Contains exactly one start and one end plus executable Tasks.",
+      description: "Node dictionary keyed by stable node ID. Contains exactly one start and one end plus atomic executable Tasks.",
     },
     edges: {
       type: "array",
@@ -191,11 +224,11 @@ export const PROCESS_DEFINITION_SCHEMA = Object.freeze({
 
 export const TASK_EXECUTION_SELECTION_SCHEMA = Object.freeze({
   type: "object",
-  description: "Resolved runtime resources for one ready Task.",
+  description: "Resolved runtime resources for one atomic ready Task.",
   properties: {
     provider: { type: "string", minLength: 1 },
     model: { type: "string", minLength: 1 },
-    tools: { type: "array", items: { type: "string", minLength: 1 }, uniqueItems: true },
+    tools: { type: "array", items: { type: "string", minLength: 1 }, maxItems: 1, uniqueItems: true },
     skills: { type: "array", items: { type: "string", minLength: 1 }, uniqueItems: true },
   },
   required: ["provider", "model", "tools", "skills"],
@@ -228,7 +261,16 @@ export const getWorkflowDesignInstruction = () => [
   "CARLOS OFFICE WORKFLOW LANGUAGE — AUTHORITATIVE CONTRACT. Read this before deciding how to execute the request.",
   "Start: exactly one topology-only entry node. It performs no work and owns no Tools, model, or output.",
   "End: exactly one topology-only terminal node. It performs no work and owns no Tools, model, or output.",
-  "Task: the only executable graph node. Give it one atomic objective, explicit completion criteria when useful, and only the inputs/resources it actually needs.",
+  "Task: exactly ONE atomic operation. A Task is one verb applied to one target; never a mini-workflow hidden inside one objective.",
+  `Every Task must declare operation as exactly one of: ${TASK_OPERATIONS.join(", ")}. There is intentionally no research operation because research must be decomposed.`,
+  "Canonical decomposition is search -> fetch -> extract -> verify/analyze/compare -> synthesize -> write. Create only the nodes actually needed and connect them with edges.",
+  "Never ask one Task to fetch information and analyze it, or analyze and compare it, or compare and generate an output. Those are separate Task nodes.",
+  "Task objectives must be concise and atomic. Put case context in Workflow inputs and pass evidence through upstream data; do not paste the whole job into one objective.",
+  `Task objective length is bounded to ${TASK_OBJECTIVE_MAX_CHARS} characters and completion to ${TASK_COMPLETION_MAX_CHARS} characters. Numbered multi-action objectives and sequential 'then/luego' instructions are invalid.`,
+  "A Task may use AT MOST ONE Tool. If two Tools are required, that is evidence that two Task nodes are required.",
+  `Operations ${TOOL_FREE_TASK_OPERATIONS.join(", ")} are evidence-only and must use zero Tools; they work solely from resolved inputs/upstream data.`,
+  "search discovers candidate sources only; fetch retrieves one identified resource; extract reads one provided resource; inspect observes one provided target; verify checks one claim against provided evidence.",
+  "analyze reasons over provided evidence; compare compares provided inputs; synthesize combines upstream results; transform changes provided content; write produces one output/artifact; execute performs one side effect; decide makes one choice.",
   "Task output is an OPTIONAL ALIAS used only to address that Task downstream. It is not the Agent result. Omit output instead of emitting an empty string.",
   "Task results are produced at runtime as Agent completion {output,data,artifacts}. Downstream machine-readable handoff belongs in data and is addressed through upstream.<taskId>.",
   "Edge: [from,to] expresses dependency. The graph must be acyclic; every node must be reachable from start and able to reach end.",
