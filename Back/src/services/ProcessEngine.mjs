@@ -407,11 +407,14 @@ const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSe
     const checkpointAttempt = latestTask.resumeCheckpointAttemptId
       ? previousAttempts.find(item => item.id === latestTask.resumeCheckpointAttemptId) ?? null
       : null;
+    const runAttempt = (runState.attemptsByTask.get(taskId) ?? 0) + 1;
+    runState.attemptsByTask.set(taskId, runAttempt);
     const attempt = {
       id: `attempt-${randomUUID()}`,
       workflowId,
       taskId,
       attempt: previousAttempts.length + 1,
+      runAttempt,
       agentId: null,
       pid: null,
       provider: execution.provider,
@@ -454,6 +457,7 @@ const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSe
     attemptId: attempt.id,
     provider: execution.provider,
     model: execution.model,
+    runAttempt: attempt.runAttempt,
     executionGroups: attempt.executionGroups.map(group => group.id),
   });
 
@@ -601,13 +605,13 @@ const runTask = async ({ workflowId, taskId, execution, runState, decide, noraSe
     const message = result.error || "Agent process failed";
     const diagnostics = failureDiagnostics({ ...result, message, diagnostics: result.diagnostics }, "process", "agent_process_failure");
     const maxAttempts = task.execution?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-    const canRetry = attempt.attempt < maxAttempts && resultCanRetrySafely({ ...result, diagnostics });
+    const canRetry = attempt.runAttempt < maxAttempts && resultCanRetrySafely({ ...result, diagnostics });
     if (canRetry && currentTask.status === "running" && current.status === "running") {
       const failed = await settleAttemptAndTask(workflowId, taskId, attempt.id, {
         ...runtime,
         status: "failed",
         error: message,
-        diagnostics: { ...diagnostics, recovery: "automatic_retry" },
+        diagnostics: { ...diagnostics, recovery: "automatic_retry", runAttempt: attempt.runAttempt, maxAttempts },
       }, "pending");
       return { event: "attempt.retry_scheduled", attempt: failed, retry: true, error: message, diagnostics };
     }
@@ -703,7 +707,12 @@ export const runWorkflow = options => {
     if (!existing.cancelled) return existing.promise;
     return existing.promise.then(() => runWorkflow(options));
   }
-  const runState = { cancelled: false, promise: null, executionByTask: new Map() };
+  const runState = {
+    cancelled: false,
+    promise: null,
+    executionByTask: new Map(),
+    attemptsByTask: new Map(),
+  };
   const promise = runWorkflowInternal({ ...options, runState }).finally(() => {
     if (activeRuns.get(options.workflowId) === runState) activeRuns.delete(options.workflowId);
   });
