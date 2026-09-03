@@ -1,17 +1,19 @@
+import { TASK_EXECUTION_LIMITS } from "./WorkflowSchema.mjs";
+
 const NODE_TYPES = new Set(["start", "task", "end"]);
 const GROUP_TYPES = new Set(["map", "loop"]);
 const MAP_FAILURE_POLICIES = new Set(["fail-fast", "continue"]);
 const MAX_TASK_NAME_LENGTH = 50;
 const MAX_GROUP_NAME_LENGTH = 60;
-const TASK_EXECUTION_LIMITS = Object.freeze({
-  maxReasoningTurns: { min: 1, max: 64 },
-  maxToolCalls: { min: 1, max: 128 },
-  maxNoProgressTurns: { min: 1, max: 8 },
-  maxAttempts: { min: 1, max: 4 },
-});
 
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const hasTask = (graph, taskId) => Object.prototype.hasOwnProperty.call(graph.tasks, taskId);
+const cleanString = value => typeof value === "string" ? value.trim() : value;
+const normalizeStringList = value => {
+  if (!Array.isArray(value)) return value;
+  const normalized = value.map(item => typeof item === "string" ? item.trim() : item);
+  return normalized.every(item => typeof item === "string") ? [...new Set(normalized.filter(Boolean))] : normalized;
+};
 
 const validateStringList = (value, label) => {
   if (value == null) return;
@@ -54,9 +56,52 @@ const groupNameFromId = groupId => String(groupId)
   .replace(/\b\w/g, character => character.toUpperCase())
   .slice(0, MAX_GROUP_NAME_LENGTH);
 
+const normalizeGeneratedTask = (taskId, task) => {
+  if (!isObject(task)) return task;
+  const normalized = structuredClone(task);
+  if (!normalized.type) normalized.type = "task";
+  if (normalized.type !== "task") return normalized;
+
+  delete normalized.agent;
+  delete normalized.tool;
+  if ((!normalized.objective || !String(normalized.objective).trim()) && typeof normalized.description === "string") {
+    const description = normalized.description.trim();
+    if (description) normalized.objective = description;
+  }
+  delete normalized.description;
+
+  normalized.name = cleanString(normalized.name);
+  normalized.objective = cleanString(normalized.objective);
+  normalized.completion = cleanString(normalized.completion);
+  normalized.output = cleanString(normalized.output);
+  normalized.provider = cleanString(normalized.provider);
+  normalized.model = cleanString(normalized.model);
+  normalized.inputs = normalizeStringList(normalized.inputs);
+  normalized.tools = normalizeStringList(normalized.tools);
+  normalized.skills = normalizeStringList(normalized.skills);
+
+  if (!normalized.name) normalized.name = taskNameFromId(taskId);
+  if (!normalized.output) delete normalized.output;
+  if (!normalized.completion) delete normalized.completion;
+  if (normalized.provider == null || normalized.provider === "") delete normalized.provider;
+  if (normalized.model == null || normalized.model === "") delete normalized.model;
+  if (normalized.tools === null) delete normalized.tools;
+  if (normalized.skills === null) delete normalized.skills;
+  return normalized;
+};
+
 const normalizeGeneratedGroup = group => {
   if (!isObject(group)) return group;
   const normalized = structuredClone(group);
+  normalized.id = cleanString(normalized.id);
+  normalized.type = cleanString(normalized.type);
+  normalized.name = cleanString(normalized.name);
+  normalized.members = normalizeStringList(normalized.members);
+  normalized.source = cleanString(normalized.source);
+  normalized.itemAs = cleanString(normalized.itemAs);
+  normalized.indexAs = cleanString(normalized.indexAs);
+  normalized.criteria = cleanString(normalized.criteria);
+
   if (!normalized.name && typeof normalized.title === "string" && normalized.title.trim()) {
     normalized.name = normalized.title.trim();
   }
@@ -64,8 +109,8 @@ const normalizeGeneratedGroup = group => {
   if (!normalized.name && normalized.id) normalized.name = groupNameFromId(normalized.id);
 
   if (normalized.type === "map") {
-    normalized.itemAs ??= "item";
-    normalized.indexAs ??= "index";
+    normalized.itemAs ||= "item";
+    normalized.indexAs ||= "index";
     normalized.concurrency ??= 1;
     normalized.maxItemAttempts ??= 1;
     normalized.failurePolicy ??= "fail-fast";
@@ -73,7 +118,7 @@ const normalizeGeneratedGroup = group => {
   if (normalized.type === "loop") {
     normalized.maxIterations ??= 3;
     normalized.minimumScore ??= 0.8;
-    normalized.criteria ??= "Review the Task result against its objective and completion criteria.";
+    normalized.criteria ||= "Review the Task result against its objective and completion criteria.";
   }
   return normalized;
 };
@@ -82,6 +127,8 @@ export const normalizeGeneratedGraph = graph => {
   if (!isObject(graph)) return graph;
 
   const normalized = structuredClone(graph);
+  normalized.start = cleanString(normalized.start);
+  normalized.end = cleanString(normalized.end);
   if (!isObject(normalized.tasks)) return normalized;
 
   if (typeof normalized.start === "string" && normalized.start) {
@@ -95,12 +142,8 @@ export const normalizeGeneratedGraph = graph => {
   }
 
   for (const [taskId, task] of Object.entries(normalized.tasks)) {
-    if (taskId === normalized.start || taskId === normalized.end || !isObject(task)) continue;
-    if (!task.type) task.type = "task";
-    if (task.type === "task" && (!task.objective || !String(task.objective).trim())) {
-      if (typeof task.description === "string" && task.description.trim()) task.objective = task.description.trim();
-    }
-    if (task.type === "task" && (!task.name || !String(task.name).trim())) task.name = taskNameFromId(taskId);
+    if (taskId === normalized.start || taskId === normalized.end) continue;
+    normalized.tasks[taskId] = normalizeGeneratedTask(taskId, task);
   }
 
   normalized.groups = Array.isArray(normalized.groups)
@@ -123,8 +166,8 @@ const validateTaskDefinition = (taskId, task) => {
   if (typeof task.objective !== "string" || !task.objective.trim()) {
     throw new Error(`Task ${taskId} objective must be a non-empty string`);
   }
-  if (task.output != null && (typeof task.output !== "string" || !task.output.trim())) {
-    throw new Error(`Task ${taskId} output must be a non-empty string`);
+  if (task.output != null && typeof task.output !== "string") {
+    throw new Error(`Task ${taskId} output must be a string when present`);
   }
   if (task.completion != null && typeof task.completion !== "string") {
     throw new Error(`Task ${taskId} completion must be a string`);
@@ -309,10 +352,11 @@ const validateAcyclic = (graph, adjacency) => {
 const producerByAlias = graph => {
   const result = new Map();
   for (const [taskId, task] of Object.entries(graph.tasks)) {
-    if (task?.type !== "task" || !task.output) continue;
-    const existing = result.get(task.output);
-    if (existing) throw new Error(`Task output alias ${task.output} is ambiguous: ${existing} and ${taskId}`);
-    result.set(task.output, taskId);
+    const alias = typeof task?.output === "string" ? task.output.trim() : "";
+    if (task?.type !== "task" || !alias) continue;
+    const existing = result.get(alias);
+    if (existing) throw new Error(`Task output alias ${alias} is ambiguous: ${existing} and ${taskId}`);
+    result.set(alias, taskId);
   }
   return result;
 };
