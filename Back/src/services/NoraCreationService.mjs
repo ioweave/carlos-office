@@ -9,6 +9,7 @@ import { createSchedule, validateScheduleTiming } from "../controllers/ScheduleC
 import { getSkill, saveSkill } from "../registry/Skills.mjs";
 import { getTool, saveTool } from "../registry/Tools.mjs";
 import { normalizeGeneratedGraph } from "./WorkflowGraphService.mjs";
+import { getWorkflowDesignInstruction } from "./WorkflowSchema.mjs";
 
 const MIN_PLAN_STEPS = 2;
 const MAX_PLAN_STEPS = 5;
@@ -119,6 +120,7 @@ const graphRules = [
   "The tasks object must contain exactly one named start node and one named end node.",
   "Every executable Task uses type task, a concise 2-5 word name (maximum 50 characters), and a non-empty objective.",
   "Task objective contains detailed execution instructions; completion contains acceptance criteria.",
+  "Task output is an optional unique downstream alias, not the Agent result. Omit it when no alias is needed; never emit output as an empty string.",
   "Use Task data output when downstream execution needs machine-readable arrays or objects.",
   "Every Task with another executable Task downstream is a relay Task. Require it to put substantive handoff facts in data and keep output to one short status/result sentence.",
   "Relay Task handoffs must be dense and telegraphic: target at least 60% fewer tokens than explanatory prose, state each fact once, and omit introductions, transitions, conclusions, narration, and Task/input restatement.",
@@ -158,6 +160,8 @@ const graphRules = [
 ];
 
 export const getNoraRequestDecisionInstruction = () => [
+  getWorkflowDesignInstruction(),
+  "",
   "Decide how Carlos's latest request should be handled.",
   "",
   "Allowed actions:",
@@ -214,6 +218,8 @@ export const ensureValidGeneratedGraph = async ({
   } catch (validationError) {
     const repaired = await askForJson(
       [
+        getWorkflowDesignInstruction(),
+        "",
         `Repair this generated ${label} graph.`,
         "",
         "The graph is invalid. Satisfy every Carlos Office graph invariant:",
