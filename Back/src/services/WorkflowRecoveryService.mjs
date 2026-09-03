@@ -2,7 +2,7 @@ import { mkdir, readdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { recordEvent } from "../controllers/EventController.mjs";
+import { listEvents, recordEvent } from "../controllers/EventController.mjs";
 import { atomicWriteFile } from "../lib/AtomicFile.mjs";
 import { cleanupExecutionRuntime } from "./ExecutionWorkspaceService.mjs";
 import { hydrateWorkflowInvocationJournals } from "./InvocationJournalService.mjs";
@@ -11,6 +11,14 @@ import { normalizeGeneratedGraph, validateGraph } from "./WorkflowGraphService.m
 const here = dirname(fileURLToPath(import.meta.url));
 const workflowsDir = resolve(here, "../../ObsidianVault/System/Workflows");
 const INTERRUPTION_REASON = "Backend restarted while LangGraph Workflow execution was active";
+
+const latestRunMarker = workflowId => {
+  const events = [
+    ...listEvents({ type: "workflow.started", workflowId }),
+    ...listEvents({ type: "workflow.restarted", workflowId }),
+  ].filter(event => event.at).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  return events.at(-1)?.at ?? "initial";
+};
 
 const reconcileWorkflow = workflow => {
   const wasRunning = workflow.status === "running"
@@ -42,7 +50,12 @@ const reconcileWorkflow = workflow => {
   }
 
   workflow.status = "pending";
-  workflow.interruption = { at: now, reason: INTERRUPTION_REASON, recovery: "langgraph_resume" };
+  workflow.interruption = {
+    at: now,
+    reason: INTERRUPTION_REASON,
+    recovery: "langgraph_resume",
+    threadMarker: latestRunMarker(workflow.id),
+  };
   delete workflow.stalled;
   return now;
 };
@@ -83,6 +96,7 @@ export const reconcileInterruptedWorkflows = async () => {
           interruptedAt,
           reason: INTERRUPTION_REASON,
           recovery: "langgraph_resume",
+          threadMarker: workflow.interruption.threadMarker,
         });
       }
       reconciled.push(workflow.id ?? filename);
