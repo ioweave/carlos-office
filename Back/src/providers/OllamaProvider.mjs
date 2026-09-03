@@ -137,6 +137,13 @@ const request = async (
       timeoutError.timeoutMs = timeoutMs;
       throw timeoutError;
     }
+    if (error instanceof TypeError && error.message === "fetch failed") {
+      const cause = typeof error.cause?.code === "string" ? ` (${error.cause.code})` : "";
+      const transportError = new Error(`Ollama transport failed${cause}`);
+      transportError.code = "provider_transient_error";
+      transportError.retryable = true;
+      throw transportError;
+    }
     throw error;
   }
 
