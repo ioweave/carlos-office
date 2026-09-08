@@ -21,16 +21,12 @@ export const executeTool = async (tool, input, context) => {
   let started = false;
   let attempts = 0;
   for (let attempt = 1; attempt <= (replaySafe ? 3 : 1); attempt += 1) {
-    let onAbort;
     try {
       signal.throwIfAborted();
       attempts = attempt;
-      const cancelled = new Promise((_, reject) => {
-        onAbort = () => reject(signal.reason);
-        signal.addEventListener("abort", onAbort, { once: true });
-      });
       started = true;
-      const result = await Promise.race([tool.execute(input, { ...context, signal }), cancelled]);
+      const result = await tool.execute(input, { ...context, signal });
+      signal.throwIfAborted();
       validateToolOutput(tool, result);
       return { result, attempts, replaySafe, sideEffect: replaySafe ? "none" : "possible" };
     } catch (cause) {
@@ -60,8 +56,6 @@ export const executeTool = async (tool, input, context) => {
           : "Inspect the action's outcome before retrying; it may already have taken effect."),
       });
       throw error;
-    } finally {
-      if (onAbort) signal.removeEventListener("abort", onAbort);
     }
   }
 };

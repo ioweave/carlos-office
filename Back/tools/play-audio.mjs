@@ -58,7 +58,7 @@ const tool = {
       volume: { type: "number" },
     },
   },
-  async execute(inputs = {}) {
+  async execute(inputs = {}, context = {}) {
     const source = typeof inputs.source === "string" ? inputs.source.trim() : "";
     const volume = inputs.volume ?? 80;
     const blocking = inputs.blocking ?? false;
@@ -72,13 +72,14 @@ const tool = {
     if (typeof blocking !== "boolean") throw new Error("blocking must be a boolean");
     if (typeof cleanup !== "boolean") throw new Error("cleanup must be a boolean");
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("timeoutMs must be a positive number");
+    context.signal?.throwIfAborted();
 
     const origin = /^https?:\/\//i.test(source) ? "web" : "filesystem";
     let localPath;
     let tempDir = null;
 
     if (origin === "web") {
-      const downloaded = await download(source, timeoutMs);
+      const downloaded = await download(source, timeoutMs, context.signal);
       localPath = downloaded.path;
       tempDir = downloaded.directory;
     } else {
@@ -88,7 +89,7 @@ const tool = {
     }
 
     try {
-      const playback = await play(localPath, volume, blocking);
+      const playback = await play(localPath, volume, blocking, context.signal);
 
       if (tempDir && cleanup) {
         if (blocking) await rm(tempDir, { recursive: true, force: true });
@@ -112,8 +113,10 @@ const tool = {
   },
 };
 
-const download = async (url, timeoutMs) => {
-  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+const download = async (url, timeoutMs, signal) => {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const downloadSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
+  const response = await fetch(url, { signal: downloadSignal });
   if (!response.ok) throw new Error(`Could not download audio: HTTP ${response.status}`);
 
   const declaredSize = Number(response.headers.get("content-length"));
@@ -140,21 +143,26 @@ const download = async (url, timeoutMs) => {
   const extension = byType || (fromUrl.length <= 8 ? fromUrl : "") || ".audio";
   const directory = await mkdtemp(join(tmpdir(), "carlos-office-audio-"));
   const path = join(directory, `audio${extension}`);
-  await writeFile(path, bytes);
+  try { await writeFile(path, bytes, { signal: downloadSignal }); } catch (error) {
+    await rm(directory, { recursive: true, force: true });
+    throw error;
+  }
   return { path, directory };
 };
 
-const play = async (path, volume, blocking) => {
+const play = async (path, volume, blocking, signal) => {
   const candidates = playerCandidates(path, volume);
   const errors = [];
 
   for (const candidate of candidates) {
+    signal?.throwIfAborted();
     if (candidate.path && !existsSync(candidate.path)) continue;
 
     try {
-      const child = await run(candidate.command, candidate.args, candidate.env, blocking);
+      const child = await run(candidate.command, candidate.args, candidate.env, blocking, signal);
       return { player: candidate.name, child };
     } catch (error) {
+      signal?.throwIfAborted();
       errors.push(`${candidate.name}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -162,7 +170,7 @@ const play = async (path, volume, blocking) => {
   throw new Error(`No audio player could play the file. ${errors.join(" | ")}`);
 };
 
-const run = (command, args, env, blocking) => new Promise((resolveRun, reject) => {
+const run = (command, args, env, blocking, signal) => new Promise((resolveRun, reject) => {
   const child = spawn(command, args, {
     detached: !blocking,
     env: { ...process.env, ...env },
@@ -177,7 +185,15 @@ const run = (command, args, env, blocking) => new Promise((resolveRun, reject) =
     reject(error);
   };
 
+  const abort = () => {
+    if (settled) return;
+    child.kill("SIGTERM");
+    fail(signal.reason ?? new Error("Audio playback cancelled"));
+  };
+
   child.once("error", fail);
+  signal?.addEventListener("abort", abort, { once: true });
+  child.once("close", () => signal?.removeEventListener("abort", abort));
 
   if (blocking) {
     child.once("close", code => {

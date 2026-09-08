@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { listEvents, recordEvent } from "../controllers/EventController.mjs";
 import { atomicWriteFile } from "../lib/AtomicFile.mjs";
 import { cleanupExecutionRuntime } from "./ExecutionWorkspaceService.mjs";
-import { hydrateWorkflowInvocationJournals } from "./InvocationJournalService.mjs";
+import { clearHydratedInvocationJournals, hydrateWorkflowInvocationJournals } from "./InvocationJournalService.mjs";
 import { normalizeGeneratedGraph, validateGraph } from "./WorkflowGraphService.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -77,17 +77,18 @@ export const reconcileInterruptedWorkflows = async () => {
     try {
       const raw = JSON.parse(await readFile(path, "utf8"));
       const workflow = normalizePersistedWorkflow(raw);
-      const hydratedInvocations = await hydrateWorkflowInvocationJournals(workflow);
+      const hydrated = await hydrateWorkflowInvocationJournals(workflow);
       const migrated = JSON.stringify(workflow) !== JSON.stringify(raw);
       const interruptedAt = reconcileWorkflow(workflow);
-      if (!migrated && !interruptedAt && !hydratedInvocations) continue;
+      if (!migrated && !interruptedAt && !hydrated.count) continue;
 
       await atomicWriteFile(path, JSON.stringify(workflow, null, 2), "utf8");
+      await clearHydratedInvocationJournals(hydrated.paths);
       if (migrated) await recordEvent("workflow.migrated", { workflowId: workflow.id ?? null, filename });
-      if (hydratedInvocations) {
+      if (hydrated.count) {
         await recordEvent("workflow.invocations_recovered", {
           workflowId: workflow.id ?? null,
-          count: hydratedInvocations,
+          count: hydrated.count,
         });
       }
       if (interruptedAt) {

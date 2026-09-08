@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import { importArtifact } from "../controllers/ArtifactController.mjs";
+import { deleteArtifacts, importArtifact } from "../controllers/ArtifactController.mjs";
 import { listEvents, recordEvent } from "../controllers/EventController.mjs";
 import {
   addTaskAttempt,
@@ -328,26 +328,32 @@ export const selectTaskExecution = async ({
   return { ...selectedModel, tools: [...new Set(selectedTools)], skills: [...new Set(selectedSkills)] };
 };
 
-const importDeclaredArtifacts = async (workflow, completion) => {
+const importDeclaredArtifacts = async (workflow, taskId, attempt, completion) => {
   const declarations = Array.isArray(completion.artifactDeclarations) ? completion.artifactDeclarations : [];
   if (!declarations.length) return { output: completion.output, data: completion.data ?? null, artifacts: [] };
   const conversationId = workflow?.config?.conversationId;
   if (!conversationId) return { output: completion.output, data: completion.data ?? null, artifacts: [] };
 
   const artifacts = [];
-  for (const declaration of declarations) {
-    if (!isObject(declaration) || typeof declaration.path !== "string" || !declaration.path.trim()) {
-      throw new Error("Agent declared an invalid Artifact path");
+  try {
+    for (const [index, declaration] of declarations.entries()) {
+      if (!isObject(declaration) || typeof declaration.path !== "string" || !declaration.path.trim()) {
+        throw new Error("Agent declared an invalid Artifact path");
+      }
+      const artifact = await importArtifact({
+        conversationId,
+        sourcePath: declaration.path,
+        preserveSource: true,
+        name: declaration.name ?? null,
+        type: declaration.type ?? null,
+        createdBy: declaration.createdBy || "Temporary Agent",
+        importKey: `${workflow.id}:${taskId}:${attempt.authorizationRunId}:${index}`,
+      });
+      artifacts.push(artifact.id);
     }
-    const artifact = await importArtifact({
-      conversationId,
-      sourcePath: declaration.path,
-      preserveSource: true,
-      name: declaration.name ?? null,
-      type: declaration.type ?? null,
-      createdBy: declaration.createdBy || "Temporary Agent",
-    });
-    artifacts.push(artifact.id);
+  } catch (error) {
+    await deleteArtifacts(conversationId, artifacts).catch(() => {});
+    throw error;
   }
   return { output: completion.output, data: completion.data ?? null, artifacts };
 };
@@ -500,7 +506,7 @@ const runTaskAttempt = async ({ workflowId, taskId, execution, runState, decide,
 
   let completion = { output: result.output, data: result.data ?? null, artifacts: [] };
   if (result.status === "completed") {
-    try { completion = await importDeclaredArtifacts(getWorkflow(workflowId), result); } catch (error) {
+    try { completion = await importDeclaredArtifacts(getWorkflow(workflowId), taskId, attempt, result); } catch (error) {
       const message = `Could not register Task Artifact: ${errorMessage(error)}`;
       result = {
         ...result,
@@ -551,7 +557,7 @@ const runTaskAttempt = async ({ workflowId, taskId, execution, runState, decide,
         ...runtime,
         status: "blocked",
         error: null,
-        diagnostics: null,
+        diagnostics: result.diagnostics ?? null,
         blockedReason: reason,
         approvalId: result.approvalId ?? null,
       }, "blocked");

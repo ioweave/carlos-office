@@ -154,6 +154,29 @@ const projectMapData = (value, groupId, index) => {
   ]));
 };
 
+const omitPath = (value, path) => {
+  const result = clone(value);
+  const parts = String(path || "").split(".").map(part => part.trim()).filter(Boolean);
+  if (!isObject(result) || !parts.length) return result;
+  if (parts.some(part => ["__proto__", "constructor", "prototype"].includes(part))) {
+    throw new Error("Unsafe Map source path");
+  }
+
+  const parents = [];
+  let current = result;
+  for (const part of parts.slice(0, -1)) {
+    if (!isObject(current?.[part])) return result;
+    parents.push([current, part]);
+    current = current[part];
+  }
+  delete current[parts.at(-1)];
+  for (const [parent, part] of parents.reverse()) {
+    if (isObject(parent[part]) && !Object.keys(parent[part]).length) delete parent[part];
+    else break;
+  }
+  return result;
+};
+
 const stableValue = value => {
   if (Array.isArray(value)) return value.map(stableValue);
   if (!isObject(value)) return value;
@@ -165,6 +188,13 @@ const scopeKey = scope => scope
   .map(item => `${item.groupId}:${item.index}:${item.itemFingerprint ?? "legacy"}`)
   .join("/");
 const checkpointKey = (scope, groupId, index, item) => `${scopeKey(scope)}|${groupId}:${index}:${fingerprint(item)}`;
+const checkpointIdentityInput = input => {
+  const identity = clone(input);
+  if (!isObject(identity?.__mapExecution)) return identity;
+  delete identity.__mapExecution.attempt;
+  delete identity.__mapExecution.maxAttempts;
+  return identity;
+};
 
 const normalizeAgentCompletion = result => {
   if (result.status !== "completed") return result;
@@ -324,7 +354,7 @@ export const executeTaskWithGroups = async ({
   const checkpoints = checkpointMap(checkpointInvocations);
 
   const executeLeaf = async context => {
-    const key = `agent:${fingerprint({ scope: context.scope, input: context.input })}`;
+    const key = `agent:${fingerprint({ scope: context.scope, input: checkpointIdentityInput(context.input) })}`;
     const checkpoint = checkpointInvocations.findLast(item => item.kind === "agent" && item.checkpointKey === key && item.status === "completed");
     if (checkpoint) {
       await recordInvocation({ ...clone(checkpoint), id: `checkpoint-${randomUUID()}`, reusedFrom: checkpoint.id, reused: true });
@@ -333,7 +363,10 @@ export const executeTaskWithGroups = async ({
     const interrupted = checkpointInvocations.findLast(item => item.kind === "agent" && item.checkpointKey === key);
     const unsafeCalls = (interrupted?.toolCalls ?? []).some(call => call.replaySafe !== true && call.sideEffect !== "none");
     if (interrupted && (unsafeCalls || (interrupted.status === "running" && !canReplayInterrupted))) {
-      return errorResult("An earlier invocation may have performed a side effect. Inspect its outcome before explicitly restarting this work.", "tool", "tool_outcome_unknown", { retryable: false });
+      return {
+        ...errorResult("An earlier invocation may have performed a side effect. Inspect its outcome before explicitly restarting this work.", "tool", "tool_outcome_unknown", { retryable: false }),
+        status: "blocked",
+      };
     }
     const invocationId = `invocation-${randomUUID()}`;
     const startedAt = new Date().toISOString();
@@ -496,7 +529,7 @@ export const executeTaskWithGroups = async ({
         return;
       }
 
-      const itemInput = projectMapData(context.input, group.id, index);
+      const itemInput = projectMapData(omitPath(context.input, resolution.resolvedPath), group.id, index);
       let result;
       for (let itemAttempt = 1; itemAttempt <= maxItemAttempts; itemAttempt += 1) {
         result = await inner({

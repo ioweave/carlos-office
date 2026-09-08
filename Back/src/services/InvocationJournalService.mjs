@@ -48,12 +48,12 @@ const readJournalFile = async path => {
   return result;
 };
 
-/** Fold runtime invocation journals into persisted Attempts during backend recovery. */
+/** Fold runtime invocation journals into Attempts without deleting them before the Workflow is durably saved. */
 export const hydrateWorkflowInvocationJournals = async workflow => {
   const workflowDir = resolve(root, encode(workflow.id));
   let taskDirs;
   try { taskDirs = await readdir(workflowDir, { withFileTypes: true }); } catch (error) {
-    if (error.code === "ENOENT") return 0;
+    if (error.code === "ENOENT") return { count: 0, paths: [] };
     throw error;
   }
 
@@ -64,6 +64,7 @@ export const hydrateWorkflowInvocationJournals = async workflow => {
   }
 
   let hydrated = 0;
+  const paths = [];
   for (const taskDir of taskDirs.filter(entry => entry.isDirectory())) {
     const directory = resolve(workflowDir, taskDir.name);
     const files = await readdir(directory, { withFileTypes: true });
@@ -81,7 +82,7 @@ export const hydrateWorkflowInvocationJournals = async workflow => {
           else attempt.invocations.push(stored);
           hydrated += 1;
         }
-        await rm(path, { force: true });
+        paths.push(path);
       } catch (error) {
         console.error("[invocations] Could not hydrate invocation journal.", {
           path,
@@ -90,5 +91,12 @@ export const hydrateWorkflowInvocationJournals = async workflow => {
       }
     }
   }
-  return hydrated;
+  return { count: hydrated, paths };
+};
+
+export const clearHydratedInvocationJournals = async paths => {
+  for (const path of new Set(paths)) {
+    await (writeQueues.get(path) ?? Promise.resolve()).catch(() => {});
+    await rm(path, { force: true });
+  }
 };

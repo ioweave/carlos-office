@@ -1,6 +1,6 @@
 import { access, copyFile, mkdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, extname, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { atomicWriteFile } from "../lib/AtomicFile.mjs";
@@ -123,7 +123,15 @@ export const createArtifact = async ({ conversationId, name, type, createdBy, co
   return structuredClone(artifact);
 };
 
-export const importArtifact = async ({ conversationId, sourcePath, name = null, type = null, createdBy, preserveSource = false }) => {
+export const importArtifact = async ({
+  conversationId,
+  sourcePath,
+  name = null,
+  type = null,
+  createdBy,
+  preserveSource = false,
+  importKey = null,
+}) => {
   if (!sourcePath || typeof sourcePath !== "string") throw new Error("Artifact source path must be a non-empty string");
   const absoluteSource = resolve(sourcePath);
   const sourceInfo = await stat(absoluteSource);
@@ -133,25 +141,53 @@ export const importArtifact = async ({ conversationId, sourcePath, name = null, 
   const artifactType = type?.trim() || inferArtifactType(artifactName);
   validateArtifactMetadata({ name: artifactName, type: artifactType, createdBy });
   const artifacts = await ensureLoaded(conversationId);
+  const id = importKey
+    ? `artifact-${createHash("sha256").update(importKey).digest("hex").slice(0, 24)}`
+    : `artifact-${randomUUID()}`;
+  const existing = artifacts.get(id);
+  if (existing) {
+    if (existing.importKey !== importKey) throw new Error(`Artifact import identity collision: ${id}`);
+    if (existing.name !== artifactName || existing.type !== artifactType || existing.createdBy !== createdBy) {
+      throw new Error(`Artifact import identity changed metadata: ${id}`);
+    }
+    return structuredClone(existing);
+  }
   const { artifactsDir } = pathsFor(conversationId);
   await mkdir(artifactsDir, { recursive: true });
-  const id = `artifact-${randomUUID()}`;
   const storageName = artifactStorageName(id, artifactName);
   const temporary = resolve(artifactsDir, `.${storageName}.${randomUUID()}.tmp`);
-  await copyFile(absoluteSource, temporary);
-  await rename(temporary, resolve(artifactsDir, storageName));
-  const managedSource = await consumeManagedDeliverable(absoluteSource, preserveSource);
-  const artifact = {
-    id,
-    name: artifactName,
-    path: `artifacts/${storageName}`,
-    type: artifactType,
-    createdAt: new Date().toISOString(),
-    createdBy,
-    ...(!managedSource ? { sourcePath: absoluteSource } : {}),
-  };
-  artifacts.set(id, artifact);
-  await persistArtifacts(conversationId);
+  const destination = resolve(artifactsDir, storageName);
+  let artifact;
+  let managedSource = false;
+  try {
+    await copyFile(absoluteSource, temporary);
+    await rename(temporary, destination);
+    managedSource = await consumeManagedDeliverable(absoluteSource, true);
+    artifact = {
+      id,
+      name: artifactName,
+      path: `artifacts/${storageName}`,
+      type: artifactType,
+      createdAt: new Date().toISOString(),
+      createdBy,
+      ...(importKey ? { importKey } : {}),
+      ...(!managedSource ? { sourcePath: absoluteSource } : {}),
+    };
+    artifacts.set(id, artifact);
+    await persistArtifacts(conversationId);
+  } catch (error) {
+    artifacts.delete(id);
+    await Promise.allSettled([rm(temporary, { force: true }), rm(destination, { force: true })]);
+    throw error;
+  }
+  if (managedSource && !preserveSource) {
+    await consumeManagedDeliverable(absoluteSource).catch(error => {
+      console.warn("[artifacts] Could not remove imported managed deliverable.", {
+        sourcePath: absoluteSource,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
   return structuredClone(artifact);
 };
 

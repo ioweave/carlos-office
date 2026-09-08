@@ -1,4 +1,4 @@
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 const tool = {
@@ -18,7 +18,7 @@ const tool = {
     required: ["path", "content"],
     additionalProperties: false,
   },
-  async execute({ path, content, mode = "overwrite", encoding = "utf8", mkdir: mkdirFlag = true } = {}) {
+  async execute({ path, content, mode = "overwrite", encoding = "utf8", mkdir: mkdirFlag = true } = {}, context = {}) {
     if (typeof path !== "string" || path.length === 0) {
       const error = new Error('write-file: "path" is required and must be a non-empty string.');
       error.code = "tool_invalid_input";
@@ -40,9 +40,10 @@ const tool = {
     }
 
     const abs = resolve(path);
+    context.signal?.throwIfAborted();
     if (mkdirFlag) await mkdir(dirname(abs), { recursive: true });
-    if (mode === "append") await appendFile(abs, content, { encoding });
-    else await writeFile(abs, content, { encoding });
+    context.signal?.throwIfAborted();
+    await writeFile(abs, content, { encoding, flag: mode === "append" ? "a" : "w", signal: context.signal });
     return { path: abs, mode, bytes: Buffer.byteLength(content, encoding), encoding };
   },
 };
