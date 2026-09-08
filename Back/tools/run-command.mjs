@@ -32,7 +32,10 @@ const shellCommand = (command, args) => {
 
 const tool = {
   name: "run-command",
-  description: "Runs a Linux command on the Carlos Office host. Prefer mode=direct with command plus tokenized args. Use mode=shell only when pipes, redirects, shell expansion, or compound shell syntax are required. mode=auto remains the compatibility default for tolerant LLM output. Non-zero exit codes are returned as structured results by default so discovery commands such as grep, test, and diff can be reasoned about without turning ordinary negative results into Tool exceptions.",
+  replay: "never",
+  timeoutMs: 300_000,
+  examples: [{ command: "pwd", args: [], mode: "direct" }],
+  description: "Runs a Linux command on the Carlos Office host. Prefer mode=direct with command plus tokenized args. Use mode=shell only when pipes, redirects, shell expansion, or compound shell syntax are required. mode=direct is the default; opt into shell interpretation explicitly. Non-zero exit codes are returned as structured results by default so discovery commands such as grep, test, and diff can be reasoned about without turning ordinary negative results into Tool exceptions.",
   requiresApproval: true,
   provider: null,
   model: null,
@@ -50,11 +53,11 @@ const tool = {
         type: "string",
         enum: ["direct", "shell", "auto"],
         description: "Execution mode. direct preserves argv exactly; shell uses /bin/bash -lc; auto tolerates common LLM shell-style output.",
-        default: "auto",
+        default: "direct",
       },
       cwd: { type: "string", description: "Optional working directory. Relative paths resolve inside the Agent workspace." },
       stdin: { type: ["string", "null"], description: "Optional UTF-8 text written to standard input.", default: null },
-      timeoutMs: { type: "number", description: "Maximum runtime in milliseconds.", default: 300000 },
+      timeoutMs: { type: "integer", minimum: 1000, maximum: 7_200_000, description: "Maximum runtime in milliseconds.", default: 300000 },
       failOnNonZero: {
         type: "boolean",
         description: "When true, non-zero exit codes become Tool failures. Defaults to false so normal discovery negatives remain inspectable.",
@@ -85,7 +88,7 @@ const tool = {
     if (!Array.isArray(args) || args.some(argument => typeof argument !== "string")) {
       throw commandError('"args" must be an array of strings.', "tool_invalid_input");
     }
-    const mode = inputs.mode ?? "auto";
+    const mode = inputs.mode ?? "direct";
     if (!["direct", "shell", "auto"].includes(mode)) {
       throw commandError('"mode" must be direct, shell, or auto.', "tool_invalid_input");
     }

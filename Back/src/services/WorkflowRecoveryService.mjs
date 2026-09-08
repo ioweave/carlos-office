@@ -39,21 +39,21 @@ const reconcileWorkflow = workflow => {
         code: "backend_interrupted",
         message: INTERRUPTION_REASON,
         retryable: true,
-        recovery: "langgraph_resume",
+        recovery: "explicit_resume",
       };
       interruptedAttemptId = attempt.id;
     }
     if (task.status === "running") {
-      task.status = "ready";
+      task.status = "blocked";
       if (interruptedAttemptId) task.resumeCheckpointAttemptId = interruptedAttemptId;
     }
   }
 
-  workflow.status = "running";
+  workflow.status = "blocked";
   workflow.interruption = {
     at: now,
     reason: INTERRUPTION_REASON,
-    recovery: "langgraph_resume",
+    recovery: "explicit_resume",
     threadMarker: latestRunMarker(workflow.id),
   };
   delete workflow.stalled;
@@ -95,7 +95,7 @@ export const reconcileInterruptedWorkflows = async () => {
           workflowId: workflow.id ?? null,
           interruptedAt,
           reason: INTERRUPTION_REASON,
-          recovery: "langgraph_resume",
+          recovery: "explicit_resume",
           threadMarker: workflow.interruption.threadMarker,
         });
       }

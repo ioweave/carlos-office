@@ -211,3 +211,29 @@ npm run build
 CI runs those checks on pushes and pull requests. Tests are added when explicitly required.
 
 See `PROJECT_FUNCTIONAL_SPECIFICATION.md` for the functional contract, `PLUGINS.md` for the Plugin boundary, and `MANDATORY_CODING_STANDARD.md` for implementation rules.
+
+
+## Tool reliability and workflow recovery
+
+Tool input contracts are validated with Ajv, including nested properties, conditional requirements,
+bounds, and defaults. Definitions can provide input `examples`, an `output` JSON Schema,
+`timeoutMs`, and a `replay` policy (`safe`, `http-read`, or `never`). Missing replay policies
+are conservative: no automatic retry. Registry loading checks schemas and examples;
+declared output schemas are checked after execution.
+
+The Platform owns Tool retries. Safe reads receive at most three attempts within a single
+cancellable deadline, with backoff and HTTP Retry-After handling. Validation, authentication,
+and permanent failures are not automatically retried. Diagnostics retain attempt counts,
+replay safety, and whether a side effect was absent, possible, or has an unknown outcome.
+Command execution defaults to direct argv; shell interpretation requires an explicit mode.
+
+Workflow recovery preserves structured Agent data, artifact declarations, and completed Map
+items. Approval matching uses a stable invocation scope across resume, while still requiring
+the exact Tool and input. A blocked or cancelled Map item cannot be hidden by the continue
+failure policy. Unknown interrupted side effects require inspection before explicit restart.
+
+Workflow state mutations are serialized. Stop/restart waits for active task execution to settle
+before resetting state or deleting files. Execution edits invalidate affected results and
+checkpoints while retaining Attempt history. Backend startup blocks interrupted work for
+explicit resume. Producer workspaces and staged files remain available for downstream Tasks
+and later resume; explicit restart, cancellation, or deletion cleans the workflow runtime.

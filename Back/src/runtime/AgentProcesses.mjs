@@ -5,6 +5,7 @@ import { authorize, consumeApproval, listApprovals } from "../controllers/Author
 import { recordEvent } from "../controllers/EventController.mjs";
 import { getWorkflow } from "../controllers/ProcessController.mjs";
 import { getTool, validateToolInput } from "../registry/Tools.mjs";
+import { executeTool, toolCanReplay } from "../services/ToolExecutionService.mjs";
 import { getKnowledge } from "../services/KnowledgeService.mjs";
 import {
   cleanupInvocationWorkspace,
@@ -154,16 +155,16 @@ const hasCarlosAuthority = workflowId => {
   const config = getWorkflow(workflowId)?.config;
   return Boolean(config?.conversationId && config?.sourceMessageId);
 };
-const approvedToolAction = ({ workflowId, taskId, invocationId, toolName, input }) => listApprovals("approved").find(
+const approvedToolAction = ({ workflowId, taskId, authorizationScope, toolName, input }) => listApprovals("approved").find(
   approval => (
     approval.action === `tool:${toolName}`
     && approval.context?.workflowId === workflowId
     && approval.context?.taskId === taskId
-    && (approval.context?.invocationId ?? null) === (invocationId ?? null)
+    && Boolean(authorizationScope) && approval.context?.authorizationScope === authorizationScope
     && sameInput(approval.context?.input, input)
   ),
 ) ?? null;
-const toolMetadata = tool => ({ name: tool.name, description: tool.description ?? "", input: tool.input ?? {}, output: tool.output ?? null });
+const toolMetadata = tool => ({ name: tool.name, description: `${tool.description ?? ""} Input examples: ${JSON.stringify(tool.examples ?? [])}`, input: tool.input ?? {}, output: tool.output ?? null, replay: tool.replay, timeoutMs: tool.timeoutMs });
 const sendToolResult = (child, requestId, payload) => {
   if (child.connected) child.send({ type: "tool-result", requestId, ...payload });
 };
@@ -255,12 +256,15 @@ const enrichFailedResult = (entry, result) => {
 };
 
 const runTool = async (entry, message) => {
-  const { child, controller, workflowId, taskId, invocationId, workspaceDir } = entry;
+  const { child, controller, workflowId, taskId, invocationId, authorizationScope, workspaceDir } = entry;
   const { requestId, call } = message;
   const startedAt = new Date().toISOString();
   const diagnosticInput = sanitizeDiagnosticValue(call?.input ?? {});
   entry.touchActivity?.();
+  let executionStarted = false;
+  let replaySafe = false;
   try {
+    controller.signal.throwIfAborted();
     if (!entry.toolNames.has(call?.name)) {
       throw toolError(`Agent requested unavailable Tool: ${call?.name}`, "unavailable_tool", "Choose one of the Tools assigned to this Task.");
     }
@@ -268,19 +272,22 @@ const runTool = async (entry, message) => {
     if (!tool) throw toolError(`Unknown Tool: ${call.name}`, "unknown_tool", "The Tool registry no longer contains this capability.");
     const input = validateToolInput(tool, call.input ?? {});
     if (tool.requiresApproval && !hasCarlosAuthority(workflowId)) {
-      const approved = approvedToolAction({ workflowId, taskId, invocationId, toolName: tool.name, input });
+      const approved = approvedToolAction({ workflowId, taskId, authorizationScope, toolName: tool.name, input });
       if (!approved) {
         const authorization = await authorize({
           action: `tool:${tool.name}`,
           actor: entry.id,
           requiresApproval: true,
-          context: { workflowId, taskId, invocationId, agentId: entry.id, tool: tool.name, input: structuredClone(input) },
+          context: { workflowId, taskId, invocationId, authorizationScope, agentId: entry.id, tool: tool.name, input: structuredClone(input) },
         });
         entry.status = "blocked";
         const endedAt = new Date().toISOString();
         recordToolCall(entry, {
           tool: tool.name,
           status: "blocked",
+          attempts: 0,
+          sideEffect: "none",
+          replaySafe: false,
           startedAt,
           endedAt,
           durationMs: toolDuration(startedAt, endedAt),
@@ -307,7 +314,9 @@ const runTool = async (entry, message) => {
     }
 
     const executionInput = prepareToolInput(tool.name, input, workspaceDir);
-    const result = await tool.execute(executionInput, {
+    replaySafe = toolCanReplay(tool, input);
+    executionStarted = true;
+    const execution = await executeTool(tool, executionInput, {
       workflowId,
       taskId,
       invocationId,
@@ -317,10 +326,14 @@ const runTool = async (entry, message) => {
       model: tool.model ?? null,
       signal: controller.signal,
     });
+    const { result, attempts, sideEffect } = execution;
     const endedAt = new Date().toISOString();
     const trace = recordToolCall(entry, {
       tool: tool.name,
       status: "completed",
+      attempts,
+      replaySafe,
+      sideEffect,
       startedAt,
       endedAt,
       durationMs: toolDuration(startedAt, endedAt),
@@ -330,7 +343,7 @@ const runTool = async (entry, message) => {
       code: null,
       retryable: false,
     });
-    await recordEvent("tool.executed", {
+    recordAgentEvent("tool.executed", {
       workflowId, taskId, invocationId, agentId: entry.id, tool: tool.name, sequence: trace.sequence,
       durationMs: trace.durationMs, provider: tool.provider ?? null, model: tool.model ?? null,
     });
@@ -343,6 +356,9 @@ const runTool = async (entry, message) => {
     const endedAt = new Date().toISOString();
     entry.toolFailureCount += 1;
     const failure = recordToolCall(entry, {
+      attempts: error?.attempts ?? 0,
+      replaySafe: error?.replaySafe ?? replaySafe,
+      sideEffect: error?.sideEffect ?? (executionStarted ? "unknown" : "none"),
       failureSequence: entry.toolFailureCount,
       tool: typeof call?.name === "string" ? call.name : "unknown-tool",
       status: "failed",
@@ -366,12 +382,13 @@ const runTool = async (entry, message) => {
     entry.touchActivity?.();
     sendToolResult(child, requestId, {
       ok: false, error: failure.error, code: failure.code, retryable: failure.retryable,
+      replaySafe: failure.replaySafe, sideEffect: failure.sideEffect, attempts: failure.attempts,
       ...(failure.hint ? { hint: failure.hint } : {}),
     });
   }
 };
 
-export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, invocationId = null, task, provider, model, tools, skills }) => {
+export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, invocationId = null, authorizationScope = null, task, provider, model, tools, skills }) => {
   const key = invocationKey(workflowId, taskId, invocationId);
   const existingAgentId = activeInvocationKeys.get(key);
   if (existingAgentId) {
@@ -418,6 +435,7 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
       attemptId,
       invocationId,
       workspaceDir,
+      authorizationScope,
       provider,
       model,
       tools: tools.map(tool => tool.name),
@@ -427,6 +445,7 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
       status: "working",
       toolNames: new Set(tools.map(tool => tool.name)),
       toolCalls: [],
+      pendingToolExecutions: new Set(),
       toolCallCount: 0,
       toolFailureCount: 0,
       settled: false,
@@ -467,6 +486,8 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
       active.delete(id);
       if (activeInvocationKeys.get(key) === id) activeInvocationKeys.delete(key);
 
+      if (rawResult.status !== "completed" && !controller.signal.aborted) controller.abort(new Error("Agent execution stopped"));
+      await Promise.allSettled([...entry.pendingToolExecutions]);
       const usage = isObject(rawResult.usage)
         ? structuredClone(rawResult.usage)
         : isObject(rawResult.completion?.usage) ? structuredClone(rawResult.completion.usage) : null;
@@ -512,6 +533,7 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
 
       if (result.status === "failed") result = enrichFailedResult(entry, result);
       const toolCalls = entry.toolCalls.map(call => structuredClone(call));
+      if (entry.pendingToolExecutions.size) toolCalls.push({ status: "interrupted", replaySafe: false, sideEffect: "unknown" });
       result = { ...result, toolCalls, ...(usage ? { usage } : {}) };
 
       recordAgentEvent("agent.stopped", {
@@ -556,7 +578,9 @@ export const runAgentProcess = async ({ workflowId, taskId, attemptId = null, in
     child.on("message", message => {
       touchActivity();
       if (message?.type === "tool") {
-        void runTool(entry, message);
+        const execution = runTool(entry, message);
+        entry.pendingToolExecutions.add(execution);
+        void execution.then(() => entry.pendingToolExecutions.delete(execution), () => entry.pendingToolExecutions.delete(execution));
         return;
       }
       if (message?.type === "completed") {

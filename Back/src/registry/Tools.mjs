@@ -3,6 +3,8 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import Ajv from "ajv";
+
 import { recordEvent } from "../controllers/EventController.mjs";
 import { atomicWriteFile } from "../lib/AtomicFile.mjs";
 import { notifyOfficeStateChanged } from "../services/OfficeStateBus.mjs";
@@ -12,6 +14,10 @@ const toolsDir = resolve(here, "../../tools");
 const tools = new Map();
 const CANDIDATE_PREFIX = ".candidate-";
 let registryRevision = 0;
+const inputValidator = new Ajv({ allErrors: true, strict: false, useDefaults: true });
+const validators = new WeakMap();
+const outputValidator = new Ajv({ allErrors: true, strict: false });
+const outputValidators = new WeakMap();
 
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 
@@ -33,6 +39,8 @@ const normalizeTool = (module, expectedName = null) => {
   normalized.name ??= expectedName;
   normalized.execute ??= module.execute;
   normalized.input = normalizeInputSchema(tool.input ?? inputSchema ?? parameters);
+  normalized.replay ??= "never";
+  normalized.timeoutMs ??= 300_000;
   return normalized;
 };
 
@@ -58,6 +66,16 @@ const validateTool = (tool, filename, expectedName = null) => {
   }
   for (const [name, property] of Object.entries(tool.input.properties)) {
     if (!isObject(property)) throw new Error(`Tool ${tool.name} input property ${name} must be a schema object`);
+  }
+  if (!["safe", "http-read", "never"].includes(tool.replay)) throw new Error(`Tool ${tool.name} has invalid replay policy`);
+  if (!Number.isSafeInteger(tool.timeoutMs) || tool.timeoutMs < 1000 || tool.timeoutMs > 7_200_000) {
+    throw new Error(`Tool ${tool.name} timeoutMs must be an integer from 1000 to 7200000`);
+  }
+  const validate = inputValidator.compile(tool.input);
+  validators.set(tool, validate);
+  if (tool.output) outputValidators.set(tool, outputValidator.compile(tool.output));
+  for (const example of tool.examples ?? []) {
+    if (!validate(structuredClone(example))) throw new Error(`Tool ${tool.name} has an invalid input example`);
   }
 };
 
@@ -92,42 +110,31 @@ const inputError = (toolName, message) => {
   const error = new Error(`Tool ${toolName} input invalid: ${message}`);
   error.code = "tool_input_invalid";
   error.retryable = false;
-  error.hint = "Regenerate the Tool call using only the declared properties and required top-level types/enums.";
+  error.hint = "Regenerate the Tool call using only the declared properties and required types, nested properties, enums, and bounds.";
   return error;
 };
-const matchesType = (value, type) => {
-  if (type === "null") return value === null;
-  if (type === "array") return Array.isArray(value);
-  if (type === "object") return isObject(value);
-  if (type === "integer") return Number.isSafeInteger(value);
-  if (type === "number") return typeof value === "number" && Number.isFinite(value);
-  return typeof value === type;
-};
-
 export const validateToolInput = (tool, input) => {
   if (!tool || typeof tool !== "object") throw new Error("Tool definition is required");
   if (!isObject(input)) throw inputError(tool.name, "input must be one JSON object");
-  const schema = tool.input;
-  for (const required of schema.required ?? []) {
-    if (!Object.prototype.hasOwnProperty.call(input, required)) throw inputError(tool.name, `missing required property ${required}`);
+  const normalized = structuredClone(input);
+  const validate = validators.get(tool) ?? inputValidator.compile(tool.input);
+  validators.set(tool, validate);
+  if (!validate(normalized)) {
+    throw inputError(tool.name, inputValidator.errorsText(validate.errors, { dataVar: "input" }));
   }
-  if (schema.additionalProperties === false) {
-    for (const name of Object.keys(input)) {
-      if (!Object.prototype.hasOwnProperty.call(schema.properties, name)) throw inputError(tool.name, `unknown property ${name}`);
-    }
+  return normalized;
+};
+
+export const validateToolOutput = (tool, result) => {
+  const validate = outputValidators.get(tool);
+  if (validate && !validate(result)) {
+    const error = new Error(`Tool ${tool.name} returned invalid output: ${outputValidator.errorsText(validate.errors)}`);
+    error.code = "tool_output_invalid";
+    error.retryable = false;
+    error.hint = "Repair the Tool implementation to satisfy its declared output schema; do not repeat the action.";
+    throw error;
   }
-  for (const [name, value] of Object.entries(input)) {
-    const property = schema.properties?.[name];
-    if (!property) continue;
-    const types = Array.isArray(property.type) ? property.type : property.type ? [property.type] : [];
-    if (types.length && !types.some(type => matchesType(value, type))) {
-      throw inputError(tool.name, `property ${name} must match type ${types.join(" or ")}`);
-    }
-    if (Array.isArray(property.enum) && !property.enum.some(candidate => Object.is(candidate, value))) {
-      throw inputError(tool.name, `property ${name} must be one of the declared enum values`);
-    }
-  }
-  return structuredClone(input);
+  return result;
 };
 
 export const loadTools = async () => {

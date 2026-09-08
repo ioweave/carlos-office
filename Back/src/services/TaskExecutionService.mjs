@@ -170,7 +170,7 @@ const normalizeAgentCompletion = result => {
   if (result.status !== "completed") return result;
   const completion = isObject(result.output) && typeof result.output.output === "string"
     ? result.output
-    : { output: String(result.output ?? ""), data: null, artifacts: [] };
+    : { output: String(result.output ?? ""), data: result.data ?? null, artifacts: result.artifactDeclarations ?? [] };
   return {
     ...result,
     output: completion.output,
@@ -315,6 +315,7 @@ export const executeTaskWithGroups = async ({
   runAgent,
   review,
   canRetryInvocation = () => false,
+  canReplayInterrupted = false,
   recordInvocation = async () => {},
   checkpointInvocations = [],
   isCancelled = () => false,
@@ -323,14 +324,26 @@ export const executeTaskWithGroups = async ({
   const checkpoints = checkpointMap(checkpointInvocations);
 
   const executeLeaf = async context => {
+    const key = `agent:${fingerprint({ scope: context.scope, input: context.input })}`;
+    const checkpoint = checkpointInvocations.findLast(item => item.kind === "agent" && item.checkpointKey === key && item.status === "completed");
+    if (checkpoint) {
+      await recordInvocation({ ...clone(checkpoint), id: `checkpoint-${randomUUID()}`, reusedFrom: checkpoint.id, reused: true });
+      return { status: "completed", output: checkpoint.output, data: clone(checkpoint.data), artifactDeclarations: clone(checkpoint.artifactDeclarations ?? []), toolCalls: [] };
+    }
+    const interrupted = checkpointInvocations.findLast(item => item.kind === "agent" && item.checkpointKey === key);
+    const unsafeCalls = (interrupted?.toolCalls ?? []).some(call => call.replaySafe !== true && call.sideEffect !== "none");
+    if (interrupted && (unsafeCalls || (interrupted.status === "running" && !canReplayInterrupted))) {
+      return errorResult("An earlier invocation may have performed a side effect. Inspect its outcome before explicitly restarting this work.", "tool", "tool_outcome_unknown", { retryable: false });
+    }
     const invocationId = `invocation-${randomUUID()}`;
     const startedAt = new Date().toISOString();
     let result;
+    await recordInvocation({ id: invocationId, kind: "agent", checkpointKey: key, status: "running", scope: clone(context.scope), startedAt });
     try {
       result = await withMapLimiters(
         workflow.id,
         context.mapGroups,
-        () => runAgent({ invocationId, input: context.input }),
+        () => runAgent({ invocationId, authorizationScope: key, input: context.input }),
         isCancelled,
       );
     } catch (error) {
@@ -342,6 +355,9 @@ export const executeTaskWithGroups = async ({
     await recordInvocation({
       id: invocationId,
       kind: "agent",
+      checkpointKey: key,
+      artifactDeclarations: clone(result.artifactDeclarations ?? []),
+      toolCalls: clone(result.toolCalls ?? []),
       status: result.status,
       scope: clone(context.scope),
       startedAt,
@@ -505,7 +521,8 @@ export const executeTaskWithGroups = async ({
           kind: "map-item",
           groupId: group.id,
           checkpointKey: key,
-          status: "failed",
+          status: result.status,
+          approvalId: result.approvalId ?? null,
           scope: clone(context.scope),
           index,
           itemFingerprint,
@@ -514,7 +531,8 @@ export const executeTaskWithGroups = async ({
           error: result.error ?? "Map item failed",
           diagnostics: clone(result.diagnostics ?? null),
         });
-        if (failurePolicy !== "continue") halt ??= result;
+        if (["blocked", "cancelled"].includes(result.status)) halt = result;
+        else if (failurePolicy !== "continue") halt ??= result;
         return;
       }
 
@@ -537,7 +555,7 @@ export const executeTaskWithGroups = async ({
     });
 
     if (isCancelled()) return { status: "cancelled", error: "Workflow stopped" };
-    if (halt) return halt;
+    if (halt) return { ...halt, toolCalls: results.flatMap(result => result?.toolCalls ?? []) };
 
     const failures = results.filter(result => result?.status !== "completed").length;
     const artifacts = results.flatMap(result => result?.artifactDeclarations ?? []);
@@ -548,6 +566,7 @@ export const executeTaskWithGroups = async ({
         : `Processed ${source.length} item${source.length === 1 ? "" : "s"} in Map ${group.name || group.id}.`,
       data: mapDataFor(group.id, results),
       artifactDeclarations: artifacts,
+      toolCalls: results.flatMap(result => result?.toolCalls ?? []),
       map: { groupId: group.id, items: source.length, failures, concurrency: group.concurrency, failurePolicy },
     };
   };

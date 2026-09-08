@@ -123,7 +123,7 @@ export const createArtifact = async ({ conversationId, name, type, createdBy, co
   return structuredClone(artifact);
 };
 
-export const importArtifact = async ({ conversationId, sourcePath, name = null, type = null, createdBy }) => {
+export const importArtifact = async ({ conversationId, sourcePath, name = null, type = null, createdBy, preserveSource = false }) => {
   if (!sourcePath || typeof sourcePath !== "string") throw new Error("Artifact source path must be a non-empty string");
   const absoluteSource = resolve(sourcePath);
   const sourceInfo = await stat(absoluteSource);
@@ -140,7 +140,7 @@ export const importArtifact = async ({ conversationId, sourcePath, name = null, 
   const temporary = resolve(artifactsDir, `.${storageName}.${randomUUID()}.tmp`);
   await copyFile(absoluteSource, temporary);
   await rename(temporary, resolve(artifactsDir, storageName));
-  const managedSource = await consumeManagedDeliverable(absoluteSource);
+  const managedSource = await consumeManagedDeliverable(absoluteSource, preserveSource);
   const artifact = {
     id,
     name: artifactName,

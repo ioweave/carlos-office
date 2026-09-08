@@ -25,6 +25,7 @@ const bridge = [
 
 const tool = {
   name: "openmontage",
+  examples: [{ action: "catalog" }],
   description: "Exposes the installed OpenMontage Plugin through a narrow Agent Tool without copying OpenMontage orchestration into Carlos Office. It can inspect the capability catalog or invoke one registered OpenMontage Tool. Autonomous use remains approval-gated because OpenMontage actions may spend money or publish content.",
   requiresApproval: true,
   provider: null,
@@ -35,8 +36,9 @@ const tool = {
       action: { type: "string", enum: ["catalog", "list-tools", "dry-run", "execute"], default: "catalog" },
       tool: { type: "string", description: "OpenMontage Tool name for dry-run or execute." },
       inputs: { type: "object", description: "Input object passed to the OpenMontage Tool.", default: {} },
-      timeoutMs: { type: "number", description: "Maximum runtime in milliseconds.", default: 1800000 },
+      timeoutMs: { type: "integer", minimum: 1000, maximum: 7_200_000, description: "Maximum runtime in milliseconds.", default: 1800000 },
     },
+    allOf: [{ if: { properties: { action: { enum: ["dry-run", "execute"] } }, required: ["action"] }, then: { required: ["tool"] } }],
     additionalProperties: false,
   },
   output: { type: "object" },

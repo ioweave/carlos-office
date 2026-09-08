@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { copyFile, mkdir, rename, rm, rmdir, stat } from "node:fs/promises";
+import { copyFile, mkdir, rm, rmdir, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -54,14 +54,17 @@ export const cleanupInvocationWorkspace = async workspaceDir => {
   return true;
 };
 
-const moveFile = async (source, destination) => {
-  try {
-    await rename(source, destination);
-  } catch (error) {
-    if (error?.code !== "EXDEV") throw error;
-    await copyFile(source, destination);
-    await rm(source, { force: true });
+// Keep producer files alive for downstream Tasks and explicit resume after a restart.
+const resolveCompletionPaths = async (value, workspaceDir) => {
+  if (Array.isArray(value)) return Promise.all(value.map(item => resolveCompletionPaths(item, workspaceDir)));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(await Promise.all(Object.entries(value).map(async ([key, item]) => [key, await resolveCompletionPaths(item, workspaceDir)])));
   }
+  if (typeof value !== "string" || !value || value.length > 4096 || /[\n\r\0]/.test(value)) return value;
+  try {
+    const path = resolveWorkspacePath(workspaceDir, value);
+    return (await stat(path)).isFile() ? path : value;
+  } catch { return value; }
 };
 
 export const stageInvocationCompletion = async ({
@@ -75,8 +78,7 @@ export const stageInvocationCompletion = async ({
   if (!workspaceDir) return completion;
   const artifacts = Array.isArray(completion?.artifacts) ? completion.artifacts : [];
   if (!artifacts.length) {
-    await cleanupInvocationWorkspace(workspaceDir);
-    return completion;
+    return { ...completion, data: await resolveCompletionPaths(completion.data, workspaceDir) };
   }
 
   const { deliverablesDir } = invocationPaths({ workflowId, taskId, attemptId, invocationId });
@@ -101,14 +103,13 @@ export const stageInvocationCompletion = async ({
       if (!info.isFile()) throw new Error(`Declared Artifact is not a file: ${artifact.path}`);
       await mkdir(deliverablesDir, { recursive: true });
       destination = resolve(deliverablesDir, `${randomUUID()}-${basename(source)}`);
-      await moveFile(source, destination);
+      await copyFile(source, destination);
       stagedBySource.set(source, destination);
     }
     staged.push({ ...artifact, path: destination });
   }
 
-  await cleanupInvocationWorkspace(workspaceDir);
-  return { ...completion, artifacts: staged };
+  return { ...completion, data: await resolveCompletionPaths(completion.data, workspaceDir), artifacts: staged };
 };
 
 const pruneEmptyParents = async start => {
@@ -124,10 +125,11 @@ const pruneEmptyParents = async start => {
   }
 };
 
-export const consumeManagedDeliverable = async path => {
+export const consumeManagedDeliverable = async (path, preserve = false) => {
   if (!path) return false;
   const absolute = resolve(path);
   if (!within(deliverablesRoot, absolute)) return false;
+  if (preserve) return true;
   await rm(absolute, { force: true });
   await pruneEmptyParents(absolute);
   return true;
@@ -142,10 +144,6 @@ export const cleanupWorkflowRuntime = async workflowId => {
 };
 
 export const cleanupExecutionRuntime = async () => {
-  await Promise.all([
-    rm(workspacesRoot, { recursive: true, force: true }),
-    rm(deliverablesRoot, { recursive: true, force: true }),
-  ]);
   await Promise.all([
     mkdir(workspacesRoot, { recursive: true }),
     mkdir(deliverablesRoot, { recursive: true }),

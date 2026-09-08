@@ -41,7 +41,6 @@ export const createRouter = ({
     const execution = await nora.runWorkflow(workflowId);
     let review = null;
     if (!wasCompleted && execution.workflow.status === "completed") review = await nora.summarizeWorkflow(workflowId);
-    if (execution.workflow.status === "completed") await cleanupWorkflowRuntime(workflowId);
     return { ...execution, workflow: processes.getWorkflow(workflowId), review };
   };
 
@@ -221,7 +220,7 @@ export const createRouter = ({
       if (method === "POST" && parts[0] === "workflows" && parts[2] === "run" && parts.length === 3) return sendJson(200, await executeWorkflow(parts[1]));
       if (method === "POST" && parts[0] === "workflows" && parts[2] === "stop" && parts.length === 3) {
         const workflow = await processes.pauseWorkflow(parts[1]);
-        engine.cancelWorkflowExecution(parts[1], "Workflow stopped by Carlos");
+        await engine.cancelWorkflowExecution(parts[1], "Workflow stopped by Carlos");
         return sendJson(200, workflow);
       }
       if (method === "POST" && parts[0] === "workflows" && parts[2] === "resume" && parts.length === 3) {
@@ -232,7 +231,7 @@ export const createRouter = ({
       if (method === "POST" && parts[0] === "workflows" && parts[2] === "restart" && parts.length === 3) {
         const workflow = processes.getWorkflow(parts[1]);
         if (!workflow) return sendError(404, "Workflow not found");
-        engine.cancelWorkflowExecution(parts[1], "Workflow restarted by Carlos");
+        await engine.cancelWorkflowExecution(parts[1], "Workflow restarted by Carlos");
         await purgeWorkflowOutputs(workflow);
         await processes.restartWorkflow(parts[1]);
         return sendJson(200, (await executeWorkflow(parts[1])).workflow);
@@ -240,7 +239,7 @@ export const createRouter = ({
       if (method === "POST" && parts[0] === "workflows" && parts[2] === "cancel" && parts.length === 3) {
         const workflow = processes.getWorkflow(parts[1]);
         if (!workflow) return sendError(404, "Workflow not found");
-        engine.cancelWorkflowExecution(parts[1], "Workflow cancelled by Carlos");
+        await engine.cancelWorkflowExecution(parts[1], "Workflow cancelled by Carlos");
         const cancelled = await processes.cancelWorkflow(parts[1]);
         await cleanupWorkflowRuntime(parts[1]);
         return sendJson(200, cancelled);
@@ -253,10 +252,15 @@ export const createRouter = ({
         return sendJson(200, await processes.setWorkflowEdges(parts[1], body.edges));
       }
       if (method === "PATCH" && parts[0] === "workflows" && parts[2] === "tasks" && parts.length === 4) return sendJson(200, await processes.editTask(parts[1], parts[3], await readJson(req)));
-      if (method === "POST" && parts[0] === "workflows" && parts[2] === "tasks" && parts[4] === "skip" && parts.length === 5) return sendJson(200, await processes.skipTask(parts[1], parts[3]));
+      if (method === "POST" && parts[0] === "workflows" && parts[2] === "tasks" && parts[4] === "skip" && parts.length === 5) {
+        const task = await processes.skipTask(parts[1], parts[3]);
+        if (processes.getWorkflow(parts[1])?.status === "running") await executeWorkflow(parts[1]);
+        return sendJson(200, task);
+      }
       if (method === "POST" && parts[0] === "workflows" && parts[2] === "tasks" && parts[4] === "cancel" && parts.length === 5) {
+        await processes.pauseWorkflow(parts[1]);
         const workflow = await processes.cancelTask(parts[1], parts[3]);
-        engine.cancelTaskExecution(parts[1], parts[3], "Task cancelled by Carlos");
+        await engine.cancelWorkflowExecution(parts[1], "Task cancelled by Carlos");
         return sendJson(200, workflow);
       }
       if (method === "POST" && parts[0] === "workflows" && parts[2] === "tasks" && parts[4] === "review" && parts.length === 5) return sendJson(200, await nora.reviewFailedTask(parts[1], parts[3]));

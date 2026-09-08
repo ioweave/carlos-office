@@ -9,6 +9,7 @@ const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024;
 
 const tool = {
   name: "play-audio",
+  examples: [{ source: "/tmp/notification.wav", volume: 50 }],
   description: "Plays audio from a local file or HTTP(S) URL. Prefers VLC when available, then falls back to ffplay, mpv, and native platform players.",
   requiresApproval: false,
   provider: null,

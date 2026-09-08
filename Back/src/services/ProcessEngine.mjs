@@ -7,9 +7,11 @@ import {
   getTaskAttempt,
   getWorkflow,
   listTaskAttempts,
+  resumeWorkflow,
   setTaskStatus,
   updateTaskAttempt,
   updateTaskAttemptRuntime,
+  withWorkflowTransition,
 } from "../controllers/ProcessController.mjs";
 import { getSkill, listSkills } from "../registry/Skills.mjs";
 import { getTool, listTools } from "../registry/Tools.mjs";
@@ -22,12 +24,12 @@ import {
 } from "../runtime/AgentProcesses.mjs";
 import { appendInvocationJournal, clearInvocationJournal } from "./InvocationJournalService.mjs";
 import { runLangGraphWorkflow } from "./LangGraphWorkflowRuntime.mjs";
+import { toolCanReplay } from "./ToolExecutionService.mjs";
 import { taskAllowsTools, validateAtomicTaskDefinition } from "./TaskAtomicity.mjs";
 import { executeTaskWithGroups, materializeMapData } from "./TaskExecutionService.mjs";
 import { getTaskExecutionGroups } from "./WorkflowGraphService.mjs";
 
 const activeRuns = new Map();
-const workflowTransitions = new Map();
 const ORPHANED_ATTEMPT_REASON = "Previous Agent process is no longer active";
 const DEFAULT_MAX_ATTEMPTS = 3;
 const RECOVERABLE_FAILURE_CODES = new Set([
@@ -39,7 +41,6 @@ const RECOVERABLE_FAILURE_CODES = new Set([
   "agent_process_exit",
   "task_inactivity_timeout",
 ]);
-const READ_ONLY_TOOLS = new Set(["read-file", "http-content", "workspace-variables"]);
 const HALTED_WORKFLOW_STATUSES = new Set(["blocked", "cancelled", "failed", "paused", "stalled"]);
 
 class WorkflowHaltError extends Error {
@@ -67,15 +68,6 @@ const failureDiagnostics = (error, phase = "process", code = "execution_failure"
     };
   }
   return { phase, code, message: errorMessage(error) };
-};
-
-const withWorkflowTransition = async (workflowId, operation) => {
-  const previous = workflowTransitions.get(workflowId) ?? Promise.resolve();
-  const next = previous.catch(() => {}).then(operation);
-  workflowTransitions.set(workflowId, next);
-  try { return await next; } finally {
-    if (workflowTransitions.get(workflowId) === next) workflowTransitions.delete(workflowId);
-  }
 };
 
 const selectionFrom = (value, validateModelSelection, models = []) => {
@@ -107,7 +99,7 @@ const ancestorTaskIds = (workflow, taskId) => {
   return [...result].filter(id => workflow.tasks[id]?.type === "task");
 };
 
-const latestCompletedAttempt = task => [...(task.attempts ?? [])]
+const latestCompletedAttempt = task => task.status !== "completed" ? null : [...(task.attempts ?? [])]
   .reverse()
   .find(attempt => attempt.status === "completed") ?? null;
 const attemptValue = attempt => attempt?.data != null ? attempt.data : attempt?.output;
@@ -122,20 +114,33 @@ const getPath = (value, path) => {
   return current;
 };
 
+const mapInputPath = (value, path) => {
+  if (!path) return value;
+  if (value?.__carlosOfficeMap && Array.isArray(value.items)) {
+    return { ...value, items: value.items.map(item => item.status !== "completed" ? item : {
+      ...item, data: mapInputPath(item.data ?? item.output, path), output: null,
+    }) };
+  }
+  const [part, ...rest] = path.split(".");
+  const next = value != null && typeof value === "object" && Object.hasOwn(value, part) ? value[part] : undefined;
+  return rest.length ? mapInputPath(next, rest.join(".")) : next;
+};
+
 const setPath = (target, path, value) => {
   const parts = String(path || "").split(".").map(part => part.trim()).filter(Boolean);
   if (!parts.length) return;
   let current = target;
   for (const part of parts.slice(0, -1)) {
-    if (!isObject(current[part])) current[part] = {};
+    if (["__proto__", "constructor", "prototype"].includes(part)) throw new Error("Unsafe Task input path");
+    if (!Object.hasOwn(current, part) || !isObject(current[part])) current[part] = {};
     current = current[part];
   }
-  current[parts.at(-1)] = structuredClone(value);
+  Object.defineProperty(current, parts.at(-1), { value: structuredClone(value), enumerable: true, writable: true, configurable: true });
 };
 
 const upstreamValue = (workflow, taskId, reference, retainedMapIds) => {
   const ancestors = ancestorTaskIds(workflow, taskId);
-  const producerId = ancestors.find(id => id === reference || workflow.tasks[id]?.output === reference);
+  const producerId = ancestors.includes(reference) ? reference : ancestors.find(id => workflow.tasks[id]?.output === reference);
   if (!producerId) return undefined;
   return materializeMapData(attemptValue(latestCompletedAttempt(workflow.tasks[producerId])), retainedMapIds);
 };
@@ -152,14 +157,14 @@ const resolveInputPath = (workflow, taskId, path, retainedMapIds) => {
   if (path.startsWith("upstream.")) {
     const parts = path.slice("upstream.".length).split(".");
     const value = upstreamValue(workflow, taskId, parts.shift(), retainedMapIds);
-    return parts.length ? getPath(value, parts.join(".")) : value;
+    return parts.length ? mapInputPath(value, parts.join(".")) : value;
   }
 
   const workflowValue = getPath(workflow.inputs ?? {}, path);
   if (workflowValue !== undefined) return workflowValue;
   const [reference, ...rest] = path.split(".");
   const value = upstreamValue(workflow, taskId, reference, retainedMapIds);
-  return rest.length ? getPath(value, rest.join(".")) : value;
+  return rest.length ? mapInputPath(value, rest.join(".")) : value;
 };
 
 const resolveTaskInput = (workflow, taskId, task) => {
@@ -171,7 +176,11 @@ const resolveTaskInput = (workflow, taskId, task) => {
 
   if (Array.isArray(task.inputs)) {
     const selected = {};
-    for (const name of task.inputs) {
+    const maps = getTaskExecutionGroups(workflow, taskId).filter(group => group.type === "map");
+    const localNames = new Set(maps.flatMap(group => [group.itemAs || "item", group.indexAs || "index"]));
+    const paths = new Set([...task.inputs, ...maps.map(group => group.source)]);
+    for (const name of paths) {
+      if (localNames.has(name.split(".")[0])) continue;
       const value = resolveInputPath(workflow, taskId, name, retainedMapIds);
       if (value === undefined) throw new Error(`Task input "${name}" could not be resolved before execution`);
       setPath(selected, name, value);
@@ -256,6 +265,7 @@ const failSetup = async (workflowId, taskId, error) => {
   await withWorkflowTransition(workflowId, async () => {
     const workflow = getWorkflow(workflowId);
     const task = workflow?.tasks?.[taskId];
+    if (["paused", "cancelled"].includes(workflow?.status)) return;
     if (!task || task.type !== "task" || ["completed", "cancelled", "failed"].includes(task.status)) return;
     const now = new Date().toISOString();
     const previousAttempts = listTaskAttempts(workflowId, taskId);
@@ -332,6 +342,7 @@ const importDeclaredArtifacts = async (workflow, completion) => {
     const artifact = await importArtifact({
       conversationId,
       sourcePath: declaration.path,
+      preserveSource: true,
       name: declaration.name ?? null,
       type: declaration.type ?? null,
       createdBy: declaration.createdBy || "Temporary Agent",
@@ -348,17 +359,13 @@ const appendInvocation = (workflowId, taskId, attemptId, invocation) => withWork
     if (!current) return null;
     await appendInvocationJournal({ workflowId, taskId, attemptId, invocation });
     return updateTaskAttemptRuntime(workflowId, taskId, attemptId, {
-      invocations: [...(current.invocations ?? []), structuredClone(invocation)],
+      invocations: [...(current.invocations ?? []).filter(item => item.id !== invocation.id), structuredClone(invocation)],
     });
   },
 );
 
-const toolCallIsSafeToReplay = call => {
-  if (!call || typeof call.tool !== "string") return false;
-  if (READ_ONLY_TOOLS.has(call.tool)) return true;
-  if (call.tool !== "http") return false;
-  return ["GET", "OPTIONS"].includes(String(call.input?.method || "GET").toUpperCase());
-};
+const toolCallIsSafeToReplay = call => call?.sideEffect === "none" || call?.replaySafe === true
+  || (call?.replaySafe === undefined && typeof call?.tool === "string" && toolCanReplay(getTool(call.tool), call.input));
 
 const resultCanRetrySafely = result => {
   if (result?.status !== "failed") return false;
@@ -402,6 +409,7 @@ const runTaskAttempt = async ({ workflowId, taskId, execution, runState, decide,
       taskId,
       attempt: previousAttempts.length + 1,
       runAttempt,
+      authorizationRunId: checkpointAttempt?.authorizationRunId ?? `authorization-${randomUUID()}`,
       agentId: null,
       pid: null,
       provider: execution.provider,
@@ -417,7 +425,7 @@ const runTaskAttempt = async ({ workflowId, taskId, execution, runState, decide,
       output: null,
       data: null,
       artifacts: [],
-      invocations: [],
+      invocations: structuredClone(checkpointAttempt?.invocations ?? []),
       error: null,
       diagnostics: null,
       blockedReason: null,
@@ -450,12 +458,14 @@ const runTaskAttempt = async ({ workflowId, taskId, execution, runState, decide,
       checkpointInvocations: checkpointAttempt?.invocations ?? [],
       isCancelled: () => Boolean(runState.cancelled || getWorkflow(workflowId)?.status === "paused"),
       canRetryInvocation: resultCanRetrySafely,
+      canReplayInterrupted: tools.every(tool => tool.replay === "safe"),
       recordInvocation: invocation => appendInvocation(workflowId, taskId, attempt.id, invocation),
-      runAgent: ({ invocationId, input: invocationInput }) => runAgentProcess({
+      runAgent: ({ invocationId, authorizationScope, input: invocationInput }) => runAgentProcess({
         workflowId,
         taskId,
         attemptId: attempt.id,
         invocationId,
+        authorizationScope: `${attempt.authorizationRunId}:${authorizationScope}`,
         task: { ...task, input: invocationInput },
         provider: execution.provider,
         model: execution.model,
@@ -475,6 +485,7 @@ const runTaskAttempt = async ({ workflowId, taskId, execution, runState, decide,
           candidate,
         },
         noraSelection,
+        runState.controller.signal,
       ),
     });
   } catch (error) {
@@ -557,7 +568,8 @@ const runTaskAttempt = async ({ workflowId, taskId, execution, runState, decide,
         status: "failed",
         error: message,
         diagnostics: { ...diagnostics, recovery: "automatic_retry", runAttempt: attempt.runAttempt, maxAttempts },
-      }, "pending");
+      }, "failed");
+      await resumeWorkflow(workflowId, [taskId]);
       return { event: "attempt.retry_scheduled", attempt: failed, retry: true, error: message, diagnostics };
     }
 
@@ -586,6 +598,8 @@ const runTaskAttempt = async ({ workflowId, taskId, execution, runState, decide,
 
 const workflowDefinitionFingerprint = workflow => createHash("sha256")
   .update(JSON.stringify({
+    executionRevision: workflow.executionRevision ?? 0,
+    inputs: workflow.inputs ?? {},
     start: workflow.start,
     end: workflow.end,
     edges: workflow.edges,
@@ -597,6 +611,7 @@ const workflowDefinitionFingerprint = workflow => createHash("sha256")
         blockedReason: _blockedReason,
         error: _error,
         resumeCheckpointAttemptId: _resumeCheckpointAttemptId,
+        resultAttemptId: _resultAttemptId,
         ...definition
       } = task;
       return [taskId, definition];
@@ -639,7 +654,14 @@ const executeTaskNode = async ({ workflowId, taskId, runState, decide, getNoraSe
   }
 
   while (!runState.cancelled) {
-    const attempt = await runTaskAttempt({ workflowId, taskId, execution, runState, decide, noraSelection });
+    let attempt;
+    try {
+      attempt = await runTaskAttempt({ workflowId, taskId, execution, runState, decide, noraSelection });
+    } catch (error) {
+      if (error instanceof WorkflowHaltError) throw error;
+      await failSetup(workflowId, taskId, error);
+      throw new WorkflowHaltError(workflowId, taskId, "failed");
+    }
     if (!attempt) throw new WorkflowHaltError(workflowId, taskId, getWorkflow(workflowId)?.status ?? "cancelled");
     runState.attempts.push(attempt);
     if (attempt.status === "completed") return attemptValue(attempt);
@@ -667,15 +689,20 @@ const runWorkflowInternal = async ({
       workflow,
       threadId,
       signal: runState.controller.signal,
-      runTask: taskId => executeTaskNode({
-        workflowId,
-        taskId,
-        runState,
-        decide,
-        getNoraSelection,
-        models,
-        validateModelSelection,
-      }),
+      runTask: taskId => {
+        const execution = executeTaskNode({
+          workflowId,
+          taskId,
+          runState,
+          decide,
+          getNoraSelection,
+          models,
+          validateModelSelection,
+        });
+        runState.pendingTasks.add(execution);
+        void execution.then(() => runState.pendingTasks.delete(execution), () => runState.pendingTasks.delete(execution));
+        return execution;
+      },
     });
   } catch (error) {
     const current = getWorkflow(workflowId);
@@ -686,9 +713,11 @@ const runWorkflowInternal = async ({
         threadId,
         error: errorMessage(error),
       });
+      await Promise.allSettled([...runState.pendingTasks]);
       throw error;
     }
   }
+  await Promise.allSettled([...runState.pendingTasks]);
   return { workflow: getWorkflow(workflowId), attempts: [...runState.attempts], threadId };
 };
 
@@ -705,6 +734,7 @@ export const runWorkflow = options => {
     promise: null,
     executionByTask: new Map(),
     attemptsByTask: new Map(),
+    pendingTasks: new Set(),
     attempts: [],
   };
   const promise = runWorkflowInternal({ ...options, runState }).finally(() => {
@@ -719,13 +749,15 @@ export const cancelTaskExecution = (workflowId, taskId, reason = "Task cancelled
   cancelTaskAgents(workflowId, taskId, reason)
 );
 
-export const cancelWorkflowExecution = (workflowId, reason = "Workflow cancelled") => {
+export const cancelWorkflowExecution = async (workflowId, reason = "Workflow cancelled") => {
   const runState = activeRuns.get(workflowId);
   if (runState) {
     runState.cancelled = true;
     runState.controller.abort(reason);
   }
-  return cancelWorkflowAgents(workflowId, reason);
+  const stopped = cancelWorkflowAgents(workflowId, reason);
+  if (runState) await runState.promise.catch(() => {});
+  return stopped;
 };
 
 export const listAgentProcesses = () => listActiveAgents();

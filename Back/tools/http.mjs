@@ -30,7 +30,7 @@ const readCompleteBody = async response => {
       `response exceeds the 500 MB body limit (${declaredLength} > ${MAX_RESPONSE_BYTES} bytes)`,
       "http_response_too_large",
       {
-        retryable: true,
+        retryable: false,
         hint: "Request a narrower resource, use query parameters or a Range request, or use another retrieval strategy. Carlos Office will not load one HTTP response larger than 500 MB.",
       },
     );
@@ -48,7 +48,7 @@ const readCompleteBody = async response => {
         `response body exceeds the 500 MB body limit (${MAX_RESPONSE_BYTES} bytes)`,
         "http_response_too_large",
         {
-          retryable: true,
+          retryable: false,
           hint: "Request a narrower resource, use query parameters or a Range request, or use another retrieval strategy. Carlos Office will not load one HTTP response larger than 500 MB.",
         },
       );
@@ -122,7 +122,10 @@ const responseBase = ({ response, method, contentType, rawBody, responseHeaders,
 
 const tool = {
   name: "http",
-  description: "Issues HTTP requests with optional credentials injected locally by service name. Any received HTTP response, including 4xx and 5xx, is a successful Tool observation: ok reports transport/tool success while httpOk reports the remote HTTP success flag and status/statusText preserve the actual response. PDFs are detected by MIME type or file signature and automatically converted to readable text with the local document parser; scanned/image-only PDFs are preserved in the Agent workspace with an OCR hint instead of being decoded as UTF-8 garbage. Readable responses over 64 KB are stored behind an http-content handle with a small preview so large pages and documents do not flood model context. Credential secrets never enter Agent or model context and may only be sent to hosts allowed by that credential profile.",
+  replay: "http-read",
+  timeoutMs: 120_000,
+  examples: [{ url: "https://example.com", method: "GET" }],
+  description: "Issues HTTP requests with optional credentials injected locally by service name. Permanent HTTP error responses remain inspectable observations. Temporary 408/429/502/503/504 responses on GET/HEAD/OPTIONS use bounded platform retries; exhaustion is a Tool failure. For returned responses: ok reports transport/tool success while httpOk reports the remote HTTP success flag and status/statusText preserve the actual response. PDFs are detected by MIME type or file signature and automatically converted to readable text with the local document parser; scanned/image-only PDFs are preserved in the Agent workspace with an OCR hint instead of being decoded as UTF-8 garbage. Readable responses over 64 KB are stored behind an http-content handle with a small preview so large pages and documents do not flood model context. Credential secrets never enter Agent or model context and may only be sent to hosts allowed by that credential profile.",
   requiresApproval: false,
   provider: null,
   model: null,
@@ -131,7 +134,7 @@ const tool = {
     properties: {
       method: {
         type: "string",
-        enum: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        enum: ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
         description: "HTTP method. Defaults to GET.",
         default: "GET",
       },
@@ -150,12 +153,14 @@ const tool = {
         default: {},
       },
       body: {
-        type: ["object", "string", "number", "boolean", "null"],
+        type: ["object", "array", "string", "number", "boolean", "null"],
         description: "Optional request body. Objects are JSON encoded.",
         default: null,
       },
       timeoutMs: {
-        type: "number",
+        type: "integer",
+        minimum: 1000,
+        maximum: 3_600_000,
         description: "Request timeout in milliseconds. Defaults to 30000.",
         default: 30000,
       },
@@ -207,7 +212,7 @@ const tool = {
     if (!url) throw httpError('"url" is required and must be a non-empty string.', "http_invalid_url");
 
     const method = typeof inputs.method === "string" && inputs.method ? inputs.method.toUpperCase() : "GET";
-    const allowed = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+    const allowed = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
     if (!allowed.includes(method)) throw httpError(`"method" must be one of ${allowed.join(", ")}`, "http_invalid_method");
 
     const headers = inputs.headers && typeof inputs.headers === "object" ? inputs.headers : {};
@@ -245,26 +250,36 @@ const tool = {
     }
 
     let payload = body;
-    if (body !== null && typeof body === "object" && !Array.isArray(body)) {
+    if (body !== null && typeof body === "object") {
       payload = JSON.stringify(body);
       if (!finalHeaders["content-type"] && !finalHeaders["Content-Type"]) finalHeaders["content-type"] = "application/json";
     }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const signal = context.signal ? AbortSignal.any([context.signal, controller.signal]) : controller.signal;
+    signal.throwIfAborted();
 
     try {
       const response = await fetch(target, {
         method,
         headers: finalHeaders,
-        body: method === "GET" || method === "OPTIONS" || payload === null || payload === undefined
+        body: ["GET", "HEAD", "OPTIONS"].includes(method) || payload === null || payload === undefined
           ? undefined
           : (typeof payload === "string" ? payload : String(payload)),
         // Never forward an injected credential through an automatic redirect.
         redirect: auth ? "manual" : "follow",
-        signal: controller.signal,
+        signal,
       });
 
+      if ([408, 429, 502, 503, 504].includes(response.status) && ["GET", "HEAD", "OPTIONS"].includes(method)) {
+        const retryAfter = response.headers.get("retry-after");
+        await response.body?.cancel();
+        const error = httpError(`temporary HTTP ${response.status}`, "http_transient_status", { retryable: true });
+        error.retryAfterMs = retryAfter == null ? 0 : Number.isFinite(Number(retryAfter))
+          ? Math.max(0, Number(retryAfter) * 1000) : Math.max(0, Date.parse(retryAfter) - Date.now());
+        throw error;
+      }
       const contentType = response.headers.get("content-type") || "";
       const rawBody = await readCompleteBody(response);
       const responseHeaders = sanitizeResponseHeaders(Object.fromEntries(response.headers.entries()), sensitiveValues);
@@ -357,6 +372,7 @@ const tool = {
 
       return { ...base, body: responseBody, content: null, document: null, binary: null, parseError };
     } catch (error) {
+      if (context.signal?.aborted) throw context.signal.reason;
       if (error?.name === "AbortError") {
         throw httpError(
           `request timed out after ${timeoutMs} ms`,
@@ -370,7 +386,7 @@ const tool = {
           `could not connect to ${target}${causeCode}`,
           "http_network_error",
           {
-            retryable: false,
+            retryable: ["ECONNRESET", "ETIMEDOUT", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT"].includes(error.cause?.code),
             hint: "The endpoint is unreachable from Carlos Office. Change the host or port, or inspect local listeners and processes with a system/command Tool instead of repeating the same request.",
           },
         );

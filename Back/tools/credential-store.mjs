@@ -2,6 +2,8 @@ import { getCredential, listCredentials } from "../src/services/CredentialServic
 
 const tool = {
   name: "credential-store",
+  replay: "safe",
+  examples: [{ operation: "list" }],
   description: "Lists credential profiles or checks whether one exists. Secret values are never returned to Agents or model providers. Carlos manages credentials from the Credentials page.",
   requiresApproval: false,
   provider: null,
@@ -20,6 +22,7 @@ const tool = {
       },
     },
     required: ["operation"],
+    allOf: [{ if: { properties: { operation: { const: "get" } }, required: ["operation"] }, then: { required: ["service"] } }],
     additionalProperties: false,
   },
   output: {

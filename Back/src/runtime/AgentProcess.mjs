@@ -75,6 +75,9 @@ process.on("message", message => {
     if (typeof message.code === "string" && message.code) error.code = message.code;
     if (typeof message.retryable === "boolean") error.retryable = message.retryable;
     if (typeof message.hint === "string" && message.hint.trim()) error.hint = message.hint.trim();
+    error.replaySafe = message.replaySafe === true;
+    error.sideEffect = message.sideEffect ?? "unknown";
+    error.attempts = message.attempts ?? 0;
     pending.reject(error);
     return;
   }

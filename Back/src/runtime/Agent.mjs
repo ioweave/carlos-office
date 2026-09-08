@@ -3,7 +3,6 @@ import { parseProviderJSON } from "../lib.mjs";
 const MAX_REASONING_TURNS = 16;
 const MAX_TOOL_CALLS = 24;
 const MAX_PROVIDER_ATTEMPTS = 3;
-const MAX_SAFE_TOOL_ATTEMPTS = 3;
 const MAX_TOOL_RESULT_CHARS = 60_000;
 const MAX_ACTIVE_TOOL_CONTEXT_CHARS = 180_000;
 const MAX_COMPLETION_EVIDENCE_CHARS = 80_000;
@@ -223,17 +222,11 @@ const failureFingerprint = (call, details) => [
   details.code,
   details.message.replace(/\d+/g, "#").slice(0, 240),
 ].join("|");
-const canRetryToolError = (call, error) => (
-  call.name === "http"
-  && ["GET", "OPTIONS"].includes(String(call.input?.method || "GET").toUpperCase())
-  && error?.retryable === true
-  && error?.code === "http_timeout"
-);
 const cacheableToolCall = call => (
   CACHEABLE_TOOLS.has(call.name)
-  || (call.name === "http" && ["GET", "OPTIONS"].includes(String(call.input?.method || "GET").toUpperCase()))
+  || (call.name === "http" && ["GET", "HEAD", "OPTIONS"].includes(String(call.input?.method || "GET").toUpperCase()))
 );
-const unsuccessfulToolResult = result => isObject(result) && result.ok === false;
+const unsuccessfulToolResult = result => isObject(result) && (result.ok === false || result.httpOk === false);
 const unsuccessfulToolDetails = (call, result) => ({
   message: Number.isInteger(result.status)
     ? `${call.name} returned HTTP/status ${result.status}${result.statusText ? ` ${result.statusText}` : ""}`
@@ -629,25 +622,19 @@ export class Agent {
           result = structuredClone(successfulCalls.get(key));
           reused = true;
         } else if (!error) {
-          for (let attempt = 1; attempt <= MAX_SAFE_TOOL_ATTEMPTS; attempt += 1) {
-            toolExecutions += 1;
-            if (toolExecutions > this.maxToolCalls) {
-              throw failure(`Task exceeded ${this.maxToolCalls} Tool executions`, "tool", "tool_call_limit");
+          toolExecutions += 1;
+          if (toolExecutions > this.maxToolCalls) {
+            throw failure(`Task exceeded ${this.maxToolCalls} Tool executions`, "tool", "tool_call_limit");
+          }
+          try {
+            result = await this.invokeTool({ id: call.id ?? null, name: call.name, input: structuredClone(call.input ?? {}) });
+          } catch (caught) {
+            if (caught?.blocked) throw caught;
+            // A write with an unknown outcome must stop the Agent before it invents a replacement call.
+            if (caught?.sideEffect === "unknown" && !caught?.replaySafe) {
+              throw failure(caught.message, "tool", caught.code || "tool_outcome_unknown");
             }
-            try {
-              result = await this.invokeTool({
-                id: call.id ?? null,
-                name: call.name,
-                input: structuredClone(call.input ?? {}),
-              });
-              error = null;
-              break;
-            } catch (caught) {
-              if (caught?.blocked) throw caught;
-              error = caught;
-              if (!canRetryToolError(call, caught) || attempt >= MAX_SAFE_TOOL_ATTEMPTS) break;
-              await sleep(RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)]);
-            }
+            error = caught;
           }
         }
 

@@ -116,6 +116,9 @@ const searchContent = async (id, query, maxMatches) => {
 
 const tool = {
   name: "http-content",
+  examples: [{ id: "http-content-example", action: "read", start: 0, length: 4096 }],
+  replay: "safe",
+  timeoutMs: 60_000,
   description: "Reads or searches complete readable HTTP response bodies previously captured by the http Tool. Use search first, then narrow reads around useful byte offsets. Reads are bounded and aligned to UTF-8 character boundaries so large documents do not flood or corrupt model context.",
   requiresApproval: false,
   provider: null,
@@ -125,12 +128,13 @@ const tool = {
     properties: {
       id: { type: "string", description: "Content id returned by the http Tool." },
       action: { type: "string", enum: ["stat", "read", "search"], default: "stat" },
-      start: { type: "number", description: "Byte offset for read. Defaults to 0.", default: 0 },
-      length: { type: "number", description: `Bytes to read, maximum ${MAX_READ_BYTES}.`, default: DEFAULT_READ_BYTES },
+      start: { type: "integer", minimum: 0, description: "Byte offset for read. Defaults to 0.", default: 0 },
+      length: { type: "integer", minimum: 1, maximum: MAX_READ_BYTES, description: `Bytes to read, maximum ${MAX_READ_BYTES}.`, default: DEFAULT_READ_BYTES },
       query: { type: "string", description: "Literal UTF-8 string to find for search." },
-      maxMatches: { type: "number", description: "Maximum search matches, 1-50.", default: 10 },
+      maxMatches: { type: "integer", minimum: 1, maximum: 50, description: "Maximum search matches, 1-50.", default: 10 },
     },
     required: ["id"],
+    allOf: [{ if: { properties: { action: { const: "search" } }, required: ["action"] }, then: { required: ["query"] } }],
     additionalProperties: false,
   },
   output: { type: "object" },

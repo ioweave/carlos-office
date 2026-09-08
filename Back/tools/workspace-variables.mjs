@@ -2,6 +2,8 @@ import { getVariable, listVariables } from "../src/services/VariableService.mjs"
 
 const tool = {
   name: "workspace-variables",
+  replay: "safe",
+  examples: [{ operation: "list" }],
   description: "Reads non-secret Workspace Variables managed by Carlos in Store. Use them as shared task configuration. Never treat this store as a credential or secret vault.",
   requiresApproval: false,
   provider: null,
@@ -20,6 +22,7 @@ const tool = {
       },
     },
     required: ["operation"],
+    allOf: [{ if: { properties: { operation: { const: "get" } }, required: ["operation"] }, then: { required: ["key"] } }],
     additionalProperties: false,
   },
   output: {

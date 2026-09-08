@@ -363,6 +363,7 @@ const producerByAlias = graph => {
   for (const [taskId, task] of Object.entries(graph.tasks)) {
     const alias = typeof task?.output === "string" ? task.output.trim() : "";
     if (task?.type !== "task" || !alias) continue;
+    if (alias !== taskId && Object.hasOwn(graph.tasks, alias)) throw new Error(`Task output alias ${alias} conflicts with a node ID`);
     const existing = result.get(alias);
     if (existing) throw new Error(`Task output alias ${alias} is ambiguous: ${existing} and ${taskId}`);
     result.set(alias, taskId);
@@ -389,7 +390,7 @@ const validateBindings = (graph, reverseAdjacency, aliases) => {
       validateProducerReference({ graph, taskId, path: input, reverseAdjacency, aliases, label: `Task ${taskId} input` });
     }
     for (const group of graph.groups ?? []) {
-      if (group.type !== "map" || !(group.members ?? []).includes(taskId)) continue;
+      if (group.type !== "map" || !getTaskExecutionGroups(graph, taskId).some(item => item.id === group.id)) continue;
       validateProducerReference({ graph, taskId, path: group.source, reverseAdjacency, aliases, label: `Map ${group.id} source` });
     }
   }

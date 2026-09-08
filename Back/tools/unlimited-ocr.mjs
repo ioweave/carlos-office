@@ -10,6 +10,7 @@ const imageExtensions = new Set([".png", ".jpg", ".jpeg", ".webp", ".bmp"]);
 
 const tool = {
   name: "unlimited-ocr",
+  examples: [{ source: "/tmp/source.pdf" }],
   description: "Runs the installed Unlimited-OCR Plugin against a PDF, image, or image directory. The Plugin lives outside Carlos Office source and is exposed to Agents only through this Tool boundary. Results are written as Markdown files in the Agent workspace so they can be consumed or declared as Artifacts.",
   requiresApproval: false,
   provider: null,
@@ -17,13 +18,13 @@ const tool = {
   input: {
     type: "object",
     properties: {
-      source: { type: "string", description: "PDF, image file, or image directory. Relative paths resolve inside the Agent workspace." },
+      source: { type: "string", minLength: 1, description: "PDF, image file, or image directory. Relative paths resolve inside the Agent workspace." },
       outputDirectory: { type: "string", description: "Output directory. Defaults to unlimited-ocr-output in the Agent workspace.", default: "unlimited-ocr-output" },
       model: { type: "string", description: "Hugging Face model id or local model path.", default: "baidu/Unlimited-OCR" },
       imageMode: { type: "string", enum: ["gundam", "base"], default: "gundam" },
       concurrency: { type: "number", description: "Concurrent page/image requests.", default: 8 },
       gpu: { type: "string", description: "CUDA_VISIBLE_DEVICES value passed to Unlimited-OCR.", default: "0" },
-      timeoutMs: { type: "number", description: "Maximum runtime in milliseconds.", default: 1800000 },
+      timeoutMs: { type: "integer", minimum: 1000, maximum: 7_200_000, description: "Maximum runtime in milliseconds.", default: 1800000 },
     },
     required: ["source"],
     additionalProperties: false,

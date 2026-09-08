@@ -4,6 +4,7 @@ import { resolvePlugin, resolvePluginEntrypoint, resolvePluginExecutable } from 
 
 const tool = {
   name: "agent-reach",
+  examples: [{ action: "doctor" }],
   description: "Uses the installed Agent Reach command Plugin for health checks, version/update checks, safe installation diagnostics, and media transcription. Internet reading/search commands selected by Agent Reach remain documented in the agent-reach Skill and run through existing Carlos Office Tools rather than an unrestricted wrapper.",
   requiresApproval: false,
   provider: null,
@@ -12,13 +13,14 @@ const tool = {
     type: "object",
     properties: {
       action: { type: "string", enum: ["doctor", "version", "check-update", "install-check", "transcribe"] },
-      source: { type: "string", description: "URL or local media path for transcribe." },
+      source: { type: "string", minLength: 1, description: "URL or local media path for transcribe." },
       provider: { type: "string", enum: ["auto", "groq", "openai"], default: "auto" },
       output: { type: "string", description: "Optional transcript file path. Relative paths resolve in the Agent workspace." },
       channels: { type: "string", description: "Optional comma-separated channels for install-check." },
-      timeoutMs: { type: "number", description: "Maximum runtime in milliseconds.", default: 300000 },
+      timeoutMs: { type: "integer", minimum: 1000, maximum: 7_200_000, description: "Maximum runtime in milliseconds.", default: 300000 },
     },
     required: ["action"],
+    allOf: [{ if: { properties: { action: { const: "transcribe" } }, required: ["action"] }, then: { required: ["source"] } }],
     additionalProperties: false,
   },
   output: { type: "object" },

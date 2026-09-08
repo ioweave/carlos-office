@@ -14,15 +14,18 @@ const fileError = (message, code, hint = null) => {
 
 const tool = {
   name: "read-file",
+  examples: [{ path: "/tmp/source.txt", start: 0, length: 4096 }],
+  replay: "safe",
+  timeoutMs: 60_000,
   description: "Reads a byte range from one regular local file. This Tool does not list directories. Reads are intentionally bounded so large files do not flood model context; use start/length to inspect additional ranges after discovery.",
   requiresApproval: false,
   input: {
     type: "object",
     properties: {
-      path: { type: "string", description: "Absolute or relative path to the regular file to read." },
+      path: { type: "string", minLength: 1, description: "Absolute or relative path to the regular file to read." },
       encoding: { type: "string", description: "Text encoding used to decode returned bytes.", default: "utf8" },
-      start: { type: "number", description: "Zero-based byte offset. Defaults to 0.", default: 0 },
-      length: { type: "number", description: `Bytes to read, maximum ${MAX_READ_BYTES}.`, default: DEFAULT_READ_BYTES },
+      start: { type: "integer", minimum: 0, description: "Zero-based byte offset. Defaults to 0.", default: 0 },
+      length: { type: "integer", minimum: 1, maximum: MAX_READ_BYTES, description: `Bytes to read, maximum ${MAX_READ_BYTES}.` },
       maxBytes: {
         type: "number",
         description: "Legacy alias for length when length is omitted. Kept for compatibility with older Tasks.",

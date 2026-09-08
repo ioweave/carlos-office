@@ -411,9 +411,9 @@ Attempts are execution history, not Agent identities.
 
 Carlos Office enforces a hard runtime invariant:
 
-> **A given `(workflowId, taskId)` may have at most one live Agent process.**
+> **A given `(workflowId, taskId, invocationId)` may have at most one live Agent process. Map items may run concurrently under their Group limits.**
 
-The Agent-process manager reserves that Workflow/Task pair before forking the child process and rejects a second launch while the reservation is active.
+The Agent-process manager reserves that Workflow/Task/Invocation identity before forking the child process and rejects a second launch while the reservation is active.
 
 ### 15.2 Serialized Task execution transitions
 
@@ -1140,3 +1140,13 @@ Current implementation constraints are:
 - no unnecessary abstraction for hypothetical future use.
 
 When complexity is optional, delete it. Preserve only complexity inherent to the product behavior.
+
+
+## Workflow reliability clarifications
+
+- Tool contracts use full JSON Schema validation and valid examples. Tool execution has a cancellable deadline and an explicit replay policy; unknown/write actions are not automatically replayed.
+- Completed invocation data and artifacts are preserved. Map continuation applies only to ordinary failures, never authorization blocks or cancellation.
+- Resume reuses compatible completed invocation checkpoints. Changed execution definitions or inputs invalidate results and downstream work; layout-only edits preserve execution results.
+- Lifecycle controls serialize state changes and wait for the old task execution to settle before restart or cleanup. Restart keeps Attempt history but starts a new execution revision.
+- Producer files remain available until explicit workflow restart, cancellation, or deletion. Startup preserves files required by interrupted checkpoints.
+- Interrupted actions with unknown side effects require inspection before explicit restart. Nora cannot automatically replay these actions.

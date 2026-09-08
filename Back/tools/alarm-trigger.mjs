@@ -1,11 +1,12 @@
 const tool = {
   name: "alarm-trigger",
+  examples: [{ message: "Task ready", repeat: 1 }],
   description: "Triggers an alarm notification by emitting a terminal bell and logging an urgent alarm message.",
   input: {
     type: "object",
     properties: {
       message: { type: "string", description: "Custom alarm message to display" },
-      repeat: { type: "number", description: "Number of times to ring the bell", default: 3 },
+      repeat: { type: "integer", minimum: 1, maximum: 10, description: "Number of times to ring the bell", default: 3 },
     },
     required: [],
   },

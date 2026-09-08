@@ -3,12 +3,13 @@ import { dirname, resolve } from "node:path";
 
 const tool = {
   name: "write-file",
+  examples: [{ path: "result.txt", content: "Result", mode: "overwrite" }],
   description: "Writes text content to a file on the local filesystem. Supports overwrite (default) or append modes and can create parent directories.",
   requiresApproval: false,
   input: {
     type: "object",
     properties: {
-      path: { type: "string", description: "Absolute or relative path to the file to write." },
+      path: { type: "string", minLength: 1, description: "Absolute or relative path to the file to write." },
       content: { type: "string", description: "Text content to write to the file." },
       mode: { type: "string", enum: ["overwrite", "append"], description: "Write mode.", default: "overwrite" },
       encoding: { type: "string", description: "Text encoding to use when writing the file.", default: "utf8" },

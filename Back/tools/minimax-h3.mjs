@@ -26,6 +26,7 @@ const request = async (url, options, timeoutMs, signal) => {
 
 const tool = {
   name: "minimax-h3",
+  examples: [{ action: "status", id: "video-id" }],
   description: "Calls a MiniMax-H3 SGLang deployment through its /v1/videos API. Supports submitting T2VA/FL2VA/Ref2VA jobs, checking status, and downloading completed video into the Agent workspace. Default endpoint is http://localhost:30010 and can be overridden with Workspace Variable integration.minimaxH3Url.",
   requiresApproval: false,
   provider: null,
@@ -44,9 +45,10 @@ const tool = {
       seed: { type: "number", default: 0 },
       output: { type: "string", description: "Download destination. Relative paths resolve in the Agent workspace." },
       baseUrl: { type: "string", description: "Optional H3 SGLang service URL." },
-      timeoutMs: { type: "number", default: 120000 },
+      timeoutMs: { type: "integer", minimum: 1000, maximum: 7_200_000, default: 120000 },
     },
     required: ["action"],
+    allOf: [{ if: { properties: { action: { const: "generate" } }, required: ["action"] }, then: { required: ["prompt"] } }, { if: { properties: { action: { enum: ["status", "download"] } }, required: ["action"] }, then: { required: ["id"] } }],
     additionalProperties: false,
   },
   output: { type: "object" },

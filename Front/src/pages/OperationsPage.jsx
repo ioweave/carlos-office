@@ -22,8 +22,8 @@ import WorkflowDataEditor from "../components/WorkflowDataEditor";
 import WorkflowInspector from "../components/WorkflowInspector";
 import "../styles/workflow-editor.scss";
 
-const ACTIVE_WORKFLOW_STATUSES = new Set(["running", "paused", "blocked", "failed", "pending"]);
-const STATUS_ORDER = ["running", "paused", "blocked", "failed", "pending", "completed", "cancelled"];
+const ACTIVE_WORKFLOW_STATUSES = new Set(["running", "paused", "blocked", "failed", "stalled", "pending"]);
+const STATUS_ORDER = ["running", "paused", "blocked", "failed", "stalled", "pending", "completed", "cancelled"];
 const TERMINAL_STATUSES = new Set(["completed", "cancelled"]);
 const canResumeTask = status => ["failed", "blocked", "cancelled"].includes(status);
 const NODE_WIDTH = 108;
@@ -481,7 +481,7 @@ export default function OperationsPage({ onAskNora, openRequest }) {
   const failedTasks = executableTasks.filter(([, task]) => task.status === "failed");
   const primaryFailure = failedTasks[0] || null;
   const primaryFailureAttempt = primaryFailure ? latestFailedAttempt(primaryFailure[1]) : null;
-  const canResumeWorkflow = ["paused", "blocked", "failed"].includes(workflow.status);
+  const canResumeWorkflow = ["paused", "blocked", "failed", "stalled"].includes(workflow.status);
   const canRestartWorkflow = !["running", "pending"].includes(workflow.status);
   const canResumeFailureTask = Boolean(
     failureTask

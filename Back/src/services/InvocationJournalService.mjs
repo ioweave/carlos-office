@@ -75,9 +75,10 @@ export const hydrateWorkflowInvocationJournals = async workflow => {
           const attempt = attempts.get(invocation?.attemptId);
           if (!attempt || !invocation?.id) continue;
           attempt.invocations ??= [];
-          if (attempt.invocations.some(item => item.id === invocation.id)) continue;
+          const existing = attempt.invocations.findIndex(item => item.id === invocation.id);
           const { workflowId: _workflowId, taskId: _taskId, attemptId: _attemptId, ...stored } = invocation;
-          attempt.invocations.push(stored);
+          if (existing >= 0) attempt.invocations[existing] = stored;
+          else attempt.invocations.push(stored);
           hydrated += 1;
         }
         await rm(path, { force: true });

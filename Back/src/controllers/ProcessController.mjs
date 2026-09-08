@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -16,6 +17,22 @@ const workflowsDir = resolve(here, "../../ObsidianVault/System/Workflows");
 const processes = new Map();
 const workflows = new Map();
 const workflowWrites = new Map();
+const workflowTransitions = new Map();
+const transitionContext = new AsyncLocalStorage();
+
+export const withWorkflowTransition = async (workflowId, operation) => {
+  const owner = transitionContext.getStore();
+  if (owner?.active && owner.workflowId === workflowId) return operation();
+  const previous = workflowTransitions.get(workflowId) ?? Promise.resolve();
+  const next = previous.catch(() => {}).then(async () => {
+    const context = { workflowId, active: true };
+    try { return await transitionContext.run(context, operation); } finally { context.active = false; }
+  });
+  workflowTransitions.set(workflowId, next);
+  try { return await next; } finally {
+    if (workflowTransitions.get(workflowId) === next) workflowTransitions.delete(workflowId);
+  }
+};
 const deletedWorkflowIds = new Set();
 const TASK_STATUSES = new Set(["pending", "ready", "running", "blocked", "completed", "failed", "skipped", "cancelled"]);
 const RESUMABLE_TASK_STATUSES = new Set(["blocked", "failed", "cancelled"]);
@@ -195,6 +212,26 @@ const refreshWorkflow = workflow => {
     tasks: stalledDiagnostics(workflow),
   };
 };
+const invalidateTasks = (workflow, taskIds) => {
+  const affected = new Set(taskIds);
+  const pending = [...taskIds];
+  while (pending.length) {
+    for (const next of outgoing(workflow, pending.pop())) {
+      if (!affected.has(next)) { affected.add(next); pending.push(next); }
+    }
+  }
+  for (const id of affected) {
+    const task = workflow.tasks[id];
+    if (!task || task.type === "start") continue;
+    task.status = "pending";
+    delete task.resumeCheckpointAttemptId;
+    delete task.resultAttemptId;
+  }
+  workflow.executionRevision = (workflow.executionRevision ?? 0) + 1;
+  workflow.result = null;
+  if (!["pending", "cancelled"].includes(workflow.status)) workflow.status = "paused";
+};
+
 const createRuntimeTasks = (tasks, start, end) => {
   const runtimeTasks = {};
   for (const [taskId, task] of Object.entries(tasks)) {
@@ -306,7 +343,7 @@ export const createAdHocWorkflow = async ({ start, end, tasks, edges, groups = [
     tasks: createRuntimeTasks(tasks, start, end), edges: structuredClone(edges), groups: normalizeGroups(groups), layout: {}, archivedTasks: [], result: null,
   });
 };
-export const startWorkflow = async workflowId => {
+export const startWorkflow = async workflowId => withWorkflowTransition(workflowId, async () => {
   const draft = structuredClone(requireWorkflow(workflowId));
   if (draft.status !== "pending") return structuredClone(draft);
   draft.status = "running";
@@ -315,11 +352,11 @@ export const startWorkflow = async workflowId => {
   await recordEvent("workflow.started", { workflowId });
   if (draft.status === "stalled") await recordEvent("workflow.stalled", { workflowId, diagnostics: draft.stalled });
   return structuredClone(draft);
-};
+});
 export const getReadyTasks = workflowId => Object.entries(requireWorkflow(workflowId).tasks)
   .filter(([, task]) => task.type === "task" && task.status === "ready")
   .map(([id, task]) => ({ id, ...structuredClone(task) }));
-export const markWorkflowStalled = async workflowId => {
+export const markWorkflowStalled = async workflowId => withWorkflowTransition(workflowId, async () => {
   const draft = structuredClone(requireWorkflow(workflowId));
   if (["completed", "cancelled", "failed", "paused", "blocked"].includes(draft.status)) return structuredClone(draft);
   draft.status = "running";
@@ -331,8 +368,8 @@ export const markWorkflowStalled = async workflowId => {
   await commitWorkflow(draft);
   await recordEvent("workflow.stalled", { workflowId, diagnostics: draft.stalled });
   return structuredClone(draft);
-};
-export const setTaskStatus = async (workflowId, taskId, status) => {
+});
+export const setTaskStatus = async (workflowId, taskId, status) => withWorkflowTransition(workflowId, async () => {
   if (!TASK_STATUSES.has(status)) throw new Error(`Invalid task status: ${status}`);
   const draft = structuredClone(requireWorkflow(workflowId));
   const task = requireExecutableTask(draft, taskId);
@@ -340,15 +377,17 @@ export const setTaskStatus = async (workflowId, taskId, status) => {
   const previousWorkflowStatus = draft.status;
   task.status = status;
   if (["completed", "skipped"].includes(status)) delete task.resumeCheckpointAttemptId;
-  draft.status = "running";
+  if (status === "completed") task.resultAttemptId = latestAttempt(task)?.id;
+  if (status === "skipped") delete task.resultAttemptId;
+  draft.status = previousWorkflowStatus === "paused" ? "paused" : "running";
   refreshWorkflow(draft);
   await commitWorkflow(draft);
   await recordEvent(`task.${status}`, { workflowId, taskId });
   if (previousWorkflowStatus !== "completed" && draft.status === "completed") await recordEvent("workflow.completed", { workflowId });
   if (previousWorkflowStatus !== "stalled" && draft.status === "stalled") await recordEvent("workflow.stalled", { workflowId, diagnostics: draft.stalled });
   return structuredClone(task);
-};
-export const addTaskAttempt = async (workflowId, taskId, attempt) => {
+});
+export const addTaskAttempt = async (workflowId, taskId, attempt) => withWorkflowTransition(workflowId, async () => {
   validateAttempt(attempt);
   const draft = structuredClone(requireWorkflow(workflowId));
   const task = requireExecutableTask(draft, taskId);
@@ -358,7 +397,7 @@ export const addTaskAttempt = async (workflowId, taskId, attempt) => {
   task.attempts.push(structuredClone(attempt));
   await commitWorkflow(draft);
   return structuredClone(attempt);
-};
+});
 export const getTaskAttempt = (workflowId, taskId, attemptId) => {
   const task = requireExecutableTask(requireWorkflow(workflowId), taskId);
   const attempt = (task.attempts ?? []).find(item => item.id === attemptId);
@@ -377,11 +416,11 @@ const applyAttemptChanges = (workflowId, taskId, attemptId, changes) => {
   task.attempts[index] = updated;
   return { draft, updated };
 };
-export const updateTaskAttempt = async (workflowId, taskId, attemptId, changes) => {
+export const updateTaskAttempt = async (workflowId, taskId, attemptId, changes) => withWorkflowTransition(workflowId, async () => {
   const { draft, updated } = applyAttemptChanges(workflowId, taskId, attemptId, changes);
   await commitWorkflow(draft);
   return structuredClone(updated);
-};
+});
 export const updateTaskAttemptRuntime = (workflowId, taskId, attemptId, changes) => {
   const { draft, updated } = applyAttemptChanges(workflowId, taskId, attemptId, changes);
   validateWorkflow(draft);
@@ -390,7 +429,7 @@ export const updateTaskAttemptRuntime = (workflowId, taskId, attemptId, changes)
   return structuredClone(updated);
 };
 
-export const addTask = async (workflowId, taskId, task, edges = []) => {
+export const addTask = async (workflowId, taskId, task, edges = []) => withWorkflowTransition(workflowId, async () => {
   if (!taskId || typeof taskId !== "string") throw new Error("Task ID must be a non-empty string");
   if (!isObject(task) || task.type !== "task") throw new Error('Added node must have type "task"');
   if (!Array.isArray(edges)) throw new Error("Task edges must be an array");
@@ -399,12 +438,13 @@ export const addTask = async (workflowId, taskId, task, edges = []) => {
   const { status: _status, attempts: _attempts, ...definition } = task;
   draft.tasks[taskId] = { ...definition, status: "pending", attempts: [] };
   draft.edges.push(...structuredClone(edges));
+  invalidateTasks(draft, Object.keys(draft.tasks));
   validateGraph(draft);
   await commitWorkflow(draft);
   await recordEvent("workflow.task_added", { workflowId, taskId });
   return structuredClone(draft);
-};
-export const removeTask = async (workflowId, taskId) => {
+});
+export const removeTask = async (workflowId, taskId) => withWorkflowTransition(workflowId, async () => {
   const draft = structuredClone(requireEditableWorkflow(workflowId));
   if (taskId === draft.start || taskId === draft.end) throw new Error("Start and end nodes cannot be removed");
   const task = requireTask(draft, taskId);
@@ -420,24 +460,31 @@ export const removeTask = async (workflowId, taskId) => {
   draft.edges = draft.edges.filter(([from, to]) => from !== taskId && to !== taskId);
   for (const predecessor of predecessors) for (const successor of successors) if (predecessor !== successor) draft.edges.push([predecessor, successor]);
   draft.edges = uniqueEdges(draft.edges);
+  invalidateTasks(draft, Object.keys(draft.tasks));
   validateGraph(draft);
   await commitWorkflow(draft);
   await recordEvent("workflow.task_removed", { workflowId, taskId, archived: Boolean((task.attempts ?? []).length) });
   return structuredClone(draft);
-};
-export const editTask = async (workflowId, taskId, changes) => {
+});
+export const editTask = async (workflowId, taskId, changes) => withWorkflowTransition(workflowId, async () => {
   if (!isObject(changes)) throw new Error("Task changes must be an object");
   const draft = structuredClone(requireEditableWorkflow(workflowId));
   requireExecutableTask(draft, taskId);
   const { status: _status, attempts: _attempts, type: _type, resumeCheckpointAttemptId: _checkpoint, ...editable } = changes;
   draft.tasks[taskId] = { ...draft.tasks[taskId], ...structuredClone(editable) };
+  invalidateTasks(draft, [taskId]);
   validateGraph(draft);
   await commitWorkflow(draft);
   await recordEvent("workflow.task_edited", { workflowId, taskId });
   return structuredClone(draft.tasks[taskId]);
-};
-export const skipTask = async (workflowId, taskId) => setTaskStatus(workflowId, taskId, "skipped");
-export const cancelTask = async (workflowId, taskId) => {
+});
+export const skipTask = async (workflowId, taskId) => withWorkflowTransition(workflowId, async () => {
+  const workflow = requireEditableWorkflow(workflowId);
+  const task = requireExecutableTask(workflow, taskId);
+  if (["running", "completed", "skipped"].includes(task.status)) throw new Error("Stop the Task before skipping it");
+  return setTaskStatus(workflowId, taskId, "skipped");
+});
+export const cancelTask = async (workflowId, taskId) => withWorkflowTransition(workflowId, async () => {
   const draft = structuredClone(requireWorkflow(workflowId));
   const task = requireExecutableTask(draft, taskId);
   if (["completed", "skipped", "failed", "cancelled"].includes(task.status)) throw new Error(`Task ${taskId} cannot be cancelled from status ${task.status}`);
@@ -450,21 +497,29 @@ export const cancelTask = async (workflowId, taskId) => {
   await recordEvent("task.cancelled", { workflowId, taskId, requestedBy: "Carlos" });
   await recordEvent("workflow.paused", { workflowId, taskId });
   return structuredClone(draft);
-};
-export const setWorkflowEdges = async (workflowId, edges) => {
+});
+export const setWorkflowEdges = async (workflowId, edges) => withWorkflowTransition(workflowId, async () => {
   if (!Array.isArray(edges)) throw new Error("Workflow edges must be an array");
   const draft = structuredClone(requireEditableWorkflow(workflowId));
   draft.edges = structuredClone(edges);
+  invalidateTasks(draft, Object.keys(draft.tasks));
   validateGraph(draft);
   delete draft.stalled;
   await commitWorkflow(draft);
   await recordEvent("workflow.edges_changed", { workflowId });
   return structuredClone(draft);
-};
-export const setWorkflowDesign = async (workflowId, { layout, groups }) => {
+});
+export const setWorkflowDesign = async (workflowId, { layout, groups }) => withWorkflowTransition(workflowId, async () => {
   const draft = structuredClone(requireEditableWorkflow(workflowId));
   if (layout !== undefined) draft.layout = normalizeLayout(draft, layout);
-  if (groups !== undefined) draft.groups = normalizeGroups(groups);
+  if (groups !== undefined) {
+    const executionGroups = values => (values ?? []).map(({ x: _x, y: _y, width: _w, height: _h, ...group }) => group);
+    const normalized = normalizeGroups(groups);
+    if (JSON.stringify(executionGroups(draft.groups)) !== JSON.stringify(executionGroups(normalized))) {
+      invalidateTasks(draft, Object.keys(draft.tasks));
+    }
+    draft.groups = normalized;
+  }
   if (isObject(draft.config?._ui)) {
     delete draft.config._ui.layout;
     delete draft.config._ui.groups;
@@ -474,17 +529,18 @@ export const setWorkflowDesign = async (workflowId, { layout, groups }) => {
   await commitWorkflow(draft);
   await recordEvent("workflow.design_changed", { workflowId });
   return structuredClone(draft);
-};
+});
 export const setWorkflowLayout = async (workflowId, layout) => setWorkflowDesign(workflowId, { layout });
-export const setWorkflowInputs = async (workflowId, inputs) => {
+export const setWorkflowInputs = async (workflowId, inputs) => withWorkflowTransition(workflowId, async () => {
   if (!isObject(inputs)) throw new Error("Workflow inputs must be an object");
   const draft = structuredClone(requireEditableWorkflow(workflowId));
+  if (JSON.stringify(draft.inputs) !== JSON.stringify(inputs)) invalidateTasks(draft, Object.keys(draft.tasks));
   draft.inputs = structuredClone(inputs);
   await commitWorkflow(draft);
   await recordEvent("workflow.inputs_changed", { workflowId });
   return structuredClone(draft);
-};
-export const setWorkflowConfig = async (workflowId, config) => {
+});
+export const setWorkflowConfig = async (workflowId, config) => withWorkflowTransition(workflowId, async () => {
   if (!isObject(config)) throw new Error("Workflow config must be an object");
   const draft = structuredClone(requireEditableWorkflow(workflowId));
   const storedConfig = structuredClone(config);
@@ -495,12 +551,13 @@ export const setWorkflowConfig = async (workflowId, config) => {
   }
   if (storedConfig?._ui?.groups != null) delete storedConfig._ui.groups;
   if (isObject(storedConfig._ui) && !Object.keys(storedConfig._ui).length) delete storedConfig._ui;
+  if (JSON.stringify(draft.config) !== JSON.stringify(storedConfig)) invalidateTasks(draft, Object.keys(draft.tasks));
   draft.config = storedConfig;
   await commitWorkflow(draft);
   await recordEvent(legacyLayout != null ? "workflow.layout_changed" : "workflow.config_changed", { workflowId });
   return structuredClone(draft);
-};
-export const pauseWorkflow = async workflowId => {
+});
+export const pauseWorkflow = async workflowId => withWorkflowTransition(workflowId, async () => {
   const draft = structuredClone(requireWorkflow(workflowId));
   if (draft.status === "completed") throw new Error("Completed workflows cannot be stopped");
   if (draft.status === "cancelled") throw new Error("Cancelled workflows must be restarted");
@@ -516,8 +573,8 @@ export const pauseWorkflow = async workflowId => {
   await commitWorkflow(draft);
   await recordEvent("workflow.paused", { workflowId });
   return structuredClone(draft);
-};
-export const resumeWorkflow = async (workflowId, taskIds = null) => {
+});
+export const resumeWorkflow = async (workflowId, taskIds = null) => withWorkflowTransition(workflowId, async () => {
   const draft = structuredClone(requireWorkflow(workflowId));
   if (draft.status === "pending") return startWorkflow(workflowId);
   if (draft.status === "completed") throw new Error("Completed workflows must be restarted");
@@ -542,8 +599,8 @@ export const resumeWorkflow = async (workflowId, taskIds = null) => {
   await recordEvent("workflow.resumed", { workflowId, taskIds: resumed });
   if (draft.status === "stalled") await recordEvent("workflow.stalled", { workflowId, diagnostics: draft.stalled });
   return structuredClone(draft);
-};
-export const restartWorkflow = async workflowId => {
+});
+export const restartWorkflow = async workflowId => withWorkflowTransition(workflowId, async () => {
   const draft = structuredClone(requireWorkflow(workflowId));
   for (const [taskId, task] of Object.entries(draft.tasks)) {
     if (taskId === draft.start) task.status = "completed";
@@ -552,18 +609,20 @@ export const restartWorkflow = async workflowId => {
       task.status = "pending";
       task.attempts ??= [];
       delete task.resumeCheckpointAttemptId;
+      delete task.resultAttemptId;
     }
   }
   draft.status = "running";
   draft.result = null;
+  draft.executionRevision = (draft.executionRevision ?? 0) + 1;
   delete draft.stalled;
   refreshWorkflow(draft);
   await commitWorkflow(draft);
   await recordEvent("workflow.restarted", { workflowId });
   if (draft.status === "stalled") await recordEvent("workflow.stalled", { workflowId, diagnostics: draft.stalled });
   return structuredClone(draft);
-};
-export const cancelWorkflow = async workflowId => {
+});
+export const cancelWorkflow = async workflowId => withWorkflowTransition(workflowId, async () => {
   const draft = structuredClone(requireWorkflow(workflowId));
   for (const task of Object.values(draft.tasks)) {
     if (task.type === "task" && !["completed", "skipped"].includes(task.status)) task.status = "cancelled";
@@ -574,8 +633,8 @@ export const cancelWorkflow = async workflowId => {
   await commitWorkflow(draft);
   await recordEvent("workflow.cancelled", { workflowId });
   return structuredClone(draft);
-};
-export const deleteWorkflow = async workflowId => {
+});
+export const deleteWorkflow = async workflowId => withWorkflowTransition(workflowId, async () => {
   validateFileName(workflowId, "workflow ID");
   if (!workflows.has(workflowId)) return false;
   deletedWorkflowIds.add(workflowId);
@@ -586,11 +645,11 @@ export const deleteWorkflow = async workflowId => {
   workflowWrites.delete(workflowId);
   await recordEvent("workflow.deleted", { workflowId });
   return true;
-};
-export const setWorkflowResult = async (workflowId, result) => {
+});
+export const setWorkflowResult = async (workflowId, result) => withWorkflowTransition(workflowId, async () => {
   const draft = structuredClone(requireWorkflow(workflowId));
   draft.result = structuredClone(result);
   await commitWorkflow(draft);
   await recordEvent("workflow.result_set", { workflowId });
   return structuredClone(draft);
-};
+});

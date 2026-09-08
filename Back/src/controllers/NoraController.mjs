@@ -20,7 +20,7 @@ import {
   getWorkflow,
   listProcesses,
   listWorkflows,
-  setTaskStatus,
+  resumeWorkflow,
   setWorkflowConfig,
   setWorkflowResult,
   startWorkflow,
@@ -28,7 +28,6 @@ import {
 import { getNora } from "../registry/Nora.mjs";
 import { listSkills } from "../registry/Skills.mjs";
 import { listTools } from "../registry/Tools.mjs";
-import { cleanupWorkflowRuntime } from "../services/ExecutionWorkspaceService.mjs";
 import {
   createOrUpdateSkill as saveNoraSkill,
   createOrUpdateTool as saveNoraTool,
@@ -823,7 +822,6 @@ export const runWorkflow = async workflowId => {
 
     if (execution.workflow?.status === "completed") {
       await reportCompletedWorkflow(workflowId);
-      await cleanupWorkflowRuntime(workflowId);
     }
     return { ...execution, workflow: getWorkflow(workflowId) };
   } finally {
@@ -856,11 +854,20 @@ export const reviewFailedTask = async (workflowId, taskId) => {
     return decision;
   }
   if (decision.action !== "retry") throw new Error(`Unknown recovery action: ${decision.action}`);
+  const unsafeOutcome = (task.attempts ?? []).at(-1)?.diagnostics?.code === "tool_outcome_unknown";
+  if (unsafeOutcome) {
+    return { action: "escalate", reason: "Inspect the previous side effect before explicitly restarting; Nora cannot safely replay it." };
+  }
 
   if (decision.taskChanges && Object.keys(decision.taskChanges).length) {
+    const hasSideEffects = (task.attempts ?? []).at(-1)?.invocations?.some(invocation =>
+      (invocation.toolCalls ?? []).some(call => call.replaySafe !== true && call.sideEffect !== "none"));
+    if (hasSideEffects) return { action: "escalate", reason: "Changing this Task would invalidate completed side effects. Inspect them before explicitly restarting." };
     await editTask(workflowId, taskId, decision.taskChanges);
+    await resumeWorkflow(workflowId);
+  } else {
+    await resumeWorkflow(workflowId, [taskId]);
   }
-  await setTaskStatus(workflowId, taskId, "pending");
   await recordEvent("nora.task_retry_requested", { workflowId, taskId, reason: decision.reason ?? null });
   return decision;
 };

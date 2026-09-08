@@ -130,7 +130,7 @@ const replayCarlosMessage = async ({ conversationId, messageId, content, eventTy
   const committed = await conversations.editCarlosMessage(conversationId, messageId, content, workflowIds);
   for (const workflowId of workflowIds) {
     const workflow = processes.getWorkflow(workflowId);
-    engine.cancelWorkflowExecution(workflowId, "Conversation history replayed by Carlos");
+    await engine.cancelWorkflowExecution(workflowId, "Conversation history replayed by Carlos");
     if (workflow && !["completed", "cancelled", "failed"].includes(workflow.status)) await processes.cancelWorkflow(workflowId);
     if (processes.getWorkflow(workflowId)) await processes.deleteWorkflow(workflowId);
     await cleanupWorkflowRuntime(workflowId);
